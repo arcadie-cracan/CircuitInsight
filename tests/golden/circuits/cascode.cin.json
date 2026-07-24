@@ -1,0 +1,20 @@
+{
+  "cin_version": "0.1",
+  "design": { "name": "cascode", "source": { "kind": "hand" },
+    "note": "Telescopic cascode into RL||CL; compared against hand-written KCL in the test." },
+  "top": "main",
+  "ground": ["0"],
+  "definitions": { "main": { "ports": [], "instances": [
+    { "name": "V1", "device_type": "vsource", "terminals": { "p": "vin", "n": "0" } },
+    { "name": "M1", "device_type": "mosfet",
+      "terminals": { "d": "vx", "g": "vin", "s": "0", "b": "0" },
+      "params": { "polarity": "n", "gm": "400u", "gds": "0.4u" } },
+    { "name": "M2", "device_type": "mosfet",
+      "terminals": { "d": "vout", "g": "0", "s": "vx", "b": "0" },
+      "params": { "polarity": "n", "gm": "400u", "gmbs": "80u", "gds": "0.4u" } },
+    { "name": "RL", "device_type": "resistor", "terminals": { "p": "vout", "n": "0" },
+      "params": { "r": "10k" } },
+    { "name": "CL", "device_type": "capacitor", "terminals": { "p": "vout", "n": "0" },
+      "params": { "c": "1p" } }
+  ] } }
+}

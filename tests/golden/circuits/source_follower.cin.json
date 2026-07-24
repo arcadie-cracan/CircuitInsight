@@ -1,0 +1,18 @@
+{
+  "cin_version": "0.1",
+  "design": { "name": "source_follower", "source": { "kind": "hand" },
+    "note": "H = (gm + s*cgs) / (gm + gmbs + gds + 1/RS + s*(cgs+csb+CL))" },
+  "top": "main",
+  "ground": ["0"],
+  "definitions": { "main": { "ports": [], "instances": [
+    { "name": "V1", "device_type": "vsource", "terminals": { "p": "vin", "n": "0" } },
+    { "name": "M1", "device_type": "mosfet",
+      "terminals": { "d": "0", "g": "vin", "s": "vout", "b": "0" },
+      "params": { "polarity": "n", "gm": "469u", "gds": "8.5u", "gmbs": "87u",
+                  "cgs": "2.77f", "csb": "2.3f" } },
+    { "name": "RS", "device_type": "resistor", "terminals": { "p": "vout", "n": "0" },
+      "params": { "r": "20k" } },
+    { "name": "CL", "device_type": "capacitor", "terminals": { "p": "vout", "n": "0" },
+      "params": { "c": "50f" } }
+  ] } }
+}

@@ -1,0 +1,34 @@
+HEADER
+"PSFversion" "1.00"
+"simulator" "spectre"
+"version" "25.1.0.235.isr5"
+"date" "9:17:52 PM, Sat Jul 18, 2026"
+"design" "// tb_ota2s_stb.scs (SKY130) -- closed-loop unity-feedback bench with a"
+"analysis type" "margin.stb"
+"analysis name" "stb"
+"analysis description" "Stability Analysis `stb': freq = (1 mHz -> 10 GHz)"
+"xVecSorted" "ascending"
+"tolerance.relative" 1.000000000000000e-03
+"operating point producer" "stb"
+"probe" "IPRB0"
+TYPE
+"dB" FLOAT DOUBLE PROP(
+"key" "gain"
+"units" "dB"
+)
+"Deg" FLOAT DOUBLE PROP(
+"key" "gain"
+"units" "Deg"
+)
+"Hz" FLOAT DOUBLE PROP(
+"key" "gain"
+"units" "Hz"
+)
+"stbstate" STRING *
+VALUE
+"gainMargin" "dB" 9.015067286188854e+00
+"gainMarginFreq" "Hz" 1.254978049783510e+07
+"phaseMargin" "Deg" 5.989783560164769e+01
+"phaseMarginFreq" "Hz" 3.489233677844347e+06
+"stb_state" "stbstate" "The circuit is stable. Gain and phase margin are both found."
+END

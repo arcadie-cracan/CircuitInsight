@@ -1,0 +1,23 @@
+// tb_m0_hier.scs -- M0 spike: how do hierarchical instance names appear in
+// dcOpInfo results? Expect "I0.M1" (CIN v0.1 assumes "." as separator).
+// SKY130 port. -> psf_hier/
+//
+//   spectre tb_m0_hier.scs -format psfascii -raw ./psf_hier +log hier.log
+
+simulator lang=spectre
+global 0
+include "<pdk-models>" section=tt
+parameters temperature=27
+
+subckt csstage (out in vddl)
+    M1 (out in 0 0) nfet_01v8 w=(2u) l=180n as=530f ad=530f ps=4.53u \
+            pd=4.53u nrd=0.170000 nrs=0.170000 m=(1)*(1)
+    RL (vddl out) resistor r=10K
+ends csstage
+
+VDD (vdd 0) vsource dc=1.8  type=dc
+VIN (vin 0) vsource dc=800m mag=1 type=dc
+I0 (vout vin vdd) csstage
+
+dcOp     dc   maxiters=150 annotate=status
+dcOpInfo info what=oppoint where=rawfile

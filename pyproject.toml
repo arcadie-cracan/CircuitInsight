@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "circuitinsight"
+version = "0.0.1"
+description = "Symbolic small-signal circuit analyzer driven by simulator operating-point data"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Arcadie Cracan", email = "arcadie.cracan@academic.tuiasi.ro" }]
+keywords = [
+    "symbolic circuit analysis",
+    "analog",
+    "small-signal",
+    "operating point",
+    "SPICE",
+    "EDA",
+    "Cadence Spectre",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Operating System :: OS Independent",
+]
+dependencies = ["sympy>=1.12", "numpy>=1.26", "gmpy2>=2.1"]
+
+[project.optional-dependencies]
+dev = ["pytest", "jsonschema"]
+gui = ["PySide6>=6.6", "matplotlib>=3.7"]
+notebook = ["ipywidgets>=8", "matplotlib>=3.7"]
+
+[project.scripts]
+circuitinsight-gui = "circuitinsight.gui.app:main"
+circuitinsight-skill-path = "circuitinsight.skill:_main"
+
+[project.urls]
+Homepage = "https://github.com/arcadie-cracan/CircuitInsight"
+Repository = "https://github.com/arcadie-cracan/CircuitInsight"
+Issues = "https://github.com/arcadie-cracan/CircuitInsight/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/circuitinsight"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

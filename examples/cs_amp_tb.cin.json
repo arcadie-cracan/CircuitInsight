@@ -1,0 +1,49 @@
+{
+  "cin_version": "0.1",
+  "design": {
+    "name": "cs_amp_tb",
+    "source": { "kind": "hand" },
+    "note": "Mirrors m0/tb_m0.scs — the M0 feasibility testbench."
+  },
+  "top": "tb",
+  "ground": ["0"],
+  "definitions": {
+    "tb": {
+      "ports": [],
+      "instances": [
+        { "name": "VDD", "device_type": "vsource",
+          "terminals": { "p": "vdd", "n": "0" },
+          "params": { "dc": "1.5" } },
+        { "name": "VIN", "device_type": "vsource",
+          "terminals": { "p": "vin", "n": "0" },
+          "params": { "dc": "700m", "mag": "1" } },
+        { "name": "VINP", "device_type": "vsource",
+          "terminals": { "p": "vinp", "n": "0" },
+          "params": { "dc": "800m" } },
+        { "name": "RD1", "device_type": "resistor",
+          "terminals": { "p": "vdd", "n": "vmid" },
+          "params": { "r": "100k" } },
+        { "name": "RD2", "device_type": "resistor",
+          "terminals": { "p": "vmid", "n": "0" },
+          "params": { "r": "100k" } },
+        { "name": "M1", "device_type": "mosfet",
+          "terminals": { "d": "vout", "g": "vin", "s": "0", "b": "0" },
+          "params": { "polarity": "n", "m": "1" },
+          "meta": { "w": "2u", "l": "180n" } },
+        { "name": "RL", "device_type": "resistor",
+          "terminals": { "p": "vdd", "n": "vout" },
+          "params": { "r": "10k" } },
+        { "name": "CL", "device_type": "capacitor",
+          "terminals": { "p": "vout", "n": "0" },
+          "params": { "c": "100f" } },
+        { "name": "M2", "device_type": "mosfet",
+          "terminals": { "d": "voutp", "g": "vinp", "s": "vdd", "b": "vdd" },
+          "params": { "polarity": "p", "m": "1" },
+          "meta": { "w": "4u", "l": "180n" } },
+        { "name": "RLP", "device_type": "resistor",
+          "terminals": { "p": "voutp", "n": "0" },
+          "params": { "r": "10k" } }
+      ]
+    }
+  }
+}

@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+
+# Simulator run outputs (fixtures are copied into tests/fixtures/ explicitly)
+m0/psf/
+m0/*.log
+m0/*.dc
+m0/tb_m0.cin.json
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# LaTeX build artifacts
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.fdb_latexmk
+paper/*.fls
+paper/circuitinsight-isetc2026.pdf
+nul

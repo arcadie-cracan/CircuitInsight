@@ -1,0 +1,107 @@
+<!doctype html>
+<!-- KaTeX expression shell for the CircuitInsight GUI (loaded by ExprWebView).
+
+     Python pushes {lines, values} via window.renderExpr(); every device symbol
+     arrives tagged with its raw join-key name (\htmlData -> data-sym), so
+     hover shows its operating-point value and a click round-trips to Python
+     over the QWebChannel `bridge` object. Assets are local (katex/ next to
+     this file) -- no network. Also opens standalone in a browser for
+     debugging (the bridge guard just no-ops). -->
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="katex/katex.min.css">
+<script src="katex/katex.min.js"></script>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<style>
+  body{font-family:system-ui,"Segoe UI",sans-serif;margin:0;
+       background:#f2f2f2;color:#1a1a1a}
+  #expr{padding:10px 14px}
+  .line{padding:6px 2px;font-size:18px;overflow-x:auto}
+  .katex{font-size:1.12em}
+  [data-sym]{cursor:pointer;border-radius:3px}
+  [data-sym].hov{background:#cfe3ff}
+  [data-sym].pin{background:#ffe08a;outline:1px solid #d8ae38}
+  /* KaTeX stacks fraction/script rows with full-width ~3em strut boxes that
+     cover the denominator, swallowing hits (only glyph edges responded). Let
+     hits pass through the row boxes; their real content stays hittable. */
+  .katex .vlist > span{pointer-events:none}
+  .katex .vlist > span > *{pointer-events:auto}
+  #tip{position:fixed;pointer-events:none;background:#222;color:#fff;
+       font-size:12px;padding:4px 8px;border-radius:4px;opacity:0;
+       transition:opacity .08s;z-index:9;white-space:nowrap;
+       box-shadow:0 2px 8px rgba(0,0,0,.3)}
+  #tip b{color:#8fd0ff}
+</style>
+</head>
+<body>
+<div id="expr"></div>
+<div id="tip"></div>
+<script>
+"use strict";
+let VALUES = {};
+let bridge = null;
+if (typeof QWebChannel !== "undefined" && typeof qt !== "undefined"
+    && qt.webChannelTransport) {
+  new QWebChannel(qt.webChannelTransport,
+                  ch => { bridge = ch.objects.bridge || null; });
+}
+
+window.renderExpr = function (payload) {
+  VALUES = payload.values || {};
+  const host = document.getElementById("expr");
+  host.textContent = "";
+  for (const l of payload.lines || []) {
+    const d = document.createElement("div");
+    d.className = "line";
+    try {
+      katex.render(l, d, {displayMode: true, trust: true, strict: false});
+    } catch (e) {
+      d.textContent = l;                     // never blank the panel on bad TeX
+    }
+    host.appendChild(d);
+  }
+};
+
+/* delegated events survive re-renders.
+
+   Hit-test the WHOLE stack under the cursor, not e.target: even with the
+   pointer-events relief above, a covered glyph's hit can land on an overlay
+   (KaTeX vlist geometry), and elementsFromPoint sees through the pile. */
+function symAt(x, y) {
+  for (const el of document.elementsFromPoint(x, y)) {
+    const hit = el.closest ? el.closest("[data-sym]") : null;
+    if (hit) return hit;
+  }
+  return null;
+}
+const tip = document.getElementById("tip");
+let hov = null;
+document.addEventListener("mousemove", e => {
+  const el = symAt(e.clientX, e.clientY);
+  if (hov && hov !== el) hov.classList.remove("hov");
+  hov = el;
+  if (!el) { tip.style.opacity = 0; return; }
+  el.classList.add("hov");
+  const n = el.dataset.sym;
+  tip.innerHTML = "<b>" + n + "</b> = " + (VALUES[n] ?? "?");
+  tip.style.opacity = 1;
+  tip.style.left = (e.clientX + 12) + "px";
+  tip.style.top = (e.clientY + 14) + "px";
+});
+document.addEventListener("mouseleave", () => {
+  if (hov) hov.classList.remove("hov");
+  hov = null;
+  tip.style.opacity = 0;
+});
+document.addEventListener("click", e => {
+  const el = symAt(e.clientX, e.clientY);
+  if (!el) return;
+  const n = el.dataset.sym;
+  document.querySelectorAll('[data-sym="' + CSS.escape(n) + '"]')
+      .forEach(x => x.classList.toggle("pin"));
+  if (bridge && bridge.on_symbol_click) bridge.on_symbol_click(n);
+});
+</script>
+</body>
+</html>

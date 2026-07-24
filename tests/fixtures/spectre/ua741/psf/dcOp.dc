@@ -1,0 +1,120 @@
+HEADER
+"PSFversion" "1.00"
+"simulator" "spectre"
+"version" "25.1.0.235.isr5"
+"date" "12:22:37 PM, Sun Jul 12, 2026"
+"design" "// uA741 open-loop gain rig (Gross/Roberts Ch.10 core), Spectre form."
+"analysis type" "dc"
+"analysis name" "dcOp"
+"analysis description" "DC Analysis `dcOp'"
+"xVecSorted" "unsorted"
+"tolerance.relative" 1.000000000000000e-03
+"reltol" 1.000000000000000e-03
+"abstol(V)" 1.000000000000000e-06
+"abstol(I)" 1.000000000000000e-12
+"temp" 2.700000000000000e+01
+"tnom" 2.700000000000000e+01
+"tempeffects" "all"
+"gmindc" 1.000000000000000e-12
+TYPE
+"LogicV" FLOAT DOUBLE PROP(
+"key" "node"
+)
+"V" FLOAT DOUBLE PROP(
+"units" "V"
+"key" "node"
+"tolerance" 1.000000000000000e-06
+)
+"I" FLOAT DOUBLE PROP(
+"units" "A"
+"key" "branch"
+"tolerance" 1.000000000000000e-12
+)
+"MMF" FLOAT DOUBLE PROP(
+"units" "A*turn"
+"key" "node"
+"tolerance" 1.000000000000000e-12
+)
+"Wb" FLOAT DOUBLE PROP(
+"units" "Wb"
+"key" "node"
+"tolerance" 1.000000000000000e-09
+)
+"Temp" FLOAT DOUBLE PROP(
+"units" "C"
+"key" "node"
+"tolerance" 1.000000000000000e-04
+)
+"Pwr" FLOAT DOUBLE PROP(
+"units" "W"
+"key" "node"
+"tolerance" 1.000000000000000e-09
+)
+"U" FLOAT DOUBLE PROP(
+"units" ""
+"key" "node"
+"tolerance" 1.000000000000000e-06
+)
+"V/Sec" FLOAT DOUBLE PROP(
+"units" "V/s"
+"key" "node"
+"tolerance" 9.999999999999999e-05
+)
+"I/Sec" FLOAT DOUBLE PROP(
+"units" "A/s"
+"key" "node"
+"tolerance" 1.000000000000000e-06
+)
+"1/Sec" FLOAT DOUBLE PROP(
+"units" "1/s"
+"key" "node"
+"tolerance" 9.999999999999999e-05
+)
+"HOD" FLOAT DOUBLE PROP(
+"units" ""
+"key" "node"
+"tolerance" 1.000000000000000e-02
+)
+"Q" FLOAT DOUBLE PROP(
+"units" "Coul"
+"key" "node"
+"tolerance" 1.000000000000000e-15
+)
+"Efield" FLOAT DOUBLE PROP(
+"units" "V/m"
+"key" "node"
+"tolerance" 1.000000000000000e-06
+"sigtype" "optical"
+)
+VALUE
+"25" "V" 1.500000000000000e+01
+"26" "V" -1.500000000000000e+01
+"1" "V" 0.000000000000000e+00
+"22" "V" 3.140931468817190e-04
+"2" "V" 3.140931468817190e-04
+"4" "V" 1.445362924200178e+01
+"12" "V" -5.263491245751297e-01
+"13" "V" -5.261541165099228e-01
+"7" "V" -1.393126550636647e+01
+"3" "V" -1.049397920977737e+00
+"8" "V" -1.374516563961646e+01
+"9" "V" -1.446378622731287e+01
+"10" "V" -1.499241432936183e+01
+"11" "V" -1.499240568295279e+01
+"16" "V" -1.191130958964443e+00
+"6" "V" 1.434231603622829e+01
+"14" "V" -1.428977454498667e+01
+"15" "V" -1.493355799196141e+01
+"17" "V" 5.831136138740461e-01
+"23" "V" 4.923309282314646e-03
+"18" "V" 3.452526407559068e-02
+"19" "V" -5.791306413142548e-01
+"21" "V" -4.294189966484831e-03
+"20" "V" -1.499999918632076e+01
+"5" "V" -1.435073652276347e+01
+"24" "V" -1.490157087294202e+01
+"Lf:1" "I" 3.455636927218120e-08
+"Vcc:p" "I" -1.841121341952399e-03
+"Vee:p" "I" 1.841155739651870e-03
+"Vin:p" "I" -3.439770519806434e-08
+END

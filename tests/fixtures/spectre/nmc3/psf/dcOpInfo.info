@@ -1,0 +1,224 @@
+HEADER
+"PSFversion" "1.00"
+"simulator" "spectre"
+"version" "25.1.0.235.isr5"
+"date" "5:24:46 PM, Wed Jul 22, 2026"
+"design" "// tb_nmc3.scs -- behavioral gm-C THREE-STAGE nested-Miller (NMC) amplifier."
+"analysis type" "info"
+"analysis name" "dcOpInfo"
+"analysis description" "Circuit Information"
+"xVecSorted" "unknown"
+"tolerance.relative" 1.000000000000000e-03
+"AnalysisName" "DC"
+"AnalysisType" "dcOp"
+"OpPointTemp.Value" 2.700000000000000e+01
+"OpPointTemp.Units" "C"
+TYPE
+"capacitor" STRUCT(
+"trise" FLOAT DOUBLE PROP(
+"units" "C"
+"description" "Temperature rise from ambient"
+)
+"v" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Voltage at operating point"
+)
+"cap" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Capacitance at operating point"
+)
+) PROP(
+"key" "inst"
+)
+"iprobe" STRUCT(
+"i" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "current through iprobe"
+)
+) PROP(
+"key" "inst"
+)
+"resistor" STRUCT(
+"trise" FLOAT DOUBLE PROP(
+"units" "C"
+"description" "Temperature rise from ambient"
+)
+"v" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Voltage at operating point"
+)
+"i" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Current through the resistor"
+)
+"res" FLOAT DOUBLE PROP(
+"units" "Ohm"
+"description" "Resistance at operating point"
+)
+"pwr" FLOAT DOUBLE PROP(
+"units" "W"
+"description" "Power dissipation"
+)
+) PROP(
+"key" "inst"
+)
+"vccs" STRUCT(
+"i" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Output current(alias=lx0 for VCCS)"
+)
+"v" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Output voltage(alias=lx3 for VCCAP)"
+)
+"pwr" FLOAT DOUBLE PROP(
+"units" "W"
+"description" "Power dissipation"
+)
+"lx0" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Output current for VCCS; resistance value for VCR; capacitance value for VCCAP"
+)
+"lx1" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Controlling voltage for VCCS or VCR; capacitance charge for VCCAP"
+)
+"lx3" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Voltage across capacitance for VCCAP"
+)
+) PROP(
+"key" "inst"
+)
+"vsource" STRUCT(
+"v" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Voltage across the source"
+)
+"i" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Current through the source"
+)
+"pwr" FLOAT DOUBLE PROP(
+"units" "W"
+"description" "Power dissipation"
+)
+) PROP(
+"key" "inst"
+)
+VALUE
+"CM2" "capacitor" (
+nan
+0.000000000000000e+00
+6.000000000000000e-12
+) PROP(
+"model" "capacitor"
+)
+"CM1" "capacitor" (
+nan
+0.000000000000000e+00
+2.000000000000000e-12
+) PROP(
+"model" "capacitor"
+)
+"CL" "capacitor" (
+nan
+0.000000000000000e+00
+9.999999999999999e-12
+) PROP(
+"model" "capacitor"
+)
+"CN2" "capacitor" (
+nan
+0.000000000000000e+00
+3.000000000000000e-13
+) PROP(
+"model" "capacitor"
+)
+"CN1" "capacitor" (
+nan
+0.000000000000000e+00
+3.000000000000000e-13
+) PROP(
+"model" "capacitor"
+)
+"IPRB0" "iprobe" (
+0.000000000000000e+00
+) PROP(
+"model" "iprobe"
+)
+"IPRB2" "iprobe" (
+0.000000000000000e+00
+) PROP(
+"model" "iprobe"
+)
+"IPRB1" "iprobe" (
+0.000000000000000e+00
+) PROP(
+"model" "iprobe"
+)
+"R3" "resistor" (
+nan
+0.000000000000000e+00
+0.000000000000000e+00
+1.000000000000000e+04
+0.000000000000000e+00
+) PROP(
+"model" "resistor"
+)
+"R2" "resistor" (
+nan
+0.000000000000000e+00
+0.000000000000000e+00
+2.000000000000000e+05
+0.000000000000000e+00
+) PROP(
+"model" "resistor"
+)
+"R1" "resistor" (
+nan
+0.000000000000000e+00
+0.000000000000000e+00
+2.000000000000000e+05
+0.000000000000000e+00
+) PROP(
+"model" "resistor"
+)
+"G3" "vccs" (
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+) PROP(
+"model" "vccs"
+)
+"G2" "vccs" (
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+) PROP(
+"model" "vccs"
+)
+"G1" "vccs" (
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+) PROP(
+"model" "vccs"
+)
+"VIN" "vsource" (
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+) PROP(
+"model" "vsource"
+)
+END

@@ -1,0 +1,22 @@
+{
+  "cin_version": "0.1",
+  "design": { "name": "rc_lowpass", "source": { "kind": "hand" } },
+  "top": "main",
+  "ground": ["0"],
+  "definitions": {
+    "main": {
+      "ports": [],
+      "instances": [
+        { "name": "V1", "device_type": "vsource",
+          "terminals": { "p": "vin", "n": "0" },
+          "params": { "dc": "0", "mag": "1" } },
+        { "name": "R1", "device_type": "resistor",
+          "terminals": { "p": "vin", "n": "vout" },
+          "params": { "r": "1k" } },
+        { "name": "C1", "device_type": "capacitor",
+          "terminals": { "p": "vout", "n": "0" },
+          "params": { "c": "1n" } }
+      ]
+    }
+  }
+}

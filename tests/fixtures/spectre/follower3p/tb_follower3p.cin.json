@@ -1,0 +1,204 @@
+{
+  "cin_version": "0.1",
+  "design": {
+    "name": "tb_follower3",
+    "source": {
+      "kind": "virtuoso",
+      "lib": "worklib",
+      "view": "schematic"
+    },
+    "note": "Authentic CInExport of follower3 with port markers: IPORT (parallel, 0 A), VPORT1 (series, CL=1p load branch), VPORT2 (series, MN1 drain/supply branch). acm=1 on VIN/IPORT and CL's capacitance (from OP data) are netlister/OP-sourced, not hand-edited. psf/ = gain run (VIN excited, VPORT branch currents saved), psf_z/ = 1 A injection run (IPORT excited), xf.xf in both."
+  },
+  "top": "tb_follower3",
+  "ground": [
+    "0",
+    "gnd!"
+  ],
+  "globals": [
+    "vdd!"
+  ],
+  "definitions": {
+    "tb_follower3": {
+      "ports": [],
+      "instances": [
+        {
+          "name": "VPORT1",
+          "device_type": "vsource",
+          "terminals": {
+            "p": "out",
+            "n": "n4"
+          },
+          "meta": {
+            "lib": "analogLib",
+            "cell": "vdc"
+          }
+        },
+        {
+          "name": "VPORT2",
+          "device_type": "vsource",
+          "terminals": {
+            "p": "vdd!",
+            "n": "n3"
+          },
+          "meta": {
+            "lib": "analogLib",
+            "cell": "vdc"
+          }
+        },
+        {
+          "name": "VIN",
+          "device_type": "vsource",
+          "terminals": {
+            "p": "in",
+            "n": "gnd!"
+          },
+          "params": {
+            "acm": "1"
+          },
+          "meta": {
+            "lib": "analogLib",
+            "cell": "vdc"
+          }
+        },
+        {
+          "name": "VSUP",
+          "device_type": "vsource",
+          "terminals": {
+            "p": "vdd!",
+            "n": "gnd!"
+          },
+          "meta": {
+            "lib": "analogLib",
+            "cell": "vdc"
+          }
+        },
+        {
+          "name": "MN1",
+          "device_type": "mosfet",
+          "terminals": {
+            "b": "gnd!",
+            "s": "out",
+            "g": "n2",
+            "d": "n3"
+          },
+          "params": {
+            "polarity": "n",
+            "m": "1"
+          },
+          "meta": {
+            "lib": "sky130_fd_pr",
+            "cell": "nfet_01v8",
+            "w": "iPar(\"totalW\")",
+            "l": "1u",
+            "nf": "1"
+          }
+        },
+        {
+          "name": "MN0",
+          "device_type": "mosfet",
+          "terminals": {
+            "b": "gnd!",
+            "s": "n1",
+            "g": "in",
+            "d": "vdd!"
+          },
+          "params": {
+            "polarity": "n",
+            "m": "1"
+          },
+          "meta": {
+            "lib": "sky130_fd_pr",
+            "cell": "nfet_01v8",
+            "w": "iPar(\"totalW\")",
+            "l": "1u",
+            "nf": "1"
+          }
+        },
+        {
+          "name": "IPORT",
+          "device_type": "isource",
+          "terminals": {
+            "p": "gnd!",
+            "n": "out"
+          },
+          "params": {
+            "acm": "1"
+          },
+          "meta": {
+            "lib": "analogLib",
+            "cell": "idc"
+          }
+        },
+        {
+          "name": "IB3",
+          "device_type": "isource",
+          "terminals": {
+            "p": "out",
+            "n": "gnd!"
+          },
+          "meta": {
+            "lib": "analogLib",
+            "cell": "idc"
+          }
+        },
+        {
+          "name": "IB2",
+          "device_type": "isource",
+          "terminals": {
+            "p": "vdd!",
+            "n": "n2"
+          },
+          "meta": {
+            "lib": "analogLib",
+            "cell": "idc"
+          }
+        },
+        {
+          "name": "IB1",
+          "device_type": "isource",
+          "terminals": {
+            "p": "n1",
+            "n": "gnd!"
+          },
+          "meta": {
+            "lib": "analogLib",
+            "cell": "idc"
+          }
+        },
+        {
+          "name": "MP0",
+          "device_type": "mosfet",
+          "terminals": {
+            "b": "vdd!",
+            "s": "n2",
+            "g": "n1",
+            "d": "gnd!"
+          },
+          "params": {
+            "polarity": "p",
+            "m": "3"
+          },
+          "meta": {
+            "lib": "sky130_fd_pr",
+            "cell": "pfet_01v8",
+            "w": "iPar(\"totalW\")",
+            "l": "1u",
+            "nf": "1"
+          }
+        },
+        {
+          "name": "CL",
+          "device_type": "capacitor",
+          "terminals": {
+            "n": "gnd!",
+            "p": "n4"
+          },
+          "meta": {
+            "lib": "analogLib",
+            "cell": "cap"
+          }
+        }
+      ]
+    }
+  }
+}

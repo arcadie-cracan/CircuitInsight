@@ -1,0 +1,50 @@
+// tb_m0.scs -- M0 feasibility testbench for CircuitInsight (SKY130)
+//
+// Device lines / model include taken from the ADE-generated netlist of the
+// tb_m0 schematic (Jul 2026); ADE-only cruft (ade_e.scs, checklimit/sens)
+// removed so it runs standalone.
+// Devices nfet_01v8 / pfet_01v8 are sky130_fd_pr subckt wrappers, so expect
+// subckt expansion of M1/M2 in dcOpInfo (the M0 finding we're after).
+//
+// Run on <sim-host> (module load project/ICDESIGN pdk=SKY130):
+//
+//   spectre tb_m0.scs -format psfascii -raw ./psf +log spectre.log
+//
+// This variant AC-drives VIN (NMOS stage); VINP is DC-only.
+
+simulator lang=spectre
+global 0
+include "<pdk-models>" section=tt
+parameters temperature=27
+
+// --- supplies / bias ---------------------------------------------------------
+// 1.8 V supply to match the nfet_01v8/pfet_01v8 device rating.
+VDD  (vdd 0)  vsource dc=1.8  type=dc
+VIN  (vin 0)  vsource dc=800m mag=1 type=dc
+VINP (vinp 0) vsource dc=790m type=dc
+
+// --- resistor divider (trivial sanity circuit) -------------------------------
+RD1 (vdd vmid) resistor r=100K
+RD2 (vmid 0)   resistor r=100K
+
+// --- NMOS common-source stage, resistive load --------------------------------
+M1 (vout vin 0 0) nfet_01v8 w=(2u) l=180n as=530f ad=530f ps=4.53u \
+        pd=4.53u nrd=0.170000 nrs=0.170000 m=(1)*(1)
+RL (vdd vout) resistor r=10K
+C0 (vout 0)   capacitor c=100f
+
+// --- PMOS stage (checks polarity/sign conventions on the P side) -------------
+M2 (voutp vinp vdd vdd) pfet_01v8 w=(4u) l=180n as=1.06p ad=1.06p ps=8.53u \
+        pd=8.53u nrd=0.085000 nrs=0.085000 m=(1)*(1)
+RLP (voutp 0) resistor r=10K
+
+// --- analyses -----------------------------------------------------------------
+simulatorOptions options temp=27 tnom=27 scalem=1.0 scale=1.0 gmin=1e-12 \
+    rforce=1 maxnotes=5 maxwarns=5 digits=5 cols=80 pivrel=1e-3
+dcOp       dc   write="spectre.dc" maxiters=150 maxsteps=10000 annotate=status
+dcOpInfo   info what=oppoint where=rawfile
+element    info what=inst where=rawfile
+subckts    info what=subckts where=rawfile
+primitives info what=primitives where=rawfile
+ac         ac   start=1k stop=10G dec=20 annotate=status
+saveOptions options save=allpub

@@ -1,0 +1,34 @@
+HEADER
+"PSFversion" "1.00"
+"simulator" "spectre"
+"version" "25.1.0.235.isr5"
+"date" "9:14:46 AM, Sun Jul 19, 2026"
+"design" "// tb_fdota_stb_cm.scs (SKY130) -- fully-differential two-stage OTA with"
+"analysis type" "margin.stb"
+"analysis name" "stb"
+"analysis description" "Stability Analysis `stb': freq = (1 mHz -> 10 GHz)"
+"xVecSorted" "ascending"
+"tolerance.relative" 1.000000000000000e-03
+"operating point producer" "stb"
+"probe" "FDPRB.IPRB_CM"
+TYPE
+"dB" FLOAT DOUBLE PROP(
+"key" "gain"
+"units" "dB"
+)
+"Deg" FLOAT DOUBLE PROP(
+"key" "gain"
+"units" "Deg"
+)
+"Hz" FLOAT DOUBLE PROP(
+"key" "gain"
+"units" "Hz"
+)
+"stbstate" STRING *
+VALUE
+"gainMargin" "dB" 1.625583078474117e+01
+"gainMarginFreq" "Hz" 7.265940161179294e+06
+"phaseMargin" "Deg" 6.147185193529709e+01
+"phaseMarginFreq" "Hz" 1.250908738427629e+06
+"stb_state" "stbstate" "The circuit is stable. Gain and phase margin are both found."
+END

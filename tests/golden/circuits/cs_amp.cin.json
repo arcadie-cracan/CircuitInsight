@@ -1,0 +1,18 @@
+{
+  "cin_version": "0.1",
+  "design": { "name": "cs_amp", "source": { "kind": "hand" },
+    "note": "CS stage, ideal drive: H = (s*cgd - gm) / (gds + 1/RL + s*(cgd+cdb+CL))" },
+  "top": "main",
+  "ground": ["0"],
+  "definitions": { "main": { "ports": [], "instances": [
+    { "name": "V1", "device_type": "vsource", "terminals": { "p": "vin", "n": "0" } },
+    { "name": "M1", "device_type": "mosfet",
+      "terminals": { "d": "vout", "g": "vin", "s": "0", "b": "0" },
+      "params": { "polarity": "n", "gm": "469u", "gds": "8.5u",
+                  "cgs": "2.77f", "cgd": "0.75f", "cdb": "1.7f" } },
+    { "name": "RL", "device_type": "resistor", "terminals": { "p": "vout", "n": "0" },
+      "params": { "r": "10k" } },
+    { "name": "CL", "device_type": "capacitor", "terminals": { "p": "vout", "n": "0" },
+      "params": { "c": "100f" } }
+  ] } }
+}

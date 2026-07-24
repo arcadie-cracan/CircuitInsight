@@ -1,0 +1,27 @@
+{
+  "cin_version": "0.1",
+  "design": { "name": "tb_ota5t", "source": { "kind": "virtuoso", "lib": "worklib", "view": "schematic" } },
+  "top": "tb_ota5t",
+  "ground": ["0", "gnd!"],
+  "globals": ["vdd!"],
+  "definitions": {
+    "tb_ota5t": { "ports": [], "instances": [
+      { "name": "I0", "subckt": "ota5t", "terminals": { "out": "vout", "inp": "vin_p", "vdd": "vdd!", "inn": "vin_n", "vbn": "vbn", "vss": "gnd!" } },
+      { "name": "VIND", "device_type": "vsource", "terminals": { "p": "vin_dm", "n": "gnd!" }, "params": { "acm": "1" }, "meta": { "lib": "analogLib", "cell": "vdc" } },
+      { "name": "VINC", "device_type": "vsource", "terminals": { "p": "vin_cm", "n": "gnd!" }, "meta": { "lib": "analogLib", "cell": "vdc" } },
+      { "name": "VSUP", "device_type": "vsource", "terminals": { "p": "vdd!", "n": "gnd!" }, "meta": { "lib": "analogLib", "cell": "vdc" } },
+      { "name": "I5", "device_type": "balun", "terminals": { "c": "vin_cm", "d": "vin_dm", "n": "net1", "p": "vin_p" }, "meta": { "lib": "analogLib", "cell": "ideal_balun" } },
+      { "name": "MN2", "device_type": "mosfet", "terminals": { "b": "gnd!", "s": "gnd!", "g": "vbn", "d": "vbn" }, "params": { "polarity": "n", "m": "2" }, "meta": { "lib": "sky130_fd_pr", "cell": "nfet_01v8", "w": "iPar(\"totalW\")", "l": "1u", "nf": "1" } },
+      { "name": "IB", "device_type": "isource", "terminals": { "p": "vdd!", "n": "vbn" }, "meta": { "lib": "analogLib", "cell": "idc" } },
+      { "name": "S1", "device_type": "switch", "terminals": { "n": "vin_n", "p": "vout" }, "params": { "position": "0", "dc_position": "1", "ac_position": "0" }, "meta": { "lib": "analogLib", "cell": "sp1tswitch" } },
+      { "name": "S0", "device_type": "switch", "terminals": { "n": "net1", "p": "vin_n" }, "params": { "position": "0", "dc_position": "0", "ac_position": "1" }, "meta": { "lib": "analogLib", "cell": "sp1tswitch" } }
+    ] },
+    "ota5t": { "ports": ["vdd", "vss", "vbn", "inp", "inn", "out"], "instances": [
+      { "name": "MN2", "device_type": "mosfet", "terminals": { "b": "vss", "s": "vss", "g": "vbn", "d": "net3" }, "params": { "polarity": "n", "m": "2" }, "meta": { "lib": "sky130_fd_pr", "cell": "nfet_01v8", "w": "iPar(\"totalW\")", "l": "1u", "nf": "1" } },
+      { "name": "MN1", "device_type": "mosfet", "terminals": { "b": "vss", "s": "net3", "g": "inn", "d": "out" }, "params": { "polarity": "n", "m": "1" }, "meta": { "lib": "sky130_fd_pr", "cell": "nfet_01v8", "w": "iPar(\"totalW\")", "l": "2u", "nf": "1" } },
+      { "name": "MN0", "device_type": "mosfet", "terminals": { "b": "vss", "s": "net3", "g": "inp", "d": "net1" }, "params": { "polarity": "n", "m": "1" }, "meta": { "lib": "sky130_fd_pr", "cell": "nfet_01v8", "w": "iPar(\"totalW\")", "l": "2u", "nf": "1" } },
+      { "name": "MP1", "device_type": "mosfet", "terminals": { "b": "vdd", "s": "vdd", "g": "net1", "d": "out" }, "params": { "polarity": "p", "m": "2" }, "meta": { "lib": "sky130_fd_pr", "cell": "pfet_01v8", "w": "iPar(\"totalW\")", "l": "2u", "nf": "1" } },
+      { "name": "MP0", "device_type": "mosfet", "terminals": { "b": "vdd", "s": "vdd", "g": "net1", "d": "net1" }, "params": { "polarity": "p", "m": "2" }, "meta": { "lib": "sky130_fd_pr", "cell": "pfet_01v8", "w": "iPar(\"totalW\")", "l": "2u", "nf": "1" } }
+    ] }
+  }
+}

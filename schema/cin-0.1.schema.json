@@ -1,0 +1,84 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://circuitinsight.dev/schema/cin-0.1.schema.json",
+  "title": "CircuitInsight Netlist (CIN) v0.1",
+  "type": "object",
+  "required": ["cin_version", "top", "ground", "definitions"],
+  "additionalProperties": false,
+  "properties": {
+    "cin_version": { "const": "0.1" },
+    "design": { "type": "object" },
+    "top": { "type": "string", "minLength": 1 },
+    "ground": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/netName" },
+      "minItems": 1
+    },
+    "globals": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/netName" }
+    },
+    "definitions": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/definition" }
+    }
+  },
+  "$defs": {
+    "netName": { "type": "string", "minLength": 1 },
+    "localName": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^.]+$"
+    },
+    "definition": {
+      "type": "object",
+      "required": ["instances"],
+      "additionalProperties": false,
+      "properties": {
+        "ports": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/localName" },
+          "default": []
+        },
+        "instances": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/instance" }
+        }
+      }
+    },
+    "instance": {
+      "type": "object",
+      "required": ["name", "terminals"],
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["device_type"], "not": { "required": ["subckt"] } },
+        { "required": ["subckt"], "not": { "required": ["device_type"] } }
+      ],
+      "properties": {
+        "name": { "$ref": "#/$defs/localName" },
+        "device_type": {
+          "enum": [
+            "mosfet", "bjt", "diode",
+            "resistor", "capacitor", "inductor",
+            "vsource", "isource",
+            "vcvs", "vccs", "ccvs", "cccs",
+            "balun", "switch"
+          ]
+        },
+        "subckt": { "type": "string", "minLength": 1 },
+        "terminals": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/netName" }
+        },
+        "sim_name": { "$ref": "#/$defs/localName" },
+        "params": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "number"] }
+        },
+        "meta": { "type": "object" }
+      }
+    }
+  }
+}
