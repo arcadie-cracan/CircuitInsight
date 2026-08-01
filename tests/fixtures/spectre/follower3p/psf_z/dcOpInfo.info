@@ -1,0 +1,1000 @@
+HEADER
+"PSFversion" "1.00"
+"simulator" "spectre"
+"version" "25.1.0.235.isr5"
+"date" "7:23:48 PM, Fri Jul 17, 2026"
+"design" "// Point Netlist Generated on: Jul 17 08:44:01 2026"
+"analysis type" "info"
+"analysis name" "dcOpInfo"
+"analysis description" "Circuit Information"
+"xVecSorted" "unknown"
+"tolerance.relative" 1.000000000000000e-03
+"AnalysisName" "DC"
+"AnalysisType" "dcOp"
+"OpPointTemp.Value" 2.700000000000000e+01
+"OpPointTemp.Units" "C"
+TYPE
+"bsim4" STRUCT(
+"trise" FLOAT DOUBLE PROP(
+"units" "C"
+"description" "Temperature rise from ambient"
+)
+"dtemp" FLOAT DOUBLE PROP(
+"units" "C"
+"description" "Alias for trise"
+)
+"ids" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Resistive drain-to-source current"
+)
+"vgs" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Gate-source voltage"
+)
+"vds" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Drain-source voltage"
+)
+"vbs" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Bulk-source voltage"
+)
+"vgd" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Gate-drain voltage"
+)
+"vdb" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Drain-bulk voltage"
+)
+"vgb" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Gate-bulk voltage"
+)
+"vth" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Threshold voltage (alias=lv9)"
+)
+"vdsat" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Drain-source saturation voltage (alias=lv10)"
+)
+"gm" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "Common-source transconductance (alias=lx7)"
+)
+"gds" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "Common-source output conductance (alias=lx8)"
+)
+"gmbs" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "Body-transconductance (alias=lx9)"
+)
+"betaeff" FLOAT DOUBLE PROP(
+"units" "A/V^2"
+"description" "Effective beta (alias LV21)"
+)
+"pro_Gamma" FLOAT DOUBLE PROP(
+"description" "Gamma"
+)
+"cjd" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Drain-bulk junction capacitance (alias=lx29)"
+)
+"cjs" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Source-bulk junction capacitance (alias=lx28)"
+)
+"cgg" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total gate capacitance, including intrinsic, overlap and fringing components (alias=lx82)"
+)
+"cgd" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total gate-to-drain capacitance, including intrinsic, overlap, and fringing components (alias=lx83)"
+)
+"cgs" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total gate-to-source capacitance, including intrinsic, overlap, and fringing components (alias=lx84)"
+)
+"cgb" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total gate-to-bulk capacitance, including intrinsic and overlap components"
+)
+"cdg" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total drain-to-gate capacitance, including intrinsic, overlap, and fringing components (alias=lx87)"
+)
+"cdd" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Drain capacitance, including intrinsic, overlap, and fringing components"
+)
+"cds" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total drain-to-source capacitance (alias=lx86)"
+)
+"cdb" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Intrinsic drain-to-bulk capacitance"
+)
+"csg" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total source-to-gate capacitance, including intrinsic, overlap, and fringing components"
+)
+"csd" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total source-to-drain capacitance"
+)
+"css" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Source capacitance, including intrinsic, overlap, and fringing components"
+)
+"csb" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Intrinsic source-to-bulk capacitance"
+)
+"cbg" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total bulk-to-gate capacitance, including intrinsic and overlap components (alias=lx88)"
+)
+"cbd" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Intrinsic bulk-to-drain capacitance"
+)
+"cbs" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Intrinsic bulk-to-source capacitance"
+)
+"cbb" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Bulk capacitance, including intrinsic and overlap components"
+)
+"covlgs" FLOAT DOUBLE PROP(
+"units" "F/m"
+"description" "Gate-source overlap and fringing capacitances (alias=lv36)"
+)
+"covlgd" FLOAT DOUBLE PROP(
+"units" "F/m"
+"description" "Gate-drain overlap and fringing capacitances (alias=lv37)"
+)
+"covlgb" FLOAT DOUBLE PROP(
+"units" "F/m"
+"description" "Gate-bulk overlap capacitances (alias=lv38)"
+)
+"cggbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CGGBO = dQg/dVg intrinsic gate capacitance (alias=lx18)"
+)
+"cgdbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CGDBO = -dQg/dVd intrinsic gate-to-drain capacitance (alias=lx19)"
+)
+"cgsbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CGSBO = -dQg/dVs intrinsic gate-to-source capacitance (alias=lx20)"
+)
+"cbgbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CBGBO = -dQb/dVg intrinsic bulk-to-gate capacitance (alias=lx21)"
+)
+"cbdbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CBDBO = -dQb/dVd intrinsic bulk-to-drain capacitance (alias=lx22)"
+)
+"cbsbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CBSBO = -dQb/dVs intrinsic bulk-to-source capacitance (alias=lx23)"
+)
+"cdgbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CDGBO = -dQd/dVg intrinsic drain-to-gate capacitance (alias=lx32)"
+)
+"cddbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CDDBO = dQd/dVd intrinsic drain capacitance (alias=lx33)"
+)
+"cdsbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CDSBO = -dQd/dVs intrinsic drain-to-source capacitance (alias=lx34)"
+)
+"ron" FLOAT DOUBLE PROP(
+"units" "Ohm"
+"description" "On-resistance, includes the parasitical rs and rd"
+)
+"id" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Resistive drain current"
+)
+"ig" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC gate current"
+)
+"is" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC source current"
+)
+"ib" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC bulk current"
+)
+"ibulk" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Resistive bulk current"
+)
+"pwr" FLOAT DOUBLE PROP(
+"units" "W"
+"description" "Power at op point"
+)
+"gmoverid" FLOAT DOUBLE PROP(
+"units" "1/V"
+"description" "Gm/Ids"
+)
+"rdeff" FLOAT DOUBLE PROP(
+"units" "Ohm"
+"description" "Effective drain resistance"
+)
+"rseff" FLOAT DOUBLE PROP(
+"units" "Ohm"
+"description" "Effective source resistance"
+)
+"rgbd" FLOAT DOUBLE PROP(
+"units" "Ohm"
+"description" "Gate bias-dependent resistance"
+)
+"igidl" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-induced drain leakage current (alias=lx70)"
+)
+"igisl" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-induced source leakage current"
+)
+"igdt" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate Dielectric tunneling current (alias=lx71)"
+)
+"igd" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-drain tunneling current (alias=lx39)"
+)
+"igs" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-source tunneling current (alias=lx38)"
+)
+"igb" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-bulk tunneling current (alias=lx66)"
+)
+"igbacc" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-bulk tunneling current determined by ECB (alias=lx73)"
+)
+"igbinv" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-bulk tunneling current determined by EVB (alias=lx74)"
+)
+"igcs" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-channel (source side) tunneling current (alias=lx67)"
+)
+"igcd" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-channel (drain side) tunneling current (alias=lx68)"
+)
+"isub" FLOAT DOUBLE PROP(
+"units" "A"
+"description" " Substrate current ( alias to LX69 )"
+)
+"gbs" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "Bulk-source diode conductance (alias=lx11)"
+)
+"gbd" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "Bulk-drain diode conductance (alias=lx10)"
+)
+"qg" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Total gate charge, including intrinsic, overlap and fringing components"
+)
+"qd" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Total drain charge, including intrinsic, overlap and fringing components"
+)
+"qs" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Total source charge, including intrinsic, overlap and fringing components"
+)
+"qb" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Total bulk charge, including intrinsic and overlap components"
+)
+"qjd" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Drain-bulk junction charge"
+)
+"qjs" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Source-bulk junction charge"
+)
+"qgdovl" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Gate-drain overlap and fringing charge"
+)
+"qgsovl" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Gate-source overlap and fringing charge"
+)
+"qgi" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Intrinsic gate charge"
+)
+"qdi" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Intrinsic drain charge"
+)
+"qinv" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Inversion charge"
+)
+"qsi" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Intrinsic source charge"
+)
+"qbi" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Intrinsic bulk charge"
+)
+"vfbeff" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Effective Flat-band voltage"
+)
+"ide" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC drain current"
+)
+"ige" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC gate current"
+)
+"ise" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC source current"
+)
+"ibe" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC bulk current"
+)
+"idb" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "DC drain-bulk current"
+)
+"isb" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "DC source-bulk current"
+)
+"vsb" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Source-bulk DC voltage"
+)
+"gmb" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "DC bulk transconductance"
+)
+"vgt" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "effective gate drive voltage including back bias and drain bias effects"
+)
+"vth_drive" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "effective gate drive voltage including back bias and drain bias effects. Alias for Vgt"
+)
+"vdss" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Drain saturation voltage at actual bias"
+)
+"vsat_marg" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Vds margin"
+)
+"vdsat_marg" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Vds margin"
+)
+"self_gain" FLOAT DOUBLE PROP(
+"description" "Transistor self gain"
+)
+"rout" FLOAT DOUBLE PROP(
+"units" "Ohm"
+"description" "AC output resistor. The parasitical rs and rd are excluded"
+)
+"beff" FLOAT DOUBLE PROP(
+"units" "A/V^2"
+"description" "Gain factor in saturation"
+)
+"fug" FLOAT DOUBLE PROP(
+"units" "Hz"
+"description" "Unity current gain frequency at actual bias"
+)
+"ft" FLOAT DOUBLE PROP(
+"units" "Hz"
+"description" "Unity current gain frequency at actual bias"
+)
+"rgate" FLOAT DOUBLE PROP(
+"units" "Ohm"
+"description" "MOS gate resistance"
+)
+"vearly" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Equivalent early voltage"
+)
+"Tk" FLOAT DOUBLE PROP(
+"units" "K"
+"description" "Absolute Device temperature including self-heating"
+)
+"Dtsh" FLOAT DOUBLE PROP(
+"units" "K"
+"description" "Device temperature rise due to self-heating"
+)
+"Iavl" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Weak avalanche current"
+)
+"vth0" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Zero-bias threshold voltage, excluding back-bias (body effect) and drain-bias effect (DIBL)"
+)
+"go" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "Common-source output conductance"
+)
+"co" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Output Drain-Source capacitance"
+)
+"cm" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Capacitance element 1 for QS model"
+)
+"cmb" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Capacitance element 2 for QS model"
+)
+"cmx" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Capacitance element 3 for QS model"
+)
+"tau1" FLOAT DOUBLE PROP(
+"units" "s"
+"description" "Time constant related to NQS first frequency pole"
+)
+"fqslim" FLOAT DOUBLE PROP(
+"units" "Hz"
+"description" "QS model frequency limit"
+)
+"gmoveri" FLOAT DOUBLE PROP(
+"units" "1/V"
+"description" "Gm/Ids"
+)
+"ueff" FLOAT DOUBLE PROP(
+"description" "ueff"
+)
+"OPdef" INT LONG PROP(
+"units" ""
+"description" "1: Device Physics notation. 2: Circuit Simulator notation"
+)
+"Ctype" INT LONG PROP(
+"units" ""
+"description" "Flag for channel type of MOSFET. 1: NMOS. -1: PMOS"
+)
+"SDint" INT LONG PROP(
+"units" ""
+"description" "Flag for source-drain interchange. 1: No S-D interchange, -1: S-D interchange"
+)
+"region" INT BYTE PROP(
+"description" "Estimated operating region. %Z outputs the number (0-4) in a rawfile"
+)
+"reversed" INT BYTE PROP(
+"description" "Reverse mode indicator"
+)
+"SDop" INT BYTE PROP(
+"description" "Operation mode related to channel type and drain-source voltage sign"
+)
+) PROP(
+"key" "inst"
+)
+"capacitor" STRUCT(
+"trise" FLOAT DOUBLE PROP(
+"units" "C"
+"description" "Temperature rise from ambient"
+)
+"v" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Voltage at operating point"
+)
+"cap" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Capacitance at operating point"
+)
+) PROP(
+"key" "inst"
+)
+"isource" STRUCT(
+"i" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Current through the source"
+)
+"v" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Voltage across the source"
+)
+"pwr" FLOAT DOUBLE PROP(
+"units" "W"
+"description" "Power dissipation"
+)
+) PROP(
+"key" "inst"
+)
+"vsource" STRUCT(
+"v" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Voltage across the source"
+)
+"i" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Current through the source"
+)
+"pwr" FLOAT DOUBLE PROP(
+"units" "W"
+"description" "Power dissipation"
+)
+) PROP(
+"key" "inst"
+)
+VALUE
+"MP0.msky130_fd_pr__pfet_01v8" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+-4.999999879493370e-05
+-1.111198807870273e+00
+-1.570191353576091e+00
+2.298086464239093e-01
+4.589925457058182e-01
+-1.800000000000000e+00
+-1.341007454294182e+00
+-1.092352446872826e+00
+-8.941475158215496e-02
+7.975023287150986e-04
+1.508002032248291e-06
+1.910745550664824e-04
+2.048010257564421e-02
+0.000000000000000e+00
+7.336562518646246e-14
+1.143732988593117e-13
+1.075062338462262e-12
+-1.638237117311424e-14
+-9.066113986445762e-13
+-1.520685686445720e-13
+-3.441429452730500e-13
+1.656695088190507e-14
+4.079081995745154e-13
+-8.033220518337045e-14
+-5.087871847574564e-13
+-2.234753668522105e-16
+6.294697845580522e-13
+-1.204591244337435e-13
+-2.221322084317561e-13
+3.889565806137995e-17
+-1.307665854879913e-13
+3.528598982616860e-13
+1.776717675914777e-14
+1.668860901474014e-14
+0.000000000000000e+00
+1.040606552688375e-12
+3.062378416258954e-16
+-8.888442218854284e-13
+-2.221322084317561e-13
+3.889565806137995e-17
+-1.307665854879913e-13
+-3.274543362583099e-13
+-1.216581328350649e-16
+4.079081995745154e-13
+3.140382782839570e+04
+-5.000000446569784e-05
+nan
+nan
+nan
+5.806080294645724e-12
+7.850957602509213e-05
+1.595004695871925e+01
+1.416666666666667e-03
+1.416666666666667e-03
+0.000000000000000e+00
+-1.861123752286586e-29
+-0.000000000000000e+00
+-0.000000000000000e+00
+-0.000000000000000e+00
+-0.000000000000000e+00
+-0.000000000000000e+00
+-0.000000000000000e+00
+-0.000000000000000e+00
+-0.000000000000000e+00
+-0.000000000000000e+00
+5.535247856041077e-12
+1.005676000473247e-12
+1.000000000000000e-12
+-9.935963815238261e-13
+-1.052656099625342e-13
+9.814866008108385e-14
+1.000713331405276e-12
+1.683000302366050e-13
+2.778282250663746e-14
+6.725776562067404e-16
+-2.547501877626365e-15
+-9.835019112776766e-13
+7.013843958451151e-14
+0.000000000000000e+00
+1.087329930311311e-13
+8.046304786620340e-13
+-2.561137635839391e-01
+-5.000000783588898e-05
+-0.000000000000000e+00
+5.000000000000004e-05
+7.835888941013910e-12
+1.935516210826429e-12
+3.651248741646743e-13
+-2.298086464239093e-01
+1.910745550664824e-04
+-1.884636099744652e-02
+nan
+-8.941475158215496e-02
+1.480776601993936e+00
+nan
+5.288469853890693e+02
+6.631290798123747e+05
+2.815432092477395e-01
+1.180642584167327e+08
+nan
+0.000000000000000e+00
+3.315645918682458e+01
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+1.074965650430571e-02
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "MP0.sky130_fd_pr__pfet_01v8__model.4"
+)
+"MN0.msky130_fd_pr__nfet_01v8" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+4.999999915494654e-05
+7.410074542941818e-01
+1.341007454294182e+00
+-4.589925457058181e-01
+-6.000000000000001e-01
+1.800000000000000e+00
+1.200000000000000e+00
+6.620553730139167e-01
+1.006138933499506e-01
+8.604571600529632e-04
+3.257217696172258e-06
+1.632528121904491e-04
+1.181763076776648e-02
+0.000000000000000e+00
+1.377927509607044e-14
+1.988827792267174e-14
+2.205729612361178e-13
+-9.865279377739724e-15
+-1.879815533371922e-13
+-2.272612852118588e-14
+-7.661912424602042e-14
+9.867688739860507e-15
+8.046553255528571e-14
+-1.371409704912579e-14
+-1.099487197864925e-13
+3.900621920810233e-18
+1.305051762033676e-13
+-2.056035703879594e-14
+-3.400511720360496e-14
+-6.309984041592521e-18
+-2.298915542146107e-14
+5.700058260910762e-14
+9.852540000000001e-15
+9.852540000000001e-15
+9.802418399999999e-20
+2.008677832119338e-13
+-1.273937773972363e-17
+-1.781290133371922e-13
+-3.400501917942096e-14
+-6.309984041592521e-18
+-2.298915542146107e-14
+-6.676658424602042e-14
+1.514873986050592e-17
+8.046553255528571e-14
+2.682014953917284e+04
+5.000080815862147e-05
+nan
+nan
+nan
+-8.090406351155769e-10
+6.705182780506543e-05
+1.720914349191219e+01
+8.500000000000001e-03
+8.500000000000001e-03
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+8.089667146945319e-10
+1.000001207649888e-12
+1.000000000000000e-12
+2.020969799976120e-13
+2.015059207103933e-14
+-2.373962876188692e-14
+-1.985079433067644e-13
+-3.200769973420459e-14
+-1.020246941871223e-14
+0.000000000000000e+00
+0.000000000000000e+00
+2.007075807847936e-13
+-1.776862747576781e-14
+0.000000000000000e+00
+-2.664129678419705e-14
+-1.562976565248287e-13
+-7.912093812232661e-01
+5.000081129962763e-05
+-0.000000000000000e+00
+-5.000000000000001e-05
+-8.112996276207692e-10
+1.836959795533262e-12
+4.959531508990460e-13
+4.589925457058181e-01
+1.632528121904491e-04
+7.895208128026510e-02
+nan
+1.006138933499506e-01
+1.240393560944231e+00
+nan
+2.641693740839415e+02
+3.070104897118657e+05
+1.604278933665267e-02
+6.208649037206603e+08
+nan
+0.000000000000000e+00
+1.535077356308927e+01
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+3.468015919094246e-02
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "MN1.sky130_fd_pr__nfet_01v8__model.4"
+)
+"MN1.msky130_fd_pr__nfet_01v8" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+4.999999979880625e-05
+7.982403587078916e-01
+1.028049005131801e+00
+-7.719509948681992e-01
+-2.298086464239094e-01
+1.800000000000000e+00
+1.570191353576091e+00
+7.209388484037985e-01
+1.030888728098876e-01
+8.637407386671519e-04
+3.626192184769122e-06
+1.460112863655444e-04
+1.175400635002630e-02
+0.000000000000000e+00
+1.377927507004441e-14
+1.774361411423432e-14
+2.190097606594084e-13
+-9.883789822875009e-15
+-1.879612620183612e-13
+-2.116470881817224e-14
+-7.690276054790347e-14
+9.888719605577592e-15
+7.905994790424658e-14
+-1.204590696192069e-14
+-1.103246419155952e-13
+9.410076030626783e-18
+1.283659840718658e-13
+-1.805075223230119e-14
+-3.178235819590975e-14
+-1.433985873320858e-17
+-1.946466995775116e-14
+5.126136801239412e-14
+9.852540000000001e-15
+9.852540000000001e-15
+9.802418399999999e-20
+1.993045826352244e-13
+-3.124982287500890e-17
+-1.781087220183612e-13
+-3.178226017172575e-14
+-1.433985873320858e-17
+-1.946466995775116e-14
+-6.705022054790347e-14
+3.617960557759070e-17
+7.905994790424656e-14
+2.056098018537083e+04
+5.000001223358520e-05
+nan
+nan
+nan
+-1.247173918254908e-11
+5.140247246088662e-05
+1.727481484285473e+01
+8.500000000000001e-03
+8.500000000000001e-03
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+1.239781872112706e-11
+1.000000000104022e-12
+1.000000000000000e-12
+2.246198628702520e-13
+1.668269239056127e-14
+-1.815609330963914e-14
+-2.231464619511742e-13
+-3.200769987147266e-14
+-1.607167577451141e-14
+0.000000000000000e+00
+0.000000000000000e+00
+2.190192127709782e-13
+-1.758920217481805e-14
+0.000000000000000e+00
+-2.636307820769621e-14
+-1.750669323884639e-13
+-7.912093812232661e-01
+5.000001506163293e-05
+-0.000000000000000e+00
+-5.000000001794276e-05
+-1.504369017673111e-11
+1.836959805495185e-12
+8.089116503857353e-13
+7.719509948681992e-01
+1.460112863655444e-04
+7.730151030409305e-02
+nan
+1.030888728098876e-01
+9.249601323219133e-01
+nan
+2.381949700005064e+02
+2.757713736740816e+05
+1.673494049551036e-02
+6.276825639862946e+08
+nan
+0.000000000000000e+00
+1.378857283727129e+01
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+3.449344622122617e-02
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "MN1.sky130_fd_pr__nfet_01v8__model.4"
+)
+"CL" "capacitor" (
+nan
+7.719509948681992e-01
+1.000000000000000e-12
+) PROP(
+"model" "capacitor"
+)
+"IB1" "isource" (
+5.000000000000000e-05
+4.589925457058181e-01
+2.294962728529091e-05
+) PROP(
+"model" "isource"
+)
+"IB2" "isource" (
+5.000000000000000e-05
+2.298086464239093e-01
+1.149043232119547e-05
+) PROP(
+"model" "isource"
+)
+"IB3" "isource" (
+5.000000000000000e-05
+7.719509948681992e-01
+3.859754974340996e-05
+) PROP(
+"model" "isource"
+)
+"IPORT" "isource" (
+0.000000000000000e+00
+-7.719509948681992e-01
+-0.000000000000000e+00
+) PROP(
+"model" "isource"
+)
+"VSUP" "vsource" (
+1.800000000000000e+00
+-1.500008341875001e-04
+-2.700015015375002e-04
+) PROP(
+"model" "vsource"
+)
+"VIN" "vsource" (
+1.200000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+) PROP(
+"model" "vsource"
+)
+"VPORT2" "vsource" (
+0.000000000000000e+00
+5.000001504369016e-05
+0.000000000000000e+00
+) PROP(
+"model" "vsource"
+)
+"VPORT1" "vsource" (
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+) PROP(
+"model" "vsource"
+)
+END

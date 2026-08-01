@@ -1,0 +1,34 @@
+// tb_m0_acp.scs -- M0 testbench, PMOS AC variant (SKY130) -> psf_acp/
+//
+// Identical DC operating point to tb_m0.scs (mag doesn't affect DC), but here
+// VINP is the AC-driven source so the PMOS stage TF can be validated against
+// Spectre's own AC. VIN is DC-only.
+//
+//   spectre tb_m0_acp.scs -format psfascii -raw ./psf_acp +log acp.log
+
+simulator lang=spectre
+global 0
+include "<pdk-models>" section=tt
+parameters temperature=27
+
+VDD  (vdd 0)  vsource dc=1.8  type=dc
+VIN  (vin 0)  vsource dc=800m type=dc
+VINP (vinp 0) vsource dc=790m mag=1 type=dc
+
+RD1 (vdd vmid) resistor r=100K
+RD2 (vmid 0)   resistor r=100K
+
+M1 (vout vin 0 0) nfet_01v8 w=(2u) l=180n as=530f ad=530f ps=4.53u \
+        pd=4.53u nrd=0.170000 nrs=0.170000 m=(1)*(1)
+RL (vdd vout) resistor r=10K
+C0 (vout 0)   capacitor c=100f
+
+M2 (voutp vinp vdd vdd) pfet_01v8 w=(4u) l=180n as=1.06p ad=1.06p ps=8.53u \
+        pd=8.53u nrd=0.085000 nrs=0.085000 m=(1)*(1)
+RLP (voutp 0) resistor r=10K
+
+simulatorOptions options temp=27 tnom=27 scalem=1.0 scale=1.0 gmin=1e-12 \
+    rforce=1 maxnotes=5 maxwarns=5 digits=5 cols=80 pivrel=1e-3
+dcOpInfo   info what=oppoint where=rawfile
+ac         ac   start=1k stop=10G dec=20 annotate=status
+saveOptions options save=allpub

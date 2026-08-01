@@ -1,0 +1,55 @@
+// tb_nmc3d.scs -- behavioral fully-differential gm-C THREE-stage
+// nested-Miller (NMC) amplifier: the mirror of nmc3, two nested Miller PAIRS,
+// a clean-room fd_probe (two ideal baluns + a DM iprobe). PDK-free.
+// DM half-circuit == nmc3; differential unity feedback gives negative DM
+// feedback; the DM loop gain is probed at FDPRB.IPRB_DM. Neither Miller pair
+// alone stabilizes the DM loop -- both nested pairs are needed.
+//   spectre tb_nmc3d.scs -format psfascii -raw ./psf +log nmc3d.log
+simulator lang=spectre
+global 0
+
+subckt ideal_balun d c p n
+    K0 (d 0 p c) transformer n1=2
+    K1 (d 0 c n) transformer n1=2
+ends ideal_balun
+
+G1p (n1p 0 inp inn) vccs gm=100u
+R1p (n1p 0) resistor r=200k
+CN1p (n1p 0) capacitor c=300f
+G2p (0 n2p n1p 0) vccs gm=300u
+R2p (n2p 0) resistor r=200k
+CN2p (n2p 0) capacitor c=300f
+G3p (outp 0 n2p 0) vccs gm=3m
+R3p (outp 0) resistor r=10k
+CLp (outp 0) capacitor c=10p
+CM1p (outp n2ip) capacitor c=2p
+IPRB1p (n2ip n2p) iprobe
+CM2p (outp n1ip) capacitor c=6p
+IPRB2p (n1ip n1p) iprobe
+G1n (n1n 0 inn inp) vccs gm=100u
+R1n (n1n 0) resistor r=200k
+CN1n (n1n 0) capacitor c=300f
+G2n (0 n2n n1n 0) vccs gm=300u
+R2n (n2n 0) resistor r=200k
+CN2n (n2n 0) capacitor c=300f
+G3n (outn 0 n2n 0) vccs gm=3m
+R3n (outn 0) resistor r=10k
+CLn (outn 0) capacitor c=10p
+CM1n (outn n2in) capacitor c=2p
+IPRB1n (n2in n2n) iprobe
+CM2n (outn n1in) capacitor c=6p
+IPRB2n (n1in n1n) iprobe
+BI (dmi cmi outp outn) ideal_balun
+BO (dmo cmo voutp voutn) ideal_balun
+IPRB_DM (dmi dmo) iprobe
+IPRB_CM (cmi cmo) iprobe
+FBP (voutp inn) iprobe
+FBN (voutn inp) iprobe
+
+simulatorOptions options psfversion="1.4.0" temp=27 tnom=27 scalem=1.0 \
+    scale=1.0 gmin=1e-12 rforce=1 maxnotes=5 maxwarns=5 digits=8 cols=80 \
+    pivrel=1e-3
+stb stb start=1 stop=10G dec=40 probe=IPRB_DM annotate=status
+dcOp dc write="spectre.dc" maxiters=150 maxsteps=10000 annotate=status
+dcOpInfo info what=oppoint where=rawfile
+saveOptions options save=allpub

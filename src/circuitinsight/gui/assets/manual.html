@@ -1,0 +1,373 @@
+<!-- CircuitInsight user guide. Rendered by QTextBrowser (Help menu), so the
+     markup stays within Qt's rich-text HTML subset: headings, lists, tables,
+     anchors, inline styles. Self-contained by design - no external assets. -->
+<h1>CircuitInsight user guide</h1>
+
+<p><i>Symbolic circuit analysis driven by the simulator's own operating
+point. The tool solves the exact small-signal network your simulator
+linearized, keeps the parameters you choose as symbols, and prices every
+approximation it ever makes in measured dB.</i></p>
+
+<h2>Contents</h2>
+<ul>
+<li><a href="#start">Getting started</a></li>
+<li><a href="#workflow">The workflow</a></li>
+<li><a href="#benches">The benches</a></li>
+<li><a href="#transfer">&nbsp;&nbsp;Transfer</a>,
+    <a href="#loopgain">Loop gain</a>,
+    <a href="#compensate">Compensate</a>,
+    <a href="#modes">Modes</a>,
+    <a href="#gft">GFT</a>,
+    <a href="#impedance">Impedance</a>,
+    <a href="#reduce">Reduce circuit</a></li>
+<li><a href="#devices">Devices and matched pairs</a></li>
+<li><a href="#keep">The keep set and the estimate</a></li>
+<li><a href="#results">Reading results</a></li>
+<li><a href="#virtuoso">Working from Virtuoso</a></li>
+<li><a href="#contract">The exactness contract</a></li>
+<li><a href="#shortcuts">Keyboard shortcuts</a></li>
+</ul>
+
+<h2><a name="start"></a>Getting started</h2>
+
+<p>CircuitInsight needs two inputs: a <b>CIN</b> file carrying the circuit
+topology, and a <b>psf results directory</b> carrying the simulator's
+operating point. Open both with <b>Open CIN + psf…</b> or launch
+preloaded from Virtuoso &ndash; see
+<a href="#virtuoso">Working from Virtuoso</a>.</p>
+
+<p>On open, the tool works for you before you click anything:</p>
+<ul>
+<li><b>First light</b> &ndash; the exact numeric transfer function is
+solved immediately and plotted against the simulator's AC reference, so
+the plot pane is never empty. This first result is the honest, unmatched
+model &ndash; it is not entered into History. The plot interaction
+buttons (zoom, pan, save) sit in a vertical strip to the right of the
+plots.</li>
+<li><b>Matched pairs</b> are suggested and applied &ndash; devices whose
+operating points agree on every significant parameter. If the applied
+matches move the model, the message strip says by how much, measured.</li>
+<li><b>A keep set</b> is pre-selected within the time budget, so your
+first Solve is symbolic.</li>
+</ul>
+
+<p>The breadcrumb under the toolbar &ndash; <b>1 Open · 2 Match ·
+3 Choose symbols · 4 Solve</b> &ndash; shows where you are; every step is
+a click target.</p>
+
+<h2><a name="workflow"></a>The workflow</h2>
+
+<p>The intended loop, for a student meeting a circuit or a designer
+checking one:</p>
+<ol>
+<li><b>Open</b> the run. First light shows the exact response against the
+simulator's.</li>
+<li><b>Check the matches.</b> Matched devices share symbols &ndash; that
+is what makes textbook cancellations happen in the algebra.</li>
+<li><b>Choose symbols to keep.</b> Rank scores each parameter's effect on
+the band; tick the ones your question is about. Every keep set is exact
+&ndash; the unkept parameters become their exact operating-point
+values.</li>
+<li><b>Solve.</b> Pick the result form: <b>Exact</b>,
+<b>Simplified &middot; full order</b>, or <b>Simplified &middot;
+lowest order</b>. The Summary leads with the designer numbers &ndash;
+A<sub>0</sub>, GBW, one formula per pole and zero.</li>
+<li><b>Refine.</b> What-if sliders, History overlays, the Error tab, the
+Reduce bench &ndash; each answers one kind of follow-up question.</li>
+</ol>
+
+<h2><a name="benches"></a>The benches</h2>
+
+<p>The list on the far left selects the analysis. Each bench shows its
+own controls and its own views; Summary, Expression and Error are views
+of any result and stay available everywhere. A bench that needs
+something the design does not carry &ndash; a loop probe, a port &ndash;
+says so.</p>
+
+<h3><a name="transfer"></a>Transfer</h3>
+
+<p>The voltage transfer from the selected source to the selected net.
+One Solve button; the form selector states the contract:</p>
+<table border="1" cellpadding="4" cellspacing="0">
+<tr><td><b>Exact</b></td>
+<td>H(s) with every kept symbol &ndash; no approximation of any
+kind.</td></tr>
+<tr><td><b>Simplified &middot; full order</b></td>
+<td><b>shortens the formula, keeps the shape.</b> Every pole and zero
+stays; additive terms inside the coefficients are pruned until the
+response would move by more than the tolerance. The <i>working</i>
+model &ndash; safe to manipulate and valid at every frequency, with
+the exact structure still in it.</td></tr>
+<tr><td><b>Simplified &middot; lowest order</b></td>
+<td><b>the fewest poles your band and tolerance allow.</b> Reactances
+are removed and added back by matching pursuit until the smallest set
+the search can certify remains &ndash; the <i>presentation</i> model
+you would draw on a whiteboard: A<sub>0</sub>, GBW, done. Certified
+only over the band you select.</td></tr>
+</table>
+<p>The two answer different questions. Measured on a 17-pole folded
+cascode at a 1 dB tolerance: full order returned the same degree
+17/17 with half the terms at 0.00 dB; lowest order returned degree 1
+&ndash; A<sub>0</sub>/(1+s/p<sub>1</sub>) &ndash; at 0.67 dB.</p>
+
+<p><b>What appears when.</b> Each control exists exactly when it means
+something. Exact shows neither tolerance nor band. Either Simplified
+form shows the tolerance spins, and a <b>tolerance tube</b> shades the
+plot around the model trace &ndash; the region the next solve is
+promised to stay inside, widening and tightening live as you change
+the tolerance. Lowest order additionally shows the band slider, and
+the tube spans only the highlighted band &ndash; because that is
+exactly where the promise applies. The reported error is always
+measured against the full model, never assumed.</p>
+
+<p><b>The certification band.</b> A lowest-order result is certified
+only over a frequency band &ndash; outside it, it is not slightly off
+but structurally wrong: everything past the last kept pole is fiction.
+The band is yours to choose: with lowest order selected, a two-cursor
+slider appears above the Bode, aligned with its frequency axis and
+spanning exactly the frequencies the simulation covered; each cursor
+prints its frequency above itself, and the span is highlighted on the
+plot &ndash; drag the cursors to the frequencies your question lives in.
+Within the band, the budget is enforced through the <b>enforcement
+window</b> (the dB spin beside the tolerances): only where |H| stays
+within that many dB of its peak, because relative dB error deep in a
+stopband is noise, not signal. 60 dB covers the useful dynamic range;
+raise it toward 200 dB to enforce the whole band strictly, at the
+price of more reactances kept. The result's note always names the
+band actually enforced &ndash; it is never silently narrower than what
+it claims. The full-order form
+keeps every pole, so it needs no band &ndash; it is certified over the
+whole working range.</p>
+
+<h3><a name="loopgain"></a>Loop gain</h3>
+
+<p>The Tian loop gain at a current probe &ndash; any vsource in the
+design qualifies; a run carrying an stb analysis opens here with its
+designated probe selected. The plot annotates the phase and gain
+margins; the probe-adequacy advisor grades whether this probe's T
+actually predicts closed-loop stability, and its verdict lands in the
+message strip a few seconds after the solve.</p>
+
+<h3><a name="compensate"></a>Compensate</h3>
+
+<p>Suggests compensation networks that cannot move the operating point
+&ndash; capacitors and series-RC branches &ndash; sized to a goal:</p>
+<ul>
+<li><b>mfm</b> &ndash; place the dominant closed-loop pair at Butterworth
+damping;</li>
+<li><b>pm</b> &ndash; meet a phase-margin floor;</li>
+<li><b>spec</b> &ndash; hold the peak sensitivity
+M<sub>s</sub>&nbsp;=&nbsp;max|1/(1&minus;T)|.</li>
+</ul>
+<p>Achievers are ranked by area &ndash; total added capacitance first.
+Selecting a row previews its loop gain instantly; branches above 1 grow
+a nested network one branch at a time.</p>
+
+<h3><a name="modes"></a>Modes</h3>
+
+<p>For fully differential designs: the 2&times;2 differential and
+common-mode loop matrix, its eigenloci, and the per-locus margins. The
+run's own stb curve overlays the matching locus wherever it exists.</p>
+
+<h3><a name="gft"></a>GFT</h3>
+
+<p>The general feedback theorem quartet for one loop: the ideal closed
+loop, the loop transmission, and the two error terms, with the exact
+identity checked and badged. Needs a probe and an error-reference
+designation.</p>
+
+<h3><a name="impedance"></a>Impedance</h3>
+
+<p>Z at a port &ndash; any isource or vsource marks one. A run carrying
+an xf analysis overlays it as truth.</p>
+
+<h3><a name="reduce"></a>Reduce circuit</h3>
+
+<p>The modelling workshop, and the one bench whose actions change the
+working circuit. The session holds one circuit in one of two named
+states &ndash; <b>as imported</b> or <b>reduced</b> &ndash; and every
+result records which state produced it.</p>
+<ol>
+<li><b>Scan AC grounds</b> prices every mirror and bias node by the exact
+error grounding it would cause in the current transfer. The recommended
+set is pre-ticked; ticking any combination re-prices it jointly.</li>
+<li>The preview shows what grounding unlocks, both exact: the controlled
+sources that die because their controlling voltage became zero, and the
+parallel passives that lump into single C<sub>node</sub> and
+R<sub>node</sub> symbols.</li>
+<li><b>Apply reduction</b> rewrites the working circuit and banners the
+true end-to-end cost, measured over the full band &ndash; grounding is
+the only approximation in the chain. <b>Revert</b> restores as-imported
+at any time.</li>
+<li><b>Scan removals</b> is advisory: every explicit element priced by
+the response shift its outright deletion would cause. Act on it in the
+schematic, not here.</li>
+</ol>
+<p>Reduced results carry a <i>[reduced]</i> marker in History, so an
+overlay against an as-imported result shows exactly what the modelling
+step cost.</p>
+
+<h2><a name="devices"></a>Devices and matched pairs</h2>
+
+<p>The circuit lives in two trees. The <b>Instances</b> tree groups
+every reconstructed device under its subcircuit path &ndash; one clean
+column, with the details where you ask for them: hover an instance for
+its operating-point glance (type, region, terminals, gm = &hellip;,
+gds = &hellip;, voltages), double-click for the full record,
+right-click to set its LaTeX alias (per-symbol LaTeX stays in the
+keep table and overrides it). Devices outside saturation are tinted,
+and devices whose impact-ionization current the model cannot represent
+are flagged &ndash; their loop-gain results may differ from the
+simulator's. The <b>Nets</b> tree is hierarchical the same way: the
+testbench's own nets first, then each subcircuit as a node holding its
+internal nets, each net expanding to its connections. The input
+source's net wears ▶, the output net wears ◀, ground nets are grayed,
+and a net AC-grounded by the active reduction wears ⏚ &ndash; the tree
+always tells the truth about which circuit the analyses run on.
+Double-click a net to make it the output; right-click to route an
+AC-ground request through the measured Reduce flow &ndash; nothing is
+ever grounded silently.</p>
+
+<p><b>Matching</b> declares devices to share one set of symbols. It is
+what lets gm<sub>1</sub>/(gds<sub>2</sub>+gds<sub>4</sub>) emerge instead
+of six unrelated symbols &ndash; and it means one value set must stand
+for the group. Every member of a match set wears 🔗 with its group
+number and the group tint; right-click a linked member to unmatch the
+group or choose its representative. The <b>values</b> selector chooses
+how the group gets its numbers:</p>
+<table border="1" cellpadding="4" cellspacing="0">
+<tr><td><b>weighted</b> &ndash; the default</td>
+<td>the mean weighted by each member's band sensitivity. The member that
+shapes the response most pulls hardest; measured best on every
+bench.</td></tr>
+<tr><td><b>representative</b></td>
+<td>one member's values stand for the group. Right-click a 🔗 member to
+choose; with no choice made, the first device the netlist reaches
+wins.</td></tr>
+<tr><td><b>average</b></td>
+<td>the arithmetic mean, parameter by parameter.</td></tr>
+</table>
+
+<p>Whenever applied matches fuse devices whose operating points disagree,
+the message strip reports the worst overwrite and the measured response
+shift. If the plot disagrees with the simulator reference, look there
+first &ndash; then Unmatch the offending group, or Clear all
+matches.</p>
+
+<h2><a name="keep"></a>The keep set and the estimate</h2>
+
+<p>The keep table decides which parameters stay as letters. Two facts
+keep it honest:</p>
+<ul>
+<li>Every keep set is <b>exact</b>. Keeping fewer symbols loses no
+accuracy &ndash; the rest become the exact rational values of their
+operating point. Simplify's budget is the only accuracy knob.</li>
+<li>Keeping more symbols costs <b>time</b>, multiplicatively &ndash; the
+solve grid is a product over kept symbols. Rank orders parameters by
+their effect on the band; Suggest picks the largest set fitting the time
+budget; the estimate under the table predicts the solve and is checked
+against reality on every run.</li>
+<li><b>Suggest is form-aware.</b> With lowest order selected it proposes
+the <i>story keep</i> instead: the reactances the reduction will keep
+&ndash; keeping them also protects them from being dropped &ndash; plus
+the few conductances that set A<sub>0</sub> and the dominant pole over
+your band. Those are the only letters the whiteboard formula can carry;
+anything more multiplies the solve grid without appearing in it.</li>
+</ul>
+
+<h2><a name="results"></a>Reading results</h2>
+
+<ul>
+<li><b>Summary</b> leads with the designer numbers &ndash;
+A<sub>0</sub> with its formula when one exists, GBW, one short formula
+per pole and zero with the displacement each accepted &ndash; then the
+exact record. <b>Analysis &rarr; Attribute poles</b> adds which element
+establishes which pole, verified by nudging the owner and re-rooting.
+<b>Analysis &rarr; Explain the numbers</b> answers the follow-up
+question a simplified expression raises: what is inside a numeral such
+as the 4.8&times;10<sup>&minus;5</sup> multiplying a kept symbol? Every
+unkept parameter is substituted before the solve, so those numbers are
+sums of products whose names are gone; the advisor ranks them back per
+coefficient of N(s) and D(s), grouped by family &ndash; the gm chain
+that scales every term, then the gds pair or capacitance that actually
+sets the value. The Summary leads with the <b>ratio attribution</b>:
+a displayed numeral is always a ratio of two coefficients, and shares
+subtract in a ratio, so the common chain cancels and what remains is
+what shapes the number you see. The same attributions appear when you
+hover a numeral in the Expression tab. Shares are exact fractions for
+once-stamped parameters; the current keep set is excluded, since
+those are already letters. When a formula line carries SEVERAL
+numerals, their split is not resolvable at the operating point &ndash;
+<b>Analysis &rarr; Explain per numeral</b> runs the deep pass, a
+derivative sweep over the hybrid grid that resolves every collapsed
+numeral (coefficient of s<sup>k</sup> times each kept-letter monomial)
+individually. It costs a few multiples of the solve; afterwards each
+numeral's hover carries its own contributors.</li>
+<li><b>Expression</b> renders H(s) in publication form. Hover a symbol
+for its operating-point value; click it to select it in the keep table
+&ndash; and in the Virtuoso schematic when cross-probe is on. Hover a
+<i>numeral</i> for its ranked contributors once Explain the numbers
+has run; before that, the hover tells you to run it. LaTeX aliases
+are editable via the instance context menu and the keep table.</li>
+<li><b>Log</b> records the session as it happens: every run's start
+with its estimate, each phase transition with the elapsed clock, and
+a closing line giving the actual duration, how it compared with the
+estimate, and which solver backend ran. The status bar shows only the
+current line; this keeps the history, and it is the fastest way to
+report a slow or surprising solve &ndash; select and copy.</li>
+<li><b>Error</b> shows the residual of a budgeted result against the
+full model &ndash; two overlapping Bode curves cannot show a 0.5 dB
+difference; this tab can.</li>
+<li><b>What-if</b> gives each kept symbol a slider over
+&times;0.25&nbsp;&ndash;&nbsp;&times;4; loop-gain results track their
+phase margin live. Disabled for lowest-order results, with the reason
+stated: moving a parameter can silently leave the band and operating
+point the reduction was certified for &ndash; explore parameters on a
+full-order result.</li>
+<li><b>History</b> records your solves; select several to overlay them
+on one Bode. First light and bench scans do not enter it.</li>
+<li><b>Export</b> writes a single-file report; <b>Add view to
+report</b> appends the current view to a session notebook, exported
+separately.</li>
+</ul>
+
+<h2><a name="virtuoso"></a>Working from Virtuoso</h2>
+
+<p>One line in <code>.cdsinit</code> installs everything &ndash; print
+the skill directory with <code>circuitinsight-skill-path</code>:</p>
+<pre>  CInGuiCmd = "/abs/path/to/circuitinsight-gui"
+  load("&lt;skill-dir&gt;/cin_init.il")</pre>
+<p>A <b>CircuitInsight</b> menu then appears on ADE windows as they open
+&ndash; however they were opened &ndash; and on schematic windows via
+<code>CInInstallMenu()</code>. <b>Analyze</b> exports the schematic,
+finds the current run's results, and launches the GUI preloaded; the
+topology and the operating point always come from the same session.
+With cross-probe enabled in the Devices menu, clicking a symbol in the
+Expression view highlights its device in the schematic.</p>
+
+<h2><a name="contract"></a>The exactness contract</h2>
+
+<p>Worth stating once, plainly. The reconstruction solves the exact
+network the simulator linearized. Symbolic results are reconstructions,
+not approximations &ndash; a solve that samples and rebuilds returns
+polynomials bit-identical to the symbolic determinant. The only
+approximations in the tool are the ones you ask for, and each carries
+its measured price at the moment you take it: a simplification budget,
+an AC-ground designation, a match across unequal operating points.
+When a result surprises you, the first question is which declared
+approximation moved it &ndash; the strip, the Summary and History
+overlays exist to answer exactly that.</p>
+
+<h2><a name="shortcuts"></a>Keyboard shortcuts</h2>
+
+<table border="1" cellpadding="4" cellspacing="0">
+<tr><td>Ctrl+O</td><td>Open CIN + psf</td></tr>
+<tr><td>Ctrl+Return</td><td>Solve</td></tr>
+<tr><td>Ctrl+Shift+Return</td><td>Simplified, full order</td></tr>
+<tr><td>Ctrl+R</td><td>Simplified, lowest order</td></tr>
+<tr><td>F5</td><td>Rank symbols</td></tr>
+<tr><td>Ctrl+L</td><td>Copy H(s) as LaTeX</td></tr>
+<tr><td>Ctrl+E</td><td>Export report</td></tr>
+<tr><td>Ctrl+D</td><td>Add view to report</td></tr>
+<tr><td>F1</td><td>This guide</td></tr>
+</table>

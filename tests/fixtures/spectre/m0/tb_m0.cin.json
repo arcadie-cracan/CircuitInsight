@@ -1,0 +1,21 @@
+{
+  "cin_version": "0.1",
+  "design": { "name": "tb_m0", "source": { "kind": "virtuoso", "lib": "worklib", "view": "schematic" } },
+  "top": "tb_m0",
+  "ground": ["0", "gnd!"],
+  "globals": [],
+  "definitions": {
+    "tb_m0": { "ports": [], "instances": [
+      { "name": "RLP", "device_type": "resistor", "terminals": { "n": "gnd!", "p": "voutp" }, "params": { "m": "" }, "meta": { "lib": "analogLib", "cell": "res", "w": "", "l": "" } },
+      { "name": "RL", "device_type": "resistor", "terminals": { "n": "vout", "p": "vdd" }, "params": { "m": "" }, "meta": { "lib": "analogLib", "cell": "res", "w": "", "l": "" } },
+      { "name": "RD2", "device_type": "resistor", "terminals": { "n": "gnd!", "p": "vmid" }, "params": { "m": "" }, "meta": { "lib": "analogLib", "cell": "res", "w": "", "l": "" } },
+      { "name": "RD1", "device_type": "resistor", "terminals": { "n": "vmid", "p": "vdd" }, "params": { "m": "" }, "meta": { "lib": "analogLib", "cell": "res", "w": "", "l": "" } },
+      { "name": "VINP", "device_type": "vsource", "terminals": { "p": "vinp", "n": "gnd!" }, "meta": { "lib": "analogLib", "cell": "vdc" } },
+      { "name": "VIN", "device_type": "vsource", "terminals": { "p": "vin", "n": "gnd!" }, "meta": { "lib": "analogLib", "cell": "vdc" } },
+      { "name": "VDD", "device_type": "vsource", "terminals": { "p": "vdd", "n": "gnd!" }, "meta": { "lib": "analogLib", "cell": "vdc" } },
+      { "name": "M1", "device_type": "mosfet", "terminals": { "b": "gnd!", "s": "gnd!", "g": "vin", "d": "vout" }, "params": { "polarity": "n", "m": "1" }, "meta": { "lib": "sky130_fd_pr", "cell": "nfet_01v8", "w": "iPar(\"totalW\")", "l": "180n", "nf": "1" } },
+      { "name": "M2", "device_type": "mosfet", "terminals": { "b": "vdd", "s": "vdd", "g": "vinp", "d": "voutp" }, "params": { "polarity": "p", "m": "1" }, "meta": { "lib": "sky130_fd_pr", "cell": "pfet_01v8", "w": "iPar(\"totalW\")", "l": "180n", "nf": "1" } },
+      { "name": "C0", "device_type": "capacitor", "terminals": { "n": "gnd!", "p": "vout" }, "params": { "m": "" }, "meta": { "lib": "analogLib", "cell": "cap", "w": "", "l": "" } }
+    ] }
+  }
+}

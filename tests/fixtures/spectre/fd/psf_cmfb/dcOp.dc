@@ -1,0 +1,125 @@
+HEADER
+"PSFversion" "1.00"
+"simulator" "spectre"
+"version" "25.1.0.235.isr5"
+"date" "9:14:48 AM, Sun Jul 19, 2026"
+"design" "// tb_fdota_stb_cmfb.scs (SKY130) -- fully-differential two-stage OTA with
+"
+"analysis type" "dc"
+"analysis name" "dcOp"
+"analysis description" "DC Analysis `dcOp'"
+"xVecSorted" "unsorted"
+"tolerance.relative" 1.000000000000000e-03
+"reltol" 1.000000000000000e-03
+"abstol(V)" 1.000000000000000e-06
+"abstol(I)" 1.000000000000000e-12
+"temp" 2.700000000000000e+01
+"tnom" 2.700000000000000e+01
+"tempeffects" "all"
+"gmindc" 1.000000000000000e-12
+TYPE
+"LogicV" FLOAT DOUBLE PROP(
+"key" "node"
+)
+"V" FLOAT DOUBLE PROP(
+"units" "V"
+"key" "node"
+"tolerance" 1.000000000000000e-06
+)
+"I" FLOAT DOUBLE PROP(
+"units" "A"
+"key" "branch"
+"tolerance" 1.000000000000000e-12
+)
+"MMF" FLOAT DOUBLE PROP(
+"units" "A*turn"
+"key" "node"
+"tolerance" 1.000000000000000e-12
+)
+"Wb" FLOAT DOUBLE PROP(
+"units" "Wb"
+"key" "node"
+"tolerance" 1.000000000000000e-09
+)
+"Temp" FLOAT DOUBLE PROP(
+"units" "C"
+"key" "node"
+"tolerance" 1.000000000000000e-04
+)
+"Pwr" FLOAT DOUBLE PROP(
+"units" "W"
+"key" "node"
+"tolerance" 1.000000000000000e-09
+)
+"U" FLOAT DOUBLE PROP(
+"units" ""
+"key" "node"
+"tolerance" 1.000000000000000e-06
+)
+"V/Sec" FLOAT DOUBLE PROP(
+"units" "V/s"
+"key" "node"
+"tolerance" 9.999999999999999e-05
+)
+"I/Sec" FLOAT DOUBLE PROP(
+"units" "A/s"
+"key" "node"
+"tolerance" 1.000000000000000e-06
+)
+"1/Sec" FLOAT DOUBLE PROP(
+"units" "1/s"
+"key" "node"
+"tolerance" 9.999999999999999e-05
+)
+"HOD" FLOAT DOUBLE PROP(
+"units" ""
+"key" "node"
+"tolerance" 1.000000000000000e-02
+)
+"Q" FLOAT DOUBLE PROP(
+"units" "Coul"
+"key" "node"
+"tolerance" 1.000000000000000e-15
+)
+"Efield" FLOAT DOUBLE PROP(
+"units" "V/m"
+"key" "node"
+"tolerance" 1.000000000000000e-06
+"sigtype" "optical"
+)
+VALUE
+"vdd!" "V" 1.800000000000000e+00
+"vin_dm" "V" 0.000000000000000e+00
+"vin_cm" "V" 9.000000000000000e-01
+"vcmref" "V" 9.000000000000000e-01
+"srcp" "V" 9.000000000000000e-01
+"srcn" "V" 9.000000000000000e-01
+"inn" "V" 8.996957571833282e-01
+"inp" "V" 8.996957571833282e-01
+"voutp" "V" 8.993915143666563e-01
+"voutn" "V" 8.993915143666563e-01
+"outpi" "V" 8.993915143666563e-01
+"outni" "V" 8.993915143666563e-01
+"vbn" "V" 5.987486338175040e-01
+"vcm_sense" "V" 8.993915143666563e-01
+"I0.tail" "V" 2.284085122871699e-01
+"I0.x1p" "V" 6.835553044547503e-01
+"I0.x1n" "V" 6.835553044547505e-01
+"I0.vcmfbg" "V" 6.701067506370246e-01
+"I0.netp" "V" 6.835553044547503e-01
+"I0.netn" "V" 6.835553044547505e-01
+"I0.vcmfb" "V" 6.701067506370246e-01
+"I0.ctail" "V" 2.573106758112311e-01
+"I0.dumm" "V" 6.691715508402833e-01
+"FDPRB.dmi" "V" 4.993784839957617e-18
+"FDPRB.cmi" "V" 8.993915143666563e-01
+"FDPRB.dmo" "V" 4.993784839957617e-18
+"FDPRB.cmo" "V" 8.993915143666563e-01
+"VCMR:p" "I" 0.000000000000000e+00
+"VINC:p" "I" -6.084856333436653e-09
+"VIND:p" "I" 1.241114083184074e-23
+"VSUP:p" "I" -2.617400030653393e-04
+"FDPRB.IPRB_CM:in" "I" -6.084856333436081e-09
+"FDPRB.IPRB_DM:in" "I" 3.002888277644066e-22
+"I0.IPRB_CMFB:in" "I" -1.019965596014559e-25
+END

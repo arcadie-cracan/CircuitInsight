@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use CircuitInsight in academic work, please cite it."
+title: "CircuitInsight: Operating-Point-Driven Symbolic Circuit Analysis"
+authors:
+  - family-names: Cracan
+    given-names: Arcadie
+type: software
+license: MIT
+repository-code: "https://github.com/arcadie-cracan/CircuitInsight"
+year: 2026
+notes: >
+  A companion paper has been submitted to ISETC 2026
+  (International Symposium on Electronics and Telecommunications,
+  Timisoara, Romania). Citation details will be updated on acceptance.

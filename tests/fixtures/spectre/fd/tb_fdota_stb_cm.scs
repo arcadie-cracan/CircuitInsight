@@ -1,0 +1,100 @@
+// tb_fdota_stb_cm.scs (SKY130) -- fully-differential two-stage OTA with
+// continuous-time CMFB, closed-loop inverting bench (R1=R2=100k), probe
+// pair at the OTA outputs BEFORE the CMFB sense taps and the feedback
+// taps (Saxena placement doctrine; the Miller networks stay amp-side).
+// fd_probe is a clean-room diffstbprobe: two ideal baluns back-to-back
+// with an iprobe in the DM wire and one in the CM wire (Wiedmann).
+//   spectre tb_fdota_stb_cm.scs -format psfascii -raw ./psf_cm +log cm.log
+simulator lang=spectre
+global 0 vdd!
+parameters temperature=27
+include "<pdk-models>" section=tt
+
+// Library name: analogLib
+// Cell name: ideal_balun
+subckt ideal_balun d c p n
+    K0 (d 0 p c) transformer n1=2
+    K1 (d 0 c n) transformer n1=2
+ends ideal_balun
+
+// clean-room differential stability probe (analogLib diffstbprobe
+// equivalent): DC-transparent; stb probe=<inst>.IPRB_DM or .IPRB_CM
+subckt fd_probe in1 in2 out1 out2
+    BI (dmi cmi in1 in2) ideal_balun
+    BO (dmo cmo out1 out2) ideal_balun
+    IPRB_DM (dmi dmo) iprobe
+    IPRB_CM (cmi cmo) iprobe
+ends fd_probe
+
+// fully-differential two-stage OTA, per-side mirror of the flagship
+// ota2s (same W/L/m -> same operating region); stage-1 pmos loads are
+// gate-driven by the CMFB error amp whose diode load is their mirror
+// master (10u diode m=1 : 20u loads m=2).
+subckt fdota2s outp outn vdd inp inn vss vbn vcmsense vcmref
+    // stage 1
+    MN2 (tail vbn vss vss) nfet_01v8 w=(40u) l=1u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(2)*(1)
+    MN1P (x1p inp tail vss) nfet_01v8 w=(40u) l=2u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(1)*(1)
+    MN1N (x1n inn tail vss) nfet_01v8 w=(40u) l=2u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(1)*(1)
+    MPLP (x1p vcmfb vdd vdd) pfet_01v8 w=(40u) l=2u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(2)*(1)
+    MPLN (x1n vcmfb vdd vdd) pfet_01v8 w=(40u) l=2u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(2)*(1)
+    // stage 2 (per side) with Miller compensation
+    MP2P (outp x1p vdd vdd) pfet_01v8 w=(40u) l=1u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(4)*(1)
+    MN3P (outp vbn vss vss) nfet_01v8 w=(40u) l=1u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(4)*(1)
+    MP2N (outn x1n vdd vdd) pfet_01v8 w=(40u) l=1u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(4)*(1)
+    MN3N (outn vbn vss vss) nfet_01v8 w=(40u) l=1u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(4)*(1)
+    CCP (netp outp) capacitor c=16p
+    RZP (x1p netp) resistor r=0
+    CCN (netn outn) capacitor c=16p
+    RZN (x1n netn) resistor r=0
+    // CMFB error amp: nmos pair (sense vs ref), diode pmos loads; the
+    // sense-side diode MPA is the mirror master for MPLP/MPLN
+    MNT (ctail vbn vss vss) nfet_01v8 w=(40u) l=1u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(1)*(1)
+    MNS (vcmfb vcmsense ctail vss) nfet_01v8 w=(40u) l=2u as=10.6p \
+        ad=10.6p ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(1)*(1)
+    MNR (dumm vcmref ctail vss) nfet_01v8 w=(40u) l=2u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(1)*(1)
+    MPA (vcmfb vcmfb vdd vdd) pfet_01v8 w=(40u) l=2u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(1)*(1)
+    MPB (dumm dumm vdd vdd) pfet_01v8 w=(40u) l=2u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(1)*(1)
+ends fdota2s
+
+// ---- bench: inverting amp, gain -1 per side, DM drive via balun ----
+VSUP (vdd! 0) vsource dc=1.8 type=dc
+VIND (vin_dm 0) vsource dc=0 mag=1 type=dc
+VINC (vin_cm 0) vsource dc=900.0m type=dc
+VCMR (vcmref 0) vsource dc=900.0m type=dc
+I5 (vin_dm vin_cm srcp srcn) ideal_balun
+R1A (srcp inn) resistor r=100k
+R1B (srcn inp) resistor r=100k
+R2A (voutp inn) resistor r=100k
+R2B (voutn inp) resistor r=100k
+I0 (outpi outni vdd! inp inn 0 vbn vcm_sense vcmref) fdota2s
+FDPRB (outpi outni voutp voutn) fd_probe
+CLP (voutp 0) capacitor c=5p
+CLN (voutn 0) capacitor c=5p
+RCMA (voutp vcm_sense) resistor r=1M
+RCMB (voutn vcm_sense) resistor r=1M
+CCMA (voutp vcm_sense) capacitor c=200f
+CCMB (voutn vcm_sense) capacitor c=200f
+IB (vdd! vbn) isource dc=40u type=dc
+MN2 (vbn vbn 0 0) nfet_01v8 w=(40u) l=1u as=10.6p ad=10.6p ps=80.53u \
+        pd=80.53u nrd=0.008500 nrs=0.008500 m=(2)*(1)
+
+simulatorOptions options psfversion="1.4.0" temp=27 tnom=27 scalem=1.0 \
+    scale=1.0 gmin=1e-12 rforce=1 maxnotes=5 maxwarns=5 digits=5 cols=80 \
+    pivrel=1e-3
+stb stb start=1m stop=10G dec=20 probe=FDPRB.IPRB_CM annotate=status
+dcOp dc write="spectre.dc" maxiters=150 maxsteps=10000 annotate=status
+dcOpInfo info what=oppoint where=rawfile
+saveOptions options save=allpub

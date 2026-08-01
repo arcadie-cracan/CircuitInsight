@@ -1,0 +1,190 @@
+{
+ "cin_version": "0.1",
+ "design": {
+  "name": "r2r_bias_pos_loop",
+  "source": {
+   "kind": "virtuoso",
+   "lib": "worklib",
+   "view": "schematic"
+  }
+ },
+ "top": "r2r_bias_pos_loop",
+ "ground": [
+  "0"
+ ],
+ "globals": [
+  "vdd!"
+ ],
+ "definitions": {
+  "r2r_bias_pos_loop": {
+   "ports": [],
+   "instances": [
+    {
+     "name": "MN0",
+     "device_type": "mosfet",
+     "terminals": {
+      "b": "0",
+      "s": "vsn",
+      "g": "vgn",
+      "d": "vdn"
+     },
+     "params": {
+      "polarity": "n",
+      "m": "4",
+      "gii_d": "2.2903392831932161e-06",
+      "gii_m": "6.0944680685514393e-06"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "cell": "nfet_g5v0d10v5",
+      "w": "5u",
+      "l": "1u",
+      "nf": "1",
+      "note_gii": "gii_d/gii_m: impact-ionization (substrate-current) linearization identified from Spectre ac injections 2026-07-19; dcOpInfo does not report these"
+     }
+    },
+    {
+     "name": "MP0",
+     "device_type": "mosfet",
+     "terminals": {
+      "b": "vdd!",
+      "s": "vsp",
+      "g": "vgp",
+      "d": "vsn"
+     },
+     "params": {
+      "polarity": "p",
+      "m": "4",
+      "gii_d": "5.6317523758711054e-08",
+      "gii_m": "6.8102181428127302e-08"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "cell": "pfet_g5v0d10v5",
+      "w": "4u",
+      "l": "1u",
+      "nf": "1",
+      "note_gii": "gii_d/gii_m: impact-ionization (substrate-current) linearization identified from Spectre ac injections 2026-07-19; dcOpInfo does not report these"
+     }
+    },
+    {
+     "name": "RSN",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "vsn",
+      "n": "0"
+     },
+     "params": {},
+     "meta": {
+      "lib": "analogLib",
+      "cell": "res",
+      "note": "0--net4--S0--vsn in the schematic; S0 closed in AC (ac_position=1), net4 collapsed onto vsn"
+     }
+    },
+    {
+     "name": "RSP",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "vsp",
+      "n": "vdd!"
+     },
+     "params": {},
+     "meta": {
+      "lib": "analogLib",
+      "cell": "res",
+      "note": "net8--S2--vsp in the schematic; S2 closed in AC (ac_position=1), net8 collapsed onto vsp"
+     }
+    },
+    {
+     "name": "IT",
+     "device_type": "isource",
+     "terminals": {
+      "p": "0",
+      "n": "vsn"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "idc",
+      "note": "AC test-current source (mag=1 in the bench): closed-loop node-resistance excitation at vsn; open in the stb small-signal circuit"
+     }
+    },
+    {
+     "name": "VPRB",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "vsp",
+      "n": "vdn"
+     },
+     "params": {},
+     "meta": {
+      "lib": "analogLib",
+      "cell": "iprobe",
+      "note": "Tian probe: 0 V series branch, stb probe=VPRB; vdn is the probed NMOS drain (auto-named net3 in the Spectre netlist)"
+     }
+    },
+    {
+     "name": "VSUP",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "vdd!",
+      "n": "0"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "vdc"
+     }
+    },
+    {
+     "name": "VB_GN",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "vgn",
+      "n": "0"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "vdc"
+     }
+    },
+    {
+     "name": "VB_GP",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "vgp",
+      "n": "0"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "vdc"
+     }
+    },
+    {
+     "name": "VB_SN",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "net5",
+      "n": "0"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "vdc",
+      "note": "DC-only source bias; S1 open in AC so net5 dangles"
+     }
+    },
+    {
+     "name": "VB_SP",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "net10",
+      "n": "0"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "vdc",
+      "note": "DC-only source bias; S3 open in AC so net10 dangles"
+     }
+    }
+   ]
+  }
+ }
+}

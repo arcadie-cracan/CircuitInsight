@@ -1,0 +1,51 @@
+{
+  "cin_version": "0.1",
+  "design": { "name": "tb_ota_folded_cascode", "source": { "kind": "virtuoso", "lib": "worklib", "view": "schematic" } },
+  "top": "tb_ota_folded_cascode",
+  "ground": ["0", "gnd!"],
+  "globals": ["vdd!"],
+  "definitions": {
+    "tb_ota_folded_cascode": { "ports": [], "instances": [
+      { "name": "CL", "device_type": "capacitor", "terminals": { "n": "gnd!", "p": "vout" }, "meta": { "lib": "analogLib", "cell": "cap" } },
+      { "name": "VIND", "device_type": "vsource", "terminals": { "p": "vin_dm", "n": "gnd!" }, "params": { "acm": "1" }, "meta": { "lib": "analogLib", "cell": "vdc" } },
+      { "name": "VINC", "device_type": "vsource", "terminals": { "p": "vin_cm", "n": "gnd!" }, "meta": { "lib": "analogLib", "cell": "vdc" } },
+      { "name": "VSUP", "device_type": "vsource", "terminals": { "p": "vdd!", "n": "gnd!" }, "meta": { "lib": "analogLib", "cell": "vdc" } },
+      { "name": "I5", "device_type": "balun", "terminals": { "c": "vin_cm", "d": "vin_dm", "n": "net1", "p": "vin_p" }, "meta": { "lib": "analogLib", "cell": "ideal_balun" } },
+      { "name": "IBIAS", "device_type": "isource", "terminals": { "p": "vdd!", "n": "net5" }, "meta": { "lib": "analogLib", "cell": "idc" } },
+      { "name": "S1", "device_type": "switch", "terminals": { "n": "vin_n", "p": "vout" }, "params": { "position": "0", "dc_position": "1", "ac_position": "0" }, "meta": { "lib": "analogLib", "cell": "sp1tswitch" } },
+      { "name": "S0", "device_type": "switch", "terminals": { "n": "net1", "p": "vin_n" }, "params": { "position": "0", "dc_position": "0", "ac_position": "1" }, "meta": { "lib": "analogLib", "cell": "sp1tswitch" } },
+      { "name": "I0", "subckt": "ota_folded_cascode", "terminals": { "vin_n": "vin_n", "vout": "vout", "vin_p": "vin_p", "ib": "net5" } }
+    ] },
+    "ota_folded_cascode": { "ports": ["vout", "vin_n", "ib", "vin_p"], "instances": [
+      { "name": "M26", "device_type": "mosfet", "terminals": { "d": "net16", "b": "gnd!", "g": "ib", "s": "gnd!" }, "params": { "polarity": "n", "m": "4" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "nfet_01v8_lvt", "w": "900n", "l": "900n" } },
+      { "name": "NM2", "device_type": "mosfet", "terminals": { "d": "net2", "b": "gnd!", "g": "net1", "s": "net16" }, "params": { "polarity": "n", "m": "4" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "nfet_01v8_lvt", "w": "600n", "l": "600n" } },
+      { "name": "NM1", "device_type": "mosfet", "terminals": { "d": "ib", "b": "gnd!", "g": "net1", "s": "net20" }, "params": { "polarity": "n", "m": "16" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "nfet_01v8_lvt", "w": "600n", "l": "600n" } },
+      { "name": "NM4", "device_type": "mosfet", "terminals": { "d": "net3", "b": "gnd!", "g": "net1", "s": "net13" }, "params": { "polarity": "n", "m": "16" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "nfet_01v8_lvt", "w": "600n", "l": "600n" } },
+      { "name": "NM8", "device_type": "mosfet", "terminals": { "d": "net13", "b": "gnd!", "g": "net3", "s": "gnd!" }, "params": { "polarity": "n", "m": "16" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "nfet_01v8_lvt", "w": "900n", "l": "900n" } },
+      { "name": "NM9", "device_type": "mosfet", "terminals": { "d": "net8", "b": "gnd!", "g": "net3", "s": "gnd!" }, "params": { "polarity": "n", "m": "16" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "nfet_01v8_lvt", "w": "900n", "l": "900n" } },
+      { "name": "M19", "device_type": "mosfet", "terminals": { "d": "net20", "b": "gnd!", "g": "ib", "s": "gnd!" }, "params": { "polarity": "n", "m": "16" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "nfet_01v8_lvt", "w": "900n", "l": "900n" } },
+      { "name": "M20", "device_type": "mosfet", "terminals": { "d": "net7", "b": "gnd!", "g": "ib", "s": "gnd!" }, "params": { "polarity": "n", "m": "16" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "nfet_01v8_lvt", "w": "900n", "l": "900n" } },
+      { "name": "NM6", "device_type": "mosfet", "terminals": { "d": "net1", "b": "gnd!", "g": "net1", "s": "gnd!" }, "params": { "polarity": "n", "m": "1" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "nfet_01v8_lvt", "w": "1u", "l": "4u" } },
+      { "name": "NM5", "device_type": "mosfet", "terminals": { "d": "vout", "b": "gnd!", "g": "net1", "s": "net8" }, "params": { "polarity": "n", "m": "16" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "nfet_01v8_lvt", "w": "600n", "l": "600n" } },
+      { "name": "NM3", "device_type": "mosfet", "terminals": { "d": "net6", "b": "gnd!", "g": "net1", "s": "net7" }, "params": { "polarity": "n", "m": "16" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "nfet_01v8_lvt", "w": "600n", "l": "600n" } },
+      { "name": "M10", "device_type": "mosfet", "terminals": { "d": "net8", "b": "gnd!", "g": "ib", "s": "gnd!" }, "params": { "polarity": "n", "m": "48" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "nfet_01v8_lvt", "w": "900n", "l": "900n" } },
+      { "name": "NM7", "device_type": "mosfet", "terminals": { "d": "net13", "b": "gnd!", "g": "ib", "s": "gnd!" }, "params": { "polarity": "n", "m": "48" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "nfet_01v8_lvt", "w": "900n", "l": "900n" } },
+      { "name": "NM0", "device_type": "mosfet", "terminals": { "d": "ib", "b": "gnd!", "g": "ib", "s": "net1" }, "params": { "polarity": "n", "m": "1" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "nfet_01v8_lvt", "w": "7u", "l": "150n" } },
+      { "name": "PM6", "device_type": "mosfet", "terminals": { "d": "net1", "b": "vdd!", "g": "net2", "s": "net19" }, "params": { "polarity": "p", "m": "4" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "pfet_01v8_lvt", "w": "1.8u", "l": "600n" } },
+      { "name": "PM7", "device_type": "mosfet", "terminals": { "d": "net6", "b": "vdd!", "g": "net2", "s": "net21" }, "params": { "polarity": "p", "m": "16" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "pfet_01v8_lvt", "w": "1.8u", "l": "600n" } },
+      { "name": "PM11", "device_type": "mosfet", "terminals": { "d": "vout", "b": "vdd!", "g": "net2", "s": "net15" }, "params": { "polarity": "p", "m": "16" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "pfet_01v8_lvt", "w": "1.8u", "l": "600n" } },
+      { "name": "M24", "device_type": "mosfet", "terminals": { "d": "net21", "b": "vdd!", "g": "net6", "s": "vdd!" }, "params": { "polarity": "p", "m": "16" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "pfet_01v8_lvt", "w": "3.6u", "l": "900n" } },
+      { "name": "PM1", "device_type": "mosfet", "terminals": { "d": "net22", "b": "vdd!", "g": "net6", "s": "vdd!" }, "params": { "polarity": "p", "m": "48" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "pfet_01v8_lvt", "w": "3.6u", "l": "900n" } },
+      { "name": "PM8", "device_type": "mosfet", "terminals": { "d": "net14", "b": "vdd!", "g": "net2", "s": "net22" }, "params": { "polarity": "p", "m": "48" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "pfet_01v8_lvt", "w": "1.8u", "l": "600n" } },
+      { "name": "PM9", "device_type": "mosfet", "terminals": { "d": "net14", "b": "vdd!", "g": "net2", "s": "net23" }, "params": { "polarity": "p", "m": "48" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "pfet_01v8_lvt", "w": "1.8u", "l": "600n" } },
+      { "name": "PM2", "device_type": "mosfet", "terminals": { "d": "net23", "b": "vdd!", "g": "net6", "s": "vdd!" }, "params": { "polarity": "p", "m": "48" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "pfet_01v8_lvt", "w": "3.6u", "l": "900n" } },
+      { "name": "PM4", "device_type": "mosfet", "terminals": { "d": "net15", "b": "vdd!", "g": "net6", "s": "vdd!" }, "params": { "polarity": "p", "m": "16" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "pfet_01v8_lvt", "w": "3.6u", "l": "900n" } },
+      { "name": "PM3", "device_type": "mosfet", "terminals": { "d": "net4", "b": "vdd!", "g": "net6", "s": "vdd!" }, "params": { "polarity": "p", "m": "16" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "pfet_01v8_lvt", "w": "3.6u", "l": "900n" } },
+      { "name": "PM13", "device_type": "mosfet", "terminals": { "d": "net8", "b": "net14", "g": "vin_n", "s": "net14" }, "params": { "polarity": "p", "m": "4" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "pfet_01v8_lvt", "w": "28u", "l": "350n" } },
+      { "name": "PM12", "device_type": "mosfet", "terminals": { "d": "net13", "b": "net14", "g": "vin_p", "s": "net14" }, "params": { "polarity": "p", "m": "4" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "pfet_01v8_lvt", "w": "28u", "l": "350n" } },
+      { "name": "PM5", "device_type": "mosfet", "terminals": { "d": "net2", "b": "vdd!", "g": "net2", "s": "vdd!" }, "params": { "polarity": "p", "m": "1" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "pfet_01v8_lvt", "w": "1.5u", "l": "1u" } },
+      { "name": "PM0", "device_type": "mosfet", "terminals": { "d": "net19", "b": "vdd!", "g": "net6", "s": "vdd!" }, "params": { "polarity": "p", "m": "4" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "pfet_01v8_lvt", "w": "3.6u", "l": "900n" } },
+      { "name": "PM10", "device_type": "mosfet", "terminals": { "d": "net3", "b": "vdd!", "g": "net2", "s": "net4" }, "params": { "polarity": "p", "m": "16" }, "meta": { "lib": "sky130_fd_pr_main", "cell": "pfet_01v8_lvt", "w": "1.8u", "l": "600n" } }
+    ] }
+  }
+}

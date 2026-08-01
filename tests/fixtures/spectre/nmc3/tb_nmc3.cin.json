@@ -1,0 +1,247 @@
+{
+ "cin_version": "0.1",
+ "design": {
+  "name": "tb_nmc3",
+  "source": {
+   "kind": "hand",
+   "note": "behavioral gm-C 3-stage nested-Miller amplifier; matches tb_nmc3.scs"
+  }
+ },
+ "top": "tb_nmc3",
+ "ground": [
+  "0"
+ ],
+ "globals": [],
+ "definitions": {
+  "tb_nmc3": {
+   "ports": [],
+   "instances": [
+    {
+     "name": "VIN",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "inp",
+      "n": "0"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "vdc"
+     },
+     "params": {
+      "acm": "1"
+     }
+    },
+    {
+     "name": "G1",
+     "device_type": "vccs",
+     "terminals": {
+      "p": "n1",
+      "n": "0",
+      "cp": "inp",
+      "cn": "inn"
+     },
+     "params": {
+      "gm": "100u"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "vccs"
+     }
+    },
+    {
+     "name": "R1",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "n1",
+      "n": "0"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "res"
+     },
+     "params": {
+      "r": "200k"
+     }
+    },
+    {
+     "name": "CN1",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "n1",
+      "n": "0"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     },
+     "params": {
+      "c": "300f"
+     }
+    },
+    {
+     "name": "G2",
+     "device_type": "vccs",
+     "terminals": {
+      "p": "0",
+      "n": "n2",
+      "cp": "n1",
+      "cn": "0"
+     },
+     "params": {
+      "gm": "300u"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "vccs"
+     }
+    },
+    {
+     "name": "R2",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "n2",
+      "n": "0"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "res"
+     },
+     "params": {
+      "r": "200k"
+     }
+    },
+    {
+     "name": "CN2",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "n2",
+      "n": "0"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     },
+     "params": {
+      "c": "300f"
+     }
+    },
+    {
+     "name": "G3",
+     "device_type": "vccs",
+     "terminals": {
+      "p": "out",
+      "n": "0",
+      "cp": "n2",
+      "cn": "0"
+     },
+     "params": {
+      "gm": "3m"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "vccs"
+     }
+    },
+    {
+     "name": "R3",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "out",
+      "n": "0"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "res"
+     },
+     "params": {
+      "r": "10k"
+     }
+    },
+    {
+     "name": "CL",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "out",
+      "n": "0"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     },
+     "params": {
+      "c": "10p"
+     }
+    },
+    {
+     "name": "CM1",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "out",
+      "n": "n2i"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     },
+     "params": {
+      "c": "2p"
+     }
+    },
+    {
+     "name": "IPRB1",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "n2i",
+      "n": "n2"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "iprobe",
+      "note": "Tian probe: 0 V series branch marking a loop; joins the stb run's iprobe OP record"
+     }
+    },
+    {
+     "name": "CM2",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "out",
+      "n": "n1i"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     },
+     "params": {
+      "c": "6p"
+     }
+    },
+    {
+     "name": "IPRB2",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "n1i",
+      "n": "n1"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "iprobe",
+      "note": "Tian probe: 0 V series branch marking a loop; joins the stb run's iprobe OP record"
+     }
+    },
+    {
+     "name": "IPRB0",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "out",
+      "n": "inn"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "iprobe",
+      "note": "Tian probe: 0 V series branch marking a loop; joins the stb run's iprobe OP record"
+     }
+    }
+   ]
+  }
+ }
+}

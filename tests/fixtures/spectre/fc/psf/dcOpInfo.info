@@ -1,0 +1,4764 @@
+HEADER
+"PSFversion" "1.00"
+"simulator" "spectre"
+"version" "25.1.0.235.isr5"
+"date" "10:39:18 AM, Thur Jul 30, 2026"
+"design" "// Point Netlist Generated on: Jul 29 15:53:45 2026"
+"analysis type" "info"
+"analysis name" "dcOpInfo"
+"analysis description" "Circuit Information"
+"xVecSorted" "unknown"
+"tolerance.relative" 1.000000000000000e-03
+"AnalysisName" "DC"
+"AnalysisType" "dcOp"
+"OpPointTemp.Value" 2.700000000000000e+01
+"OpPointTemp.Units" "C"
+TYPE
+"bsim4~instparams" STRUCT(
+"trise" FLOAT DOUBLE PROP(
+"units" "C"
+"description" "Temperature rise from ambient"
+)
+"dtemp" FLOAT DOUBLE PROP(
+"units" "C"
+"description" "Alias for trise"
+)
+"ids" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Resistive drain-to-source current"
+)
+"vgs" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Gate-source voltage"
+)
+"vds" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Drain-source voltage"
+)
+"vbs" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Bulk-source voltage"
+)
+"vgd" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Gate-drain voltage"
+)
+"vdb" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Drain-bulk voltage"
+)
+"vgb" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Gate-bulk voltage"
+)
+"vth" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Threshold voltage (alias=lv9)"
+)
+"vdsat" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Drain-source saturation voltage (alias=lv10)"
+)
+"gm" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "Common-source transconductance (alias=lx7)"
+)
+"gds" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "Common-source output conductance (alias=lx8)"
+)
+"gmbs" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "Body-transconductance (alias=lx9)"
+)
+"betaeff" FLOAT DOUBLE PROP(
+"units" "A/V^2"
+"description" "Effective beta (alias LV21)"
+)
+"pro_Gamma" FLOAT DOUBLE PROP(
+"description" "Gamma"
+)
+"cjd" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Drain-bulk junction capacitance (alias=lx29)"
+)
+"cjs" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Source-bulk junction capacitance (alias=lx28)"
+)
+"cgg" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total gate capacitance, including intrinsic, overlap and fringing components (alias=lx82)"
+)
+"cgd" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total gate-to-drain capacitance, including intrinsic, overlap, and fringing components (alias=lx83)"
+)
+"cgs" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total gate-to-source capacitance, including intrinsic, overlap, and fringing components (alias=lx84)"
+)
+"cgb" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total gate-to-bulk capacitance, including intrinsic and overlap components"
+)
+"cdg" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total drain-to-gate capacitance, including intrinsic, overlap, and fringing components (alias=lx87)"
+)
+"cdd" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Drain capacitance, including intrinsic, overlap, and fringing components"
+)
+"cds" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total drain-to-source capacitance (alias=lx86)"
+)
+"cdb" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Intrinsic drain-to-bulk capacitance"
+)
+"csg" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total source-to-gate capacitance, including intrinsic, overlap, and fringing components"
+)
+"csd" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total source-to-drain capacitance"
+)
+"css" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Source capacitance, including intrinsic, overlap, and fringing components"
+)
+"csb" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Intrinsic source-to-bulk capacitance"
+)
+"cbg" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total bulk-to-gate capacitance, including intrinsic and overlap components (alias=lx88)"
+)
+"cbd" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Intrinsic bulk-to-drain capacitance"
+)
+"cbs" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Intrinsic bulk-to-source capacitance"
+)
+"cbb" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Bulk capacitance, including intrinsic and overlap components"
+)
+"covlgs" FLOAT DOUBLE PROP(
+"units" "F/m"
+"description" "Gate-source overlap and fringing capacitances (alias=lv36)"
+)
+"covlgd" FLOAT DOUBLE PROP(
+"units" "F/m"
+"description" "Gate-drain overlap and fringing capacitances (alias=lv37)"
+)
+"covlgb" FLOAT DOUBLE PROP(
+"units" "F/m"
+"description" "Gate-bulk overlap capacitances (alias=lv38)"
+)
+"cggbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CGGBO = dQg/dVg intrinsic gate capacitance (alias=lx18)"
+)
+"cgdbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CGDBO = -dQg/dVd intrinsic gate-to-drain capacitance (alias=lx19)"
+)
+"cgsbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CGSBO = -dQg/dVs intrinsic gate-to-source capacitance (alias=lx20)"
+)
+"cbgbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CBGBO = -dQb/dVg intrinsic bulk-to-gate capacitance (alias=lx21)"
+)
+"cbdbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CBDBO = -dQb/dVd intrinsic bulk-to-drain capacitance (alias=lx22)"
+)
+"cbsbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CBSBO = -dQb/dVs intrinsic bulk-to-source capacitance (alias=lx23)"
+)
+"cdgbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CDGBO = -dQd/dVg intrinsic drain-to-gate capacitance (alias=lx32)"
+)
+"cddbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CDDBO = dQd/dVd intrinsic drain capacitance (alias=lx33)"
+)
+"cdsbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CDSBO = -dQd/dVs intrinsic drain-to-source capacitance (alias=lx34)"
+)
+"ron" FLOAT DOUBLE PROP(
+"units" "Ohm"
+"description" "On-resistance, includes the parasitical rs and rd"
+)
+"id" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Resistive drain current"
+)
+"ig" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC gate current"
+)
+"is" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC source current"
+)
+"ib" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC bulk current"
+)
+"ibulk" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Resistive bulk current"
+)
+"pwr" FLOAT DOUBLE PROP(
+"units" "W"
+"description" "Power at op point"
+)
+"gmoverid" FLOAT DOUBLE PROP(
+"units" "1/V"
+"description" "Gm/Ids"
+)
+"rdeff" FLOAT DOUBLE PROP(
+"units" "Ohm"
+"description" "Effective drain resistance"
+)
+"rseff" FLOAT DOUBLE PROP(
+"units" "Ohm"
+"description" "Effective source resistance"
+)
+"rgbd" FLOAT DOUBLE PROP(
+"units" "Ohm"
+"description" "Gate bias-dependent resistance"
+)
+"igidl" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-induced drain leakage current (alias=lx70)"
+)
+"igisl" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-induced source leakage current"
+)
+"igdt" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate Dielectric tunneling current (alias=lx71)"
+)
+"igd" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-drain tunneling current (alias=lx39)"
+)
+"igs" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-source tunneling current (alias=lx38)"
+)
+"igb" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-bulk tunneling current (alias=lx66)"
+)
+"igbacc" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-bulk tunneling current determined by ECB (alias=lx73)"
+)
+"igbinv" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-bulk tunneling current determined by EVB (alias=lx74)"
+)
+"igcs" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-channel (source side) tunneling current (alias=lx67)"
+)
+"igcd" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-channel (drain side) tunneling current (alias=lx68)"
+)
+"isub" FLOAT DOUBLE PROP(
+"units" "A"
+"description" " Substrate current ( alias to LX69 )"
+)
+"gbs" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "Bulk-source diode conductance (alias=lx11)"
+)
+"gbd" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "Bulk-drain diode conductance (alias=lx10)"
+)
+"qg" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Total gate charge, including intrinsic, overlap and fringing components"
+)
+"qd" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Total drain charge, including intrinsic, overlap and fringing components"
+)
+"qs" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Total source charge, including intrinsic, overlap and fringing components"
+)
+"qb" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Total bulk charge, including intrinsic and overlap components"
+)
+"qjd" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Drain-bulk junction charge"
+)
+"qjs" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Source-bulk junction charge"
+)
+"qgdovl" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Gate-drain overlap and fringing charge"
+)
+"qgsovl" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Gate-source overlap and fringing charge"
+)
+"qgi" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Intrinsic gate charge"
+)
+"qdi" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Intrinsic drain charge"
+)
+"qinv" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Inversion charge"
+)
+"qsi" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Intrinsic source charge"
+)
+"qbi" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Intrinsic bulk charge"
+)
+"vfbeff" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Effective Flat-band voltage"
+)
+"ide" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC drain current"
+)
+"ige" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC gate current"
+)
+"ise" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC source current"
+)
+"ibe" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC bulk current"
+)
+"idb" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "DC drain-bulk current"
+)
+"isb" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "DC source-bulk current"
+)
+"vsb" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Source-bulk DC voltage"
+)
+"gmb" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "DC bulk transconductance"
+)
+"vgt" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "effective gate drive voltage including back bias and drain bias effects"
+)
+"vth_drive" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "effective gate drive voltage including back bias and drain bias effects. Alias for Vgt"
+)
+"vdss" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Drain saturation voltage at actual bias"
+)
+"vsat_marg" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Vds margin"
+)
+"vdsat_marg" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Vds margin"
+)
+"self_gain" FLOAT DOUBLE PROP(
+"description" "Transistor self gain"
+)
+"rout" FLOAT DOUBLE PROP(
+"units" "Ohm"
+"description" "AC output resistor. The parasitical rs and rd are excluded"
+)
+"beff" FLOAT DOUBLE PROP(
+"units" "A/V^2"
+"description" "Gain factor in saturation"
+)
+"fug" FLOAT DOUBLE PROP(
+"units" "Hz"
+"description" "Unity current gain frequency at actual bias"
+)
+"ft" FLOAT DOUBLE PROP(
+"units" "Hz"
+"description" "Unity current gain frequency at actual bias"
+)
+"rgate" FLOAT DOUBLE PROP(
+"units" "Ohm"
+"description" "MOS gate resistance"
+)
+"vearly" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Equivalent early voltage"
+)
+"Tk" FLOAT DOUBLE PROP(
+"units" "K"
+"description" "Absolute Device temperature including self-heating"
+)
+"Dtsh" FLOAT DOUBLE PROP(
+"units" "K"
+"description" "Device temperature rise due to self-heating"
+)
+"Iavl" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Weak avalanche current"
+)
+"vth0" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Zero-bias threshold voltage, excluding back-bias (body effect) and drain-bias effect (DIBL)"
+)
+"go" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "Common-source output conductance"
+)
+"co" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Output Drain-Source capacitance"
+)
+"cm" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Capacitance element 1 for QS model"
+)
+"cmb" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Capacitance element 2 for QS model"
+)
+"cmx" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Capacitance element 3 for QS model"
+)
+"tau1" FLOAT DOUBLE PROP(
+"units" "s"
+"description" "Time constant related to NQS first frequency pole"
+)
+"fqslim" FLOAT DOUBLE PROP(
+"units" "Hz"
+"description" "QS model frequency limit"
+)
+"gmoveri" FLOAT DOUBLE PROP(
+"units" "1/V"
+"description" "Gm/Ids"
+)
+"ueff" FLOAT DOUBLE PROP(
+"description" "ueff"
+)
+"OPdef" INT LONG PROP(
+"units" ""
+"description" "1: Device Physics notation. 2: Circuit Simulator notation"
+)
+"Ctype" INT LONG PROP(
+"units" ""
+"description" "Flag for channel type of MOSFET. 1: NMOS. -1: PMOS"
+)
+"SDint" INT LONG PROP(
+"units" ""
+"description" "Flag for source-drain interchange. 1: No S-D interchange, -1: S-D interchange"
+)
+"region" INT BYTE PROP(
+"description" "Estimated operating region. %Z outputs the number (0-4) in a rawfile"
+)
+"reversed" INT BYTE PROP(
+"description" "Reverse mode indicator"
+)
+"SDop" INT BYTE PROP(
+"description" "Operation mode related to channel type and drain-source voltage sign"
+)
+) PROP(
+"key" "inst"
+)
+"bsim4" STRUCT(
+"trise" FLOAT DOUBLE PROP(
+"units" "C"
+"description" "Temperature rise from ambient"
+)
+"dtemp" FLOAT DOUBLE PROP(
+"units" "C"
+"description" "Alias for trise"
+)
+"ids" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Resistive drain-to-source current"
+)
+"vgs" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Gate-source voltage"
+)
+"vds" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Drain-source voltage"
+)
+"vbs" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Bulk-source voltage"
+)
+"vgd" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Gate-drain voltage"
+)
+"vdb" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Drain-bulk voltage"
+)
+"vgb" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Gate-bulk voltage"
+)
+"vth" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Threshold voltage (alias=lv9)"
+)
+"vdsat" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Drain-source saturation voltage (alias=lv10)"
+)
+"gm" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "Common-source transconductance (alias=lx7)"
+)
+"gds" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "Common-source output conductance (alias=lx8)"
+)
+"gmbs" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "Body-transconductance (alias=lx9)"
+)
+"betaeff" FLOAT DOUBLE PROP(
+"units" "A/V^2"
+"description" "Effective beta (alias LV21)"
+)
+"pro_Gamma" FLOAT DOUBLE PROP(
+"description" "Gamma"
+)
+"cjd" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Drain-bulk junction capacitance (alias=lx29)"
+)
+"cjs" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Source-bulk junction capacitance (alias=lx28)"
+)
+"cgg" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total gate capacitance, including intrinsic, overlap and fringing components (alias=lx82)"
+)
+"cgd" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total gate-to-drain capacitance, including intrinsic, overlap, and fringing components (alias=lx83)"
+)
+"cgs" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total gate-to-source capacitance, including intrinsic, overlap, and fringing components (alias=lx84)"
+)
+"cgb" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total gate-to-bulk capacitance, including intrinsic and overlap components"
+)
+"cdg" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total drain-to-gate capacitance, including intrinsic, overlap, and fringing components (alias=lx87)"
+)
+"cdd" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Drain capacitance, including intrinsic, overlap, and fringing components"
+)
+"cds" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total drain-to-source capacitance (alias=lx86)"
+)
+"cdb" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Intrinsic drain-to-bulk capacitance"
+)
+"csg" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total source-to-gate capacitance, including intrinsic, overlap, and fringing components"
+)
+"csd" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total source-to-drain capacitance"
+)
+"css" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Source capacitance, including intrinsic, overlap, and fringing components"
+)
+"csb" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Intrinsic source-to-bulk capacitance"
+)
+"cbg" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Total bulk-to-gate capacitance, including intrinsic and overlap components (alias=lx88)"
+)
+"cbd" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Intrinsic bulk-to-drain capacitance"
+)
+"cbs" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Intrinsic bulk-to-source capacitance"
+)
+"cbb" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Bulk capacitance, including intrinsic and overlap components"
+)
+"covlgs" FLOAT DOUBLE PROP(
+"units" "F/m"
+"description" "Gate-source overlap and fringing capacitances (alias=lv36)"
+)
+"covlgd" FLOAT DOUBLE PROP(
+"units" "F/m"
+"description" "Gate-drain overlap and fringing capacitances (alias=lv37)"
+)
+"covlgb" FLOAT DOUBLE PROP(
+"units" "F/m"
+"description" "Gate-bulk overlap capacitances (alias=lv38)"
+)
+"cggbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CGGBO = dQg/dVg intrinsic gate capacitance (alias=lx18)"
+)
+"cgdbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CGDBO = -dQg/dVd intrinsic gate-to-drain capacitance (alias=lx19)"
+)
+"cgsbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CGSBO = -dQg/dVs intrinsic gate-to-source capacitance (alias=lx20)"
+)
+"cbgbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CBGBO = -dQb/dVg intrinsic bulk-to-gate capacitance (alias=lx21)"
+)
+"cbdbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CBDBO = -dQb/dVd intrinsic bulk-to-drain capacitance (alias=lx22)"
+)
+"cbsbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CBSBO = -dQb/dVs intrinsic bulk-to-source capacitance (alias=lx23)"
+)
+"cdgbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CDGBO = -dQd/dVg intrinsic drain-to-gate capacitance (alias=lx32)"
+)
+"cddbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CDDBO = dQd/dVd intrinsic drain capacitance (alias=lx33)"
+)
+"cdsbo" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "CDSBO = -dQd/dVs intrinsic drain-to-source capacitance (alias=lx34)"
+)
+"ron" FLOAT DOUBLE PROP(
+"units" "Ohm"
+"description" "On-resistance, includes the parasitical rs and rd"
+)
+"id" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Resistive drain current"
+)
+"ig" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC gate current"
+)
+"is" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC source current"
+)
+"ib" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC bulk current"
+)
+"ibulk" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Resistive bulk current"
+)
+"pwr" FLOAT DOUBLE PROP(
+"units" "W"
+"description" "Power at op point"
+)
+"gmoverid" FLOAT DOUBLE PROP(
+"units" "1/V"
+"description" "Gm/Ids"
+)
+"rdeff" FLOAT DOUBLE PROP(
+"units" "Ohm"
+"description" "Effective drain resistance"
+)
+"rseff" FLOAT DOUBLE PROP(
+"units" "Ohm"
+"description" "Effective source resistance"
+)
+"rgbd" FLOAT DOUBLE PROP(
+"units" "Ohm"
+"description" "Gate bias-dependent resistance"
+)
+"igidl" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-induced drain leakage current (alias=lx70)"
+)
+"igisl" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-induced source leakage current"
+)
+"igdt" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate Dielectric tunneling current (alias=lx71)"
+)
+"igd" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-drain tunneling current (alias=lx39)"
+)
+"igs" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-source tunneling current (alias=lx38)"
+)
+"igb" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-bulk tunneling current (alias=lx66)"
+)
+"igbacc" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-bulk tunneling current determined by ECB (alias=lx73)"
+)
+"igbinv" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-bulk tunneling current determined by EVB (alias=lx74)"
+)
+"igcs" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-channel (source side) tunneling current (alias=lx67)"
+)
+"igcd" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Gate-to-channel (drain side) tunneling current (alias=lx68)"
+)
+"isub" FLOAT DOUBLE PROP(
+"units" "A"
+"description" " Substrate current ( alias to LX69 )"
+)
+"gbs" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "Bulk-source diode conductance (alias=lx11)"
+)
+"gbd" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "Bulk-drain diode conductance (alias=lx10)"
+)
+"qg" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Total gate charge, including intrinsic, overlap and fringing components"
+)
+"qd" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Total drain charge, including intrinsic, overlap and fringing components"
+)
+"qs" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Total source charge, including intrinsic, overlap and fringing components"
+)
+"qb" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Total bulk charge, including intrinsic and overlap components"
+)
+"qjd" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Drain-bulk junction charge"
+)
+"qjs" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Source-bulk junction charge"
+)
+"qgdovl" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Gate-drain overlap and fringing charge"
+)
+"qgsovl" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Gate-source overlap and fringing charge"
+)
+"qgi" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Intrinsic gate charge"
+)
+"qdi" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Intrinsic drain charge"
+)
+"qinv" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Inversion charge"
+)
+"qsi" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Intrinsic source charge"
+)
+"qbi" FLOAT DOUBLE PROP(
+"units" "Coul"
+"description" "Intrinsic bulk charge"
+)
+"vfbeff" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Effective Flat-band voltage"
+)
+"ide" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC drain current"
+)
+"ige" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC gate current"
+)
+"ise" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC source current"
+)
+"ibe" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Total DC bulk current"
+)
+"idb" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "DC drain-bulk current"
+)
+"isb" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "DC source-bulk current"
+)
+"vsb" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Source-bulk DC voltage"
+)
+"gmb" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "DC bulk transconductance"
+)
+"vgt" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "effective gate drive voltage including back bias and drain bias effects"
+)
+"vth_drive" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "effective gate drive voltage including back bias and drain bias effects. Alias for Vgt"
+)
+"vdss" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Drain saturation voltage at actual bias"
+)
+"vsat_marg" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Vds margin"
+)
+"vdsat_marg" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Vds margin"
+)
+"self_gain" FLOAT DOUBLE PROP(
+"description" "Transistor self gain"
+)
+"rout" FLOAT DOUBLE PROP(
+"units" "Ohm"
+"description" "AC output resistor. The parasitical rs and rd are excluded"
+)
+"beff" FLOAT DOUBLE PROP(
+"units" "A/V^2"
+"description" "Gain factor in saturation"
+)
+"fug" FLOAT DOUBLE PROP(
+"units" "Hz"
+"description" "Unity current gain frequency at actual bias"
+)
+"ft" FLOAT DOUBLE PROP(
+"units" "Hz"
+"description" "Unity current gain frequency at actual bias"
+)
+"rgate" FLOAT DOUBLE PROP(
+"units" "Ohm"
+"description" "MOS gate resistance"
+)
+"vearly" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Equivalent early voltage"
+)
+"Tk" FLOAT DOUBLE PROP(
+"units" "K"
+"description" "Absolute Device temperature including self-heating"
+)
+"Dtsh" FLOAT DOUBLE PROP(
+"units" "K"
+"description" "Device temperature rise due to self-heating"
+)
+"Iavl" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Weak avalanche current"
+)
+"vth0" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Zero-bias threshold voltage, excluding back-bias (body effect) and drain-bias effect (DIBL)"
+)
+"go" FLOAT DOUBLE PROP(
+"units" "S"
+"description" "Common-source output conductance"
+)
+"co" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Output Drain-Source capacitance"
+)
+"cm" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Capacitance element 1 for QS model"
+)
+"cmb" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Capacitance element 2 for QS model"
+)
+"cmx" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Capacitance element 3 for QS model"
+)
+"tau1" FLOAT DOUBLE PROP(
+"units" "s"
+"description" "Time constant related to NQS first frequency pole"
+)
+"fqslim" FLOAT DOUBLE PROP(
+"units" "Hz"
+"description" "QS model frequency limit"
+)
+"gmoveri" FLOAT DOUBLE PROP(
+"units" "1/V"
+"description" "Gm/Ids"
+)
+"ueff" FLOAT DOUBLE PROP(
+"description" "ueff"
+)
+"OPdef" INT LONG PROP(
+"units" ""
+"description" "1: Device Physics notation. 2: Circuit Simulator notation"
+)
+"Ctype" INT LONG PROP(
+"units" ""
+"description" "Flag for channel type of MOSFET. 1: NMOS. -1: PMOS"
+)
+"SDint" INT LONG PROP(
+"units" ""
+"description" "Flag for source-drain interchange. 1: No S-D interchange, -1: S-D interchange"
+)
+"region" INT BYTE PROP(
+"description" "Estimated operating region. %Z outputs the number (0-4) in a rawfile"
+)
+"reversed" INT BYTE PROP(
+"description" "Reverse mode indicator"
+)
+"SDop" INT BYTE PROP(
+"description" "Operation mode related to channel type and drain-source voltage sign"
+)
+) PROP(
+"key" "inst"
+)
+"capacitor" STRUCT(
+"trise" FLOAT DOUBLE PROP(
+"units" "C"
+"description" "Temperature rise from ambient"
+)
+"v" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Voltage at operating point"
+)
+"cap" FLOAT DOUBLE PROP(
+"units" "F"
+"description" "Capacitance at operating point"
+)
+) PROP(
+"key" "inst"
+)
+"isource" STRUCT(
+"i" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Current through the source"
+)
+"v" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Voltage across the source"
+)
+"pwr" FLOAT DOUBLE PROP(
+"units" "W"
+"description" "Power dissipation"
+)
+) PROP(
+"key" "inst"
+)
+"vsource" STRUCT(
+"v" FLOAT DOUBLE PROP(
+"units" "V"
+"description" "Voltage across the source"
+)
+"i" FLOAT DOUBLE PROP(
+"units" "A"
+"description" "Current through the source"
+)
+"pwr" FLOAT DOUBLE PROP(
+"units" "W"
+"description" "Power dissipation"
+)
+) PROP(
+"key" "inst"
+)
+VALUE
+"I0.PM5.msky130_fd_pr__pfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+-2.507253906559885e-06
+-6.749046491983519e-01
+-6.749046425283589e-01
+0.000000000000000e+00
+1.898514453285705e-10
+-6.749046425283589e-01
+-6.749046491983519e-01
+-4.096177816390991e-01
+-2.378773878159827e-01
+1.820162108776859e-05
+3.280255413423174e-07
+4.022701141577419e-06
+7.926612630561618e-05
+0.000000000000000e+00
+6.468944147744700e-16
+8.475739366097998e-16
+7.502279335032798e-15
+-3.223310823434988e-17
+-6.523486817231500e-15
+-9.465593074729981e-16
+-2.327882628108976e-15
+3.301791649783032e-17
+3.035776542912564e-15
+-7.409118910592888e-16
+-3.469445700197390e-15
+8.001218722476426e-19
+4.577696829795732e-15
+-1.109051401117712e-15
+-1.704951035459680e-15
+-1.584928416747919e-18
+-1.089986626566522e-15
+2.796522558105739e-15
+3.000000116761600e-17
+3.000000116761600e-17
+1.024000032127380e-19
+7.442176725943059e-15
+-2.233108635785202e-18
+-6.493486896735486e-15
+-1.704848650352181e-15
+-1.584928416747919e-18
+-1.089986626566522e-15
+-2.297882626941360e-15
+3.017915255374347e-18
+3.035776542912564e-15
+2.721408720152532e+05
+-2.507253906559885e-06
+nan
+nan
+nan
+2.095075020223309e-16
+1.692676074234888e-06
+7.291773050147301e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+1.417305989095552e-18
+1.005901958950339e-12
+9.999999960041972e-13
+-7.365862842812115e-15
+-3.977806037983746e-17
+7.018447227305798e-16
+6.703796322715746e-15
+4.949516636005280e-16
+-1.117339797443258e-30
+0.000000000000000e+00
+0.000000000000000e+00
+-7.345547078290761e-15
+4.551735948584818e-16
+0.000000000000000e+00
+6.815975739122836e-16
+6.208775741782899e-15
+-1.006461024284363e+00
+-2.507255345188380e-06
+0.000000000000000e+00
+2.507254588680911e-06
+6.751141370244032e-13
+6.751127265742454e-13
+-1.326069627389993e-27
+0.000000000000000e+00
+4.022701141577419e-06
+-2.652868377569305e-01
+nan
+-2.378773878159827e-01
+4.370272390306275e-01
+nan
+5.587359462073927e+01
+3.087547395223142e+06
+7.105675542369297e-05
+3.857612204304521e+08
+nan
+0.000000000000000e+00
+7.666497198628500e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+6.501825316449808e-03
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.PM5.sky130_fd_pr__pfet_01v8_lvt__model.29_3"
+)
+"I0.PM13.msky130_fd_pr__pfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+-3.040750794426702e-05
+-2.724370934830977e-01
+-1.005761455414809e+00
+0.000000000000000e+00
+7.333243730798514e-01
+-1.005761455414809e+00
+-2.724370934830977e-01
+-3.477613550631777e-01
+-5.685667572569168e-02
+4.904546203617435e-04
+2.459268175485566e-05
+1.016204125394096e-04
+1.573280687398163e-02
+0.000000000000000e+00
+4.130203150134481e-14
+5.985855122117231e-14
+9.400944586054357e-14
+-2.240810994467580e-15
+-2.053688433055085e-14
+-7.123175137003021e-14
+-9.893443188877648e-15
+2.241146313748408e-15
+9.812537159874146e-15
+-2.160240138705052e-15
+-1.371285796939259e-14
+2.614825263872944e-19
+1.695089545902692e-14
+-3.238298744644495e-15
+-7.040314673987980e-14
+-5.968558420450241e-19
+-6.226547429995675e-15
+7.663029012910300e-14
+2.240000016595915e-15
+2.240000016595915e-15
+1.495999952525222e-19
+8.952929886713539e-14
+-8.109631154363606e-19
+-1.829688499988086e-14
+-7.040299766208108e-14
+-5.968558420450241e-19
+-6.226547429995675e-15
+-7.653443203873837e-15
+1.146336472145038e-18
+9.812537159874146e-15
+3.317140638937452e+04
+-3.040750794426702e-05
+nan
+nan
+nan
+8.574966157293973e-14
+3.071637668055243e-05
+1.614203516851950e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+7.394306350504150e-14
+1.334862450609597e-12
+9.999999960041972e-13
+-1.507953267436922e-13
+-4.999537116835300e-14
+1.791525091302632e-15
+1.989991720366480e-13
+4.914072990829520e-14
+-1.493589893505848e-26
+0.000000000000000e+00
+0.000000000000000e+00
+-1.518276709108828e-13
+7.880071817559029e-16
+0.000000000000000e+00
+1.181265997612381e-15
+1.498583994414513e-13
+-9.494895339012146e-01
+-3.040751015016025e-05
+0.000000000000000e+00
+3.040750812664364e-05
+1.091511131046874e-12
+1.017568031576982e-12
+-3.330746680158421e-25
+0.000000000000000e+00
+1.016204125394096e-04
+7.532425680629319e-02
+nan
+-5.685667572569168e-02
+9.489047961501735e-01
+nan
+1.995219857073102e+01
+4.079871791219803e+04
+1.085370247966198e-02
+8.301565080289346e+08
+nan
+0.000000000000000e+00
+1.236263343135777e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+5.929394595285078e-03
+2147483647
+2147483647
+2147483647
+3
+0
+-1
+) PROP(
+"model" "mtm_I0.PM13.sky130_fd_pr__pfet_01v8_lvt__model.7_7"
+)
+"I0.PM12.msky130_fd_pr__pfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+-3.022865006479444e-05
+-2.718706848064537e-01
+-1.009597335310730e+00
+0.000000000000000e+00
+7.377266602144535e-01
+-1.009597335310730e+00
+-2.718706848064537e-01
+-3.477613406835424e-01
+-5.674017876008332e-02
+4.882618654172116e-04
+2.438176103290186e-05
+1.011906930618825e-04
+1.573121445298634e-02
+0.000000000000000e+00
+4.126141616360400e-14
+5.985855122117231e-14
+9.394472266305166e-14
+-2.240798042358519e-15
+-2.043658676025898e-14
+-7.126733859119904e-14
+-9.852417091073808e-15
+2.241128494006691e-15
+9.760654885600256e-15
+-2.149366112871058e-15
+-1.365140824203504e-14
+2.570217765270093e-19
+1.687316370974743e-14
+-3.222012255420530e-15
+-7.044089910723166e-14
+-5.875106004228693e-19
+-6.197231036764497e-15
+7.663871676014596e-14
+2.240000016595915e-15
+2.240000016595915e-15
+1.495999952525222e-19
+8.946457566964348e-14
+-7.980191384827560e-19
+-1.819658736317168e-14
+-7.044075002943295e-14
+-5.875106004228693e-19
+-6.197231036764497e-15
+-7.612417112397380e-15
+1.128508004109039e-18
+9.760654885600256e-15
+3.350548752127487e+04
+-3.022865006479444e-05
+nan
+nan
+nan
+8.774665940154595e-14
+3.065649937415624e-05
+1.616606606608087e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+7.594006141538647e-14
+1.334862450609597e-12
+9.999999960041972e-13
+-1.507335813705709e-13
+-5.016666573019363e-14
+1.783848331948534e-15
+1.991163980825504e-13
+4.929788543263329e-14
+-1.530945335740418e-26
+0.000000000000000e+00
+0.000000000000000e+00
+-1.517770550195869e-13
+7.837291109750430e-16
+0.000000000000000e+00
+1.174857996565096e-15
+1.498184703912089e-13
+-9.494895339012146e-01
+-3.022865225709971e-05
+0.000000000000000e+00
+3.022865030464218e-05
+1.097344012120169e-12
+1.021403910127158e-12
+-3.414050049303428e-25
+0.000000000000000e+00
+1.011906930618825e-04
+7.589065004828557e-02
+nan
+-5.674017876008332e-02
+9.528571746198615e-01
+nan
+2.003577084199400e+01
+4.116454561722845e+04
+1.064375370290936e-02
+8.269974221355674e+08
+nan
+0.000000000000000e+00
+1.239604795495998e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+5.928794409490705e-03
+2147483647
+2147483647
+2147483647
+3
+0
+-1
+) PROP(
+"model" "mtm_I0.PM13.sky130_fd_pr__pfet_01v8_lvt__model.7_7"
+)
+"I0.M24.msky130_fd_pr__pfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+-1.003713380860139e-05
+-4.844257088460099e-01
+-1.817757438042113e-01
+0.000000000000000e+00
+-3.026499644899489e-01
+-1.817757438042113e-01
+-4.844257088460099e-01
+-4.382174611091614e-01
+-9.327935834702424e-02
+1.437435151808576e-04
+1.355758415004454e-05
+3.695943977760445e-05
+3.273647602843418e-03
+0.000000000000000e+00
+2.876998259264521e-14
+1.887633251746942e-13
+1.543684817735468e-13
+-1.760823156459184e-15
+-8.122729341324403e-14
+-7.138036232366262e-14
+-3.178384990662508e-14
+1.959076006859633e-15
+4.034480730755736e-14
+-1.052003403820982e-14
+-4.618949672257935e-14
+2.409995501272547e-16
+6.141929945002687e-14
+-1.547080306675722e-14
+-7.639513302059496e-14
+-4.392524217363319e-16
+-2.053681340707824e-14
+9.737120035518803e-14
+1.151999960133160e-15
+1.151999960133160e-15
+1.478399953083749e-18
+1.520629998223353e-13
+-6.088231310081277e-16
+-8.007529472366029e-14
+-7.639365579513494e-14
+-4.392524217363319e-16
+-2.053681340707824e-14
+-3.063185055030384e-14
+8.070760011342514e-16
+4.034480730755736e-14
+1.810812663426788e+04
+-1.003713380860139e-05
+nan
+nan
+nan
+6.762097664292201e-15
+1.829859928408695e-06
+1.432544645187803e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+1.141667826643673e-27
+3.597592601427280e-13
+1.679705422169893e-13
+-2.107226763430086e-13
+-1.381667233485807e-15
+6.058522979243736e-15
+2.060458212161833e-13
+5.460455287985794e-15
+-8.310130881274386e-29
+0.000000000000000e+00
+0.000000000000000e+00
+-2.098152454539045e-13
+3.730135350016161e-15
+0.000000000000000e+00
+5.500464703635308e-15
+2.005846498922781e-13
+-9.712951779365540e-01
+-1.003713380860139e-05
+0.000000000000000e+00
+1.003713380860139e-05
+3.705805547271431e-14
+3.705805547271431e-14
+-9.498918473152752e-28
+0.000000000000000e+00
+3.695943977760445e-05
+-4.620823576802987e-02
+nan
+-9.327935834702424e-02
+8.849638866545445e-02
+nan
+1.115795688279480e+01
+7.728499237615084e+04
+9.489564332900935e-03
+1.481698286143685e+08
+nan
+0.000000000000000e+00
+7.780188270483271e-01
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+6.252817881096855e-03
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.M24.sky130_fd_pr__pfet_01v8_lvt__model.22_5"
+)
+"I0.PM4.msky130_fd_pr__pfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+-1.020628230832530e-05
+-4.844257088460099e-01
+-1.941730490923150e-01
+0.000000000000000e+00
+-2.902526638202005e-01
+-1.941730490923150e-01
+-4.844257088460099e-01
+-4.382174611091614e-01
+-9.327935834702424e-02
+1.465838278803925e-04
+1.174730280545989e-05
+3.768631887388998e-05
+3.273647602843418e-03
+0.000000000000000e+00
+2.860841537113527e-14
+1.887633251746942e-13
+1.542909481208472e-13
+-1.642996804917840e-15
+-8.124293060674555e-14
+-7.140501592333339e-14
+-3.168128318278327e-14
+1.804704578056846e-15
+4.036190387668236e-14
+-1.048532627190996e-14
+-4.615858931574739e-14
+1.925355048608052e-16
+6.142640436761823e-14
+-1.546035090555718e-14
+-7.645107306840768e-14
+-3.542433164233353e-16
+-2.054537717524688e-14
+9.735069397991651e-14
+1.151999960133160e-15
+1.151999960133160e-15
+1.478399953083749e-18
+1.519854636224153e-13
+-4.909967958744784e-16
+-8.009093191716182e-14
+-7.644959584294767e-14
+-3.542433164233353e-16
+-2.054537717524688e-14
+-3.052928382646205e-14
+6.527046051468532e-16
+4.036190387668236e-14
+1.904801346953448e+04
+-1.020628230832530e-05
+nan
+nan
+nan
+6.777848000672207e-15
+1.984101405817118e-06
+1.436736844158487e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+1.262391672844571e-27
+3.597592601427280e-13
+1.675238286962613e-13
+-2.107008358368364e-13
+-1.763060068750836e-15
+6.055536635271000e-15
+2.064083649453942e-13
+5.817544994824321e-15
+-8.329486943154630e-29
+0.000000000000000e+00
+0.000000000000000e+00
+-2.098076895785956e-13
+3.720113849050040e-15
+0.000000000000000e+00
+5.497478333832114e-15
+2.005901042161790e-13
+-9.712951779365540e-01
+-1.020628230832530e-05
+0.000000000000000e+00
+1.020628230832530e-05
+3.914002333220437e-14
+3.914002333220437e-14
+-9.518543031910331e-28
+0.000000000000000e+00
+3.768631887388998e-05
+-4.620823576802987e-02
+nan
+-9.327935834702424e-02
+1.008936916443805e-01
+nan
+1.276096349982243e+01
+8.701664856810267e+04
+9.649300753600947e-03
+1.511709750568339e+08
+nan
+0.000000000000000e+00
+8.877843419940181e-01
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+6.252817881096855e-03
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.M24.sky130_fd_pr__pfet_01v8_lvt__model.22_5"
+)
+"I0.PM3.msky130_fd_pr__pfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+-1.030372713032990e-05
+-4.844257088460099e-01
+-2.023804760832390e-01
+0.000000000000000e+00
+-2.820452371203127e-01
+-2.023804760832390e-01
+-4.844257088460099e-01
+-4.382174611091614e-01
+-9.327935834702424e-02
+1.481905151698254e-04
+1.078173779385702e-05
+3.809645746657595e-05
+3.273647602843418e-03
+0.000000000000000e+00
+2.850372115072355e-14
+1.887633251746942e-13
+1.542491188870567e-13
+-1.582002484300804e-15
+-8.124879552086059e-14
+-7.141831632878949e-14
+-3.162584157932712e-14
+1.724626750369268e-15
+4.036776973113441e-14
+-1.046655594010805e-14
+-4.614202323947781e-14
+1.676129511154150e-16
+6.142915608412282e-14
+-1.545474578828526e-14
+-7.648125186318508e-14
+-3.102372636577065e-16
+-2.054812968400640e-14
+9.733961916075352e-14
+1.151999960133160e-15
+1.151999960133160e-15
+1.478399953083749e-18
+1.519436343168128e-13
+-4.300024794088478e-16
+-8.009679683127685e-14
+-7.647977463772507e-14
+-3.102372636577065e-16
+-2.054812968400640e-14
+-3.047384199301569e-14
+5.726267902361086e-16
+4.036776973113441e-14
+1.967460268832389e+04
+-1.030372713032990e-05
+nan
+nan
+nan
+6.785361620346767e-15
+2.086429857768204e-06
+1.438806144480267e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+1.344495902698100e-27
+3.597592601427280e-13
+1.673107264799653e-13
+-2.106872703077386e-13
+-2.012665068666490e-15
+6.053921990675914e-15
+2.066460199716308e-13
+6.052234052986222e-15
+-8.338720593540783e-29
+0.000000000000000e+00
+0.000000000000000e+00
+-2.098035800300624e-13
+3.714652858118183e-15
+0.000000000000000e+00
+5.495863679179811e-15
+2.005930706131489e-13
+-9.712951779365540e-01
+-1.030372713032990e-05
+0.000000000000000e+00
+1.030372713032990e-05
+4.051544150059568e-14
+4.051544150059568e-14
+-9.528360674731301e-28
+0.000000000000000e+00
+3.809645746657595e-05
+-4.620823576802987e-02
+nan
+-9.327935834702424e-02
+1.091011189955402e-01
+nan
+1.388626095119582e+01
+9.377725209442763e+04
+9.741336963757620e-03
+1.528679733581089e+08
+nan
+0.000000000000000e+00
+9.649596534806177e-01
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+6.252817881096855e-03
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.M24.sky130_fd_pr__pfet_01v8_lvt__model.22_5"
+)
+"I0.PM0.msky130_fd_pr__pfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+-2.563842243957726e-06
+-4.844257088460099e-01
+-1.977707304411644e-01
+0.000000000000000e+00
+-2.866549838115916e-01
+-1.977707304411644e-01
+-4.844257088460099e-01
+-4.382174611091614e-01
+-9.327935834702424e-02
+3.685202070303336e-05
+2.805490397477767e-06
+9.474314552914389e-06
+8.184119007108545e-04
+0.000000000000000e+00
+7.140382195097009e-15
+1.887633251746942e-13
+3.856711198973438e-14
+-4.022009389762503e-16
+-2.031186712482594e-14
+-1.785304259121392e-14
+-7.912879614309969e-15
+4.399765491728764e-16
+1.009171631952175e-14
+-2.618813531182894e-15
+-1.153740500694597e-14
+4.461782599918762e-17
+1.535711655129088e-14
+-3.864329425602740e-15
+-1.911682669879317e-14
+-8.239344705062990e-17
+-5.136965592317729e-15
+2.433618576433661e-14
+2.879999900332899e-16
+2.879999900332899e-16
+3.695999882709371e-19
+3.799074068032643e-14
+-1.142009379057825e-16
+-2.002386745243001e-14
+-1.911645739242817e-14
+-8.239344705062990e-17
+-5.136965592317729e-15
+-7.624879775229660e-15
+1.519765583261237e-16
+1.009171631952175e-14
+7.728306946860252e+04
+-2.563842243957726e-06
+nan
+nan
+nan
+1.695604681785460e-15
+5.072155188655746e-07
+1.437953414670948e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+3.243563927292928e-28
+8.993981503568199e-14
+4.184854825808612e-14
+-5.267362443781756e-14
+-4.684349393629430e-16
+1.513667500564963e-15
+5.162839366220670e-14
+1.480292987071873e-15
+-2.083776011580763e-29
+0.000000000000000e+00
+0.000000000000000e+00
+-5.245137421843154e-14
+9.293014057313645e-16
+0.000000000000000e+00
+1.374152923331250e-15
+5.014792176341290e-14
+-9.712951779365540e-01
+-2.563842243957726e-06
+0.000000000000000e+00
+2.563842243957726e-06
+9.936051902396879e-15
+9.936051902396879e-15
+-2.381059513128012e-28
+0.000000000000000e+00
+9.474314552914389e-06
+-4.620823576802987e-02
+nan
+-9.327935834702424e-02
+1.044913723231096e-01
+nan
+1.322615386774024e+01
+3.593630485135744e+05
+2.423914012102834e-03
+1.520419037248231e+08
+nan
+0.000000000000000e+00
+9.196381470500171e-01
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+6.252817881096855e-03
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.M24.sky130_fd_pr__pfet_01v8_lvt__model.22_5"
+)
+"I0.PM1.msky130_fd_pr__pfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+-3.031804079847255e-05
+-4.844257088460099e-01
+-1.868241113465255e-01
+0.000000000000000e+00
+-2.976015988282978e-01
+-1.868241113465255e-01
+-4.844257088460099e-01
+-4.382174611091614e-01
+-9.327935834702424e-02
+4.347003985733232e-04
+3.846123179219813e-05
+1.117663073475303e-04
+9.820942808530254e-03
+0.000000000000000e+00
+8.611257003381683e-14
+1.887633251746942e-13
+4.630107267427004e-13
+-5.138527528384597e-15
+-2.437009833347091e-13
+-2.141712049110128e-13
+-9.522624962258844e-14
+5.688640978673149e-15
+1.210553078561834e-13
+-3.151770155496366e-14
+-1.385307322971747e-13
+6.637928050613700e-16
+1.842665780351877e-13
+-4.639964037266202e-14
+-2.292537379261906e-13
+-1.213906340006295e-15
+-6.162090210345616e-14
+2.920885495603558e-13
+3.455999880399479e-15
+3.455999880399479e-15
+4.435199859251246e-18
+4.560942777772675e-13
+-1.682527472075802e-15
+-2.402449872659579e-13
+-2.292493062498105e-13
+-1.213906340006295e-15
+-6.162090210345616e-14
+-9.177025155362474e-14
+2.232641001585752e-15
+1.210553078561834e-13
+6.163620855392443e+03
+-3.031804079847255e-05
+nan
+nan
+nan
+2.030553430825447e-14
+5.678008072696219e-06
+1.434251771109340e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+3.572485129994627e-27
+1.079277780428184e-12
+5.033659014341531e-13
+-6.321413476898384e-13
+-4.610928246350607e-15
+1.817192068636566e-14
+6.185803632834343e-13
+1.681760262117300e-14
+-2.495403887474328e-28
+0.000000000000000e+00
+0.000000000000000e+00
+-6.294365057664889e-13
+1.117816333624248e-14
+0.000000000000000e+00
+1.649774582798473e-14
+6.017606129228640e-13
+-9.712951779365540e-01
+-3.031804079847255e-05
+0.000000000000000e+00
+3.031804079847255e-05
+1.137175914742501e-13
+1.137175914742501e-13
+-2.852072965817264e-27
+0.000000000000000e+00
+1.117663073475303e-04
+-4.620823576802987e-02
+nan
+-9.327935834702424e-02
+9.354475526743709e-02
+nan
+1.181072507616039e+01
+2.708262262162377e+04
+2.866383415466704e-02
+1.493919401892454e+08
+nan
+0.000000000000000e+00
+8.227169812067937e-01
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+6.252817881096855e-03
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.M24.sky130_fd_pr__pfet_01v8_lvt__model.22_5"
+)
+"I0.PM2.msky130_fd_pr__pfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+-3.031804079847255e-05
+-4.844257088460099e-01
+-1.868241113465255e-01
+0.000000000000000e+00
+-2.976015988282978e-01
+-1.868241113465255e-01
+-4.844257088460099e-01
+-4.382174611091614e-01
+-9.327935834702424e-02
+4.347003985733232e-04
+3.846123179219813e-05
+1.117663073475303e-04
+9.820942808530254e-03
+0.000000000000000e+00
+8.611257003381683e-14
+1.887633251746942e-13
+4.630107267427004e-13
+-5.138527528384597e-15
+-2.437009833347091e-13
+-2.141712049110128e-13
+-9.522624962258844e-14
+5.688640978673149e-15
+1.210553078561834e-13
+-3.151770155496366e-14
+-1.385307322971747e-13
+6.637928050613700e-16
+1.842665780351877e-13
+-4.639964037266202e-14
+-2.292537379261906e-13
+-1.213906340006295e-15
+-6.162090210345616e-14
+2.920885495603558e-13
+3.455999880399479e-15
+3.455999880399479e-15
+4.435199859251246e-18
+4.560942777772675e-13
+-1.682527472075802e-15
+-2.402449872659579e-13
+-2.292493062498105e-13
+-1.213906340006295e-15
+-6.162090210345616e-14
+-9.177025155362474e-14
+2.232641001585752e-15
+1.210553078561834e-13
+6.163620855392443e+03
+-3.031804079847255e-05
+nan
+nan
+nan
+2.030553430825447e-14
+5.678008072696219e-06
+1.434251771109340e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+3.572485129994627e-27
+1.079277780428184e-12
+5.033659014341531e-13
+-6.321413476898384e-13
+-4.610928246350607e-15
+1.817192068636566e-14
+6.185803632834343e-13
+1.681760262117300e-14
+-2.495403887474328e-28
+0.000000000000000e+00
+0.000000000000000e+00
+-6.294365057664889e-13
+1.117816333624248e-14
+0.000000000000000e+00
+1.649774582798473e-14
+6.017606129228640e-13
+-9.712951779365540e-01
+-3.031804079847255e-05
+0.000000000000000e+00
+3.031804079847255e-05
+1.137175914742501e-13
+1.137175914742501e-13
+-2.852072965817264e-27
+0.000000000000000e+00
+1.117663073475303e-04
+-4.620823576802987e-02
+nan
+-9.327935834702424e-02
+9.354475526743709e-02
+nan
+1.181072507616039e+01
+2.708262262162377e+04
+2.866383415466704e-02
+1.493919401892454e+08
+nan
+0.000000000000000e+00
+8.227169812067937e-01
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+6.252817881096855e-03
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.M24.sky130_fd_pr__pfet_01v8_lvt__model.22_5"
+)
+"I0.PM6.msky130_fd_pr__pfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+-2.563841978414554e-06
+-4.771338947922021e-01
+-8.532086498685717e-01
+1.977707232195533e-01
+3.760747694364778e-01
+-1.050979371622287e+00
+-6.749046256913055e-01
+-4.450281663674794e-01
+-9.633288209299389e-02
+3.486001253068271e-05
+1.090272631625764e-06
+7.623471135741053e-06
+5.881906731842237e-04
+0.000000000000000e+00
+2.767196100649447e-15
+8.791086077127432e-14
+1.198386324949236e-14
+-1.445118821091039e-16
+-5.925171446458727e-15
+-5.914180169247725e-15
+-2.395093599093269e-15
+1.446523858914678e-16
+2.899626299810462e-15
+-6.491850479510733e-16
+-3.517539329574788e-15
+1.701627329713957e-19
+4.490254165440591e-15
+-9.728848741049813e-16
+-6.071230281106544e-15
+-3.106703889221139e-19
+-1.464709100172456e-15
+7.536250226568491e-15
+1.439999950166449e-16
+1.439999950166449e-16
+2.495999920790744e-19
+1.169561370237698e-14
+-5.118814215510164e-19
+-5.781171223152844e-15
+-6.070980673819809e-15
+-3.106703889221139e-19
+-1.464709100172456e-15
+-2.251093633391833e-15
+6.523890673340062e-19
+2.899626299810462e-15
+3.381184945338680e+05
+-2.563841978414554e-06
+nan
+nan
+nan
+2.436242184281348e-15
+2.188915321715869e-06
+1.364496150731651e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+5.289991757393783e-16
+4.183547511701058e-14
+4.166666537079762e-14
+-1.938305877307892e-14
+-3.236249298758120e-15
+-2.926166276078766e-16
+2.291192488972233e-14
+3.446423393126020e-15
+7.574670331061986e-16
+0.000000000000000e+00
+0.000000000000000e+00
+-1.936833781244731e-14
+2.643288445645669e-16
+0.000000000000000e+00
+3.961431152375919e-16
+1.870786594566321e-14
+-1.002062559127808e+00
+-2.563841986201758e-06
+0.000000000000000e+00
+2.563841986201758e-06
+5.446749715146586e-14
+4.474740454362923e-14
+9.191092569984057e-15
+-1.977707232195533e-01
+7.623471135741053e-06
+-3.210572460440121e-02
+nan
+-9.633288209299389e-02
+7.568757697952990e-01
+nan
+3.194827377190585e+01
+9.248660426872878e+05
+6.749880750056985e-03
+4.618910079427539e+08
+nan
+0.000000000000000e+00
+2.343926296232065e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+5.998105079640285e-03
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.PM6.sky130_fd_pr__pfet_01v8_lvt__model.30_6"
+)
+"I0.PM7.msky130_fd_pr__pfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+-1.003713372750337e-05
+-4.931288814198123e-01
+-3.026499544676135e-01
+1.817757395618981e-01
+-1.904789177544329e-01
+-4.844257046883595e-01
+-6.749046287794783e-01
+-4.409621738753890e-01
+-1.069961171733436e-01
+1.378009737498313e-04
+8.143687345738907e-06
+3.048096278393330e-05
+2.360006821773534e-03
+0.000000000000000e+00
+1.308992549213837e-14
+8.852997238719609e-14
+5.100290315667430e-14
+-6.307984415410649e-16
+-2.755702227869863e-14
+-2.281508260662110e-14
+-1.108106330604872e-14
+6.448673447301706e-16
+1.346795049664018e-14
+-3.031754389937363e-15
+-1.621318381041439e-14
+1.935745411271678e-17
+2.070690450554106e-14
+-4.513078138665631e-15
+-2.370865709147735e-14
+-3.342637230781735e-17
+-6.617831783655564e-15
+3.035991573086732e-14
+5.759999800665798e-16
+5.759999800665798e-16
+9.983999683162977e-19
+4.984990485807300e-14
+-5.479843497041515e-17
+-2.698102286211306e-14
+-2.370765844498605e-14
+-3.342637230781735e-17
+-6.617831783655564e-15
+-1.050506315012076e-14
+6.886735616662743e-17
+1.346795049664018e-14
+3.052399379303408e+04
+-1.003713372750337e-05
+nan
+nan
+nan
+7.621414973800980e-15
+3.046334375738794e-06
+1.377416513099523e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+4.745444646955100e-24
+1.675559524289557e-13
+1.666669489999122e-13
+-7.827410551547995e-14
+-5.616602159891184e-15
+-6.266822207072421e-16
+8.451738799025410e-14
+6.991562389754444e-15
+2.795712219823945e-15
+0.000000000000000e+00
+0.000000000000000e+00
+-7.787967404551922e-14
+1.265244343108204e-15
+0.000000000000000e+00
+1.884987800038697e-15
+7.472943971607866e-14
+-1.002062559127808e+00
+-1.003713413494898e-05
+0.000000000000000e+00
+1.003713372750337e-05
+1.186549900348628e-13
+8.456399848720395e-14
+3.409099213740117e-14
+-1.817757395618981e-01
+3.048096278393330e-05
+-5.216670872409000e-02
+nan
+-1.069961171733436e-01
+1.956538462946710e-01
+nan
+1.728001552589791e+01
+1.262406794906391e+05
+8.013969591022923e-03
+4.291983835540168e+08
+nan
+0.000000000000000e+00
+1.255284567439423e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+6.016572923992226e-03
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.PM6.sky130_fd_pr__pfet_01v8_lvt__model.30_6"
+)
+"I0.PM11.msky130_fd_pr__pfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+-1.020628227912135e-05
+-4.807315763916264e-01
+-7.063933684410590e-01
+1.941730425408242e-01
+2.256617868484779e-01
+-9.005663895292311e-01
+-6.749046337327486e-01
+-4.441136287288920e-01
+-9.864491412330867e-02
+1.394207828667132e-04
+4.632305125897634e-06
+3.057797072759715e-05
+2.354214393775234e-03
+0.000000000000000e+00
+1.151137851165811e-14
+8.805011479905274e-14
+4.858986775893561e-14
+-5.797207574873233e-16
+-2.453303794365157e-14
+-2.347710844903681e-14
+-9.893095046306910e-15
+5.807359013503614e-16
+1.199987081480751e-14
+-2.687511294449570e-15
+-1.453289135218541e-14
+1.245683178194269e-18
+1.855751673725911e-14
+-4.025870344172952e-15
+-2.416388077631219e-14
+-2.260818770573895e-18
+-6.024348708261760e-15
+3.019048995633000e-14
+5.759999800665798e-16
+5.759999800665798e-16
+9.983999683162977e-19
+4.743686929079495e-14
+-3.720761896358704e-18
+-2.395703793231316e-14
+-2.416288214721112e-14
+-2.260818770573895e-18
+-6.024348708261760e-15
+-9.317095531797556e-15
+4.735897392995167e-18
+1.199987081480751e-14
+7.032079636278731e+04
+-1.020628227912135e-05
+nan
+nan
+nan
+7.872885657657918e-15
+7.213076255956493e-06
+1.370842136311758e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+2.456110103229512e-16
+1.673900462255188e-13
+1.666666614831905e-13
+-7.770592878746218e-14
+-1.111886411424535e-14
+-1.052150588597342e-15
+8.987694122147567e-14
+1.208905450736230e-14
+2.977200482328692e-15
+0.000000000000000e+00
+0.000000000000000e+00
+-7.755833484804765e-14
+1.100171941805490e-15
+0.000000000000000e+00
+1.648148502144629e-15
+7.481001544828846e-14
+-1.002062559127808e+00
+-1.020628239573810e-05
+0.000000000000000e+00
+1.020628232066229e-05
+1.903294623555918e-13
+1.539207910710044e-13
+3.616305920040087e-14
+-1.941730425408242e-01
+3.057797072759715e-05
+-3.661795226851124e-02
+nan
+-9.864491412330867e-02
+6.077484518953596e-01
+nan
+3.007254018299887e+01
+2.176274459083602e+05
+1.876820507452969e-02
+4.556157952544885e+08
+nan
+0.000000000000000e+00
+2.196136523066230e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+6.001806000061853e-03
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.PM6.sky130_fd_pr__pfet_01v8_lvt__model.30_6"
+)
+"I0.PM10.msky130_fd_pr__pfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+-1.030372347843815e-05
+-4.725241393044809e-01
+-1.050806139854283e+00
+2.023804692623211e-01
+5.782819948119570e-01
+-1.253186639517083e+00
+-6.749046153877200e-01
+-4.461999804518233e-01
+-9.344200346062601e-02
+1.394403829757714e-04
+4.079542730900259e-06
+3.038798839705038e-05
+2.351048752596627e-03
+0.000000000000000e+00
+1.055160727249891e-14
+8.773243312279335e-14
+4.711898455766631e-14
+-5.770727194905361e-16
+-2.266113347391290e-14
+-2.388077811986238e-14
+-9.191077040814789e-15
+5.773684269492476e-16
+1.109739728808523e-14
+-2.483688623298909e-15
+-1.349071707537505e-14
+3.543547209729681e-19
+1.721362180710726e-14
+-3.723259021641784e-15
+-2.443718971671270e-14
+-6.500709692011296e-19
+-5.649885858986012e-15
+3.008772579444417e-14
+5.759999800665798e-16
+5.759999800665798e-16
+9.983999683162977e-19
+4.596598636920482e-14
+-1.072718297153920e-18
+-2.208513342263168e-14
+-2.443619180754619e-14
+-6.500709692011296e-19
+-5.649885858986012e-15
+-8.615077080176426e-15
+1.368434567089135e-18
+1.109739728808523e-14
+1.034472536044852e+05
+-1.030372347843815e-05
+nan
+nan
+nan
+2.299206919236003e-14
+1.085204960325484e-05
+1.358217715437891e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+1.536092167013948e-14
+1.672802108032770e-13
+1.666666614831905e-13
+-7.730857314641063e-14
+-1.529261653473239e-14
+-1.319170514330134e-15
+9.392035961856764e-14
+1.596412598872354e-14
+3.097351745700376e-15
+0.000000000000000e+00
+0.000000000000000e+00
+-7.736881590186034e-14
+1.004600181713348e-15
+0.000000000000000e+00
+1.506007282376327e-15
+7.485820817000270e-14
+-1.002062559127808e+00
+-1.030372375869535e-05
+0.000000000000000e+00
+1.030372367937937e-05
+2.655865931764658e-13
+2.126908215086538e-13
+3.753483648216176e-14
+-2.023804692623211e-01
+3.038798839705038e-05
+-2.632416039700012e-02
+nan
+-9.344200346062601e-02
+9.573641639433554e-01
+nan
+3.416115599946515e+01
+2.471718566424804e+05
+4.434766612000496e-02
+4.699240378140213e+08
+nan
+0.000000000000000e+00
+2.518067400846980e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+5.993735462191325e-03
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.PM6.sky130_fd_pr__pfet_01v8_lvt__model.30_6"
+)
+"I0.PM8.msky130_fd_pr__pfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+-3.031804439518031e-05
+-4.880805044741823e-01
+-4.413051952968178e-01
+1.868241061638807e-01
+-4.677531198313391e-02
+-6.281293231505877e-01
+-6.749046449084066e-01
+-4.422454932761591e-01
+-1.035209226155327e-01
+4.175884384458064e-04
+1.718859926337412e-05
+9.211453206895676e-05
+7.072481376009656e-03
+0.000000000000000e+00
+3.742450556738345e-14
+8.833456722320124e-14
+1.499476500710905e-13
+-1.778206303084185e-15
+-7.888481006400899e-14
+-6.928463380539032e-14
+-3.170142708887469e-14
+1.791554202994795e-15
+3.855886152733739e-14
+-8.648988515988657e-15
+-4.652953705739741e-14
+1.722951741133541e-17
+5.944019986111640e-14
+-1.292789332527373e-14
+-7.171668753385158e-14
+-3.057741944278246e-17
+-1.911425227192949e-14
+9.086151723056938e-14
+1.727999940199739e-15
+1.727999940199739e-15
+2.995199904948893e-18
+1.464886555057060e-13
+-5.020627229656782e-17
+-7.715680792443030e-14
+-7.171369029567194e-14
+-3.057741944278246e-17
+-1.911425227192949e-14
+-2.997342656815322e-14
+6.355417375398178e-17
+3.855886152733739e-14
+1.475207049094638e+04
+-3.031804439518031e-05
+nan
+nan
+nan
+2.287206966246456e-14
+1.340678339184501e-05
+1.382009253473508e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+6.485721321952074e-19
+5.024651788483593e-13
+4.999999966124371e-13
+-2.341535551891676e-13
+-2.281535454352578e-14
+-2.411264442337434e-15
+2.593801747101752e-13
+2.647728695522991e-14
+8.608850838266599e-15
+0.000000000000000e+00
+0.000000000000000e+00
+-2.332272969015927e-13
+3.581104064538593e-15
+0.000000000000000e+00
+5.354183122826539e-15
+2.242920136477015e-13
+-1.002062559127808e+00
+-3.031804489828151e-05
+0.000000000000000e+00
+3.031804439518031e-05
+4.303487780441844e-13
+3.255438202682331e-13
+1.048043062124909e-13
+-1.868241061638807e-01
+9.211453206895676e-05
+-4.583502311429615e-02
+nan
+-1.035209226155327e-01
+3.377842822597870e-01
+nan
+2.434507116698796e+01
+5.876064194932147e+04
+3.237216665875953e-02
+4.423161278438099e+08
+nan
+0.000000000000000e+00
+1.763633351626242e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+6.010166298717880e-03
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.PM6.sky130_fd_pr__pfet_01v8_lvt__model.30_6"
+)
+"I0.PM9.msky130_fd_pr__pfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+-3.031804439518031e-05
+-4.880805044741823e-01
+-4.413051952968178e-01
+1.868241061638807e-01
+-4.677531198313391e-02
+-6.281293231505877e-01
+-6.749046449084066e-01
+-4.422454932761591e-01
+-1.035209226155327e-01
+4.175884384458064e-04
+1.718859926337412e-05
+9.211453206895676e-05
+7.072481376009656e-03
+0.000000000000000e+00
+3.742450556738345e-14
+8.833456722320124e-14
+1.499476500710905e-13
+-1.778206303084185e-15
+-7.888481006400899e-14
+-6.928463380539032e-14
+-3.170142708887469e-14
+1.791554202994795e-15
+3.855886152733739e-14
+-8.648988515988657e-15
+-4.652953705739741e-14
+1.722951741133541e-17
+5.944019986111640e-14
+-1.292789332527373e-14
+-7.171668753385158e-14
+-3.057741944278246e-17
+-1.911425227192949e-14
+9.086151723056938e-14
+1.727999940199739e-15
+1.727999940199739e-15
+2.995199904948893e-18
+1.464886555057060e-13
+-5.020627229656782e-17
+-7.715680792443030e-14
+-7.171369029567194e-14
+-3.057741944278246e-17
+-1.911425227192949e-14
+-2.997342656815322e-14
+6.355417375398178e-17
+3.855886152733739e-14
+1.475207049094638e+04
+-3.031804439518031e-05
+nan
+nan
+nan
+2.287206966246456e-14
+1.340678339184501e-05
+1.382009253473508e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+6.485721321952074e-19
+5.024651788483593e-13
+4.999999966124371e-13
+-2.341535551891676e-13
+-2.281535454352578e-14
+-2.411264442337434e-15
+2.593801747101752e-13
+2.647728695522991e-14
+8.608850838266599e-15
+0.000000000000000e+00
+0.000000000000000e+00
+-2.332272969015927e-13
+3.581104064538593e-15
+0.000000000000000e+00
+5.354183122826539e-15
+2.242920136477015e-13
+-1.002062559127808e+00
+-3.031804489828151e-05
+0.000000000000000e+00
+3.031804439518031e-05
+4.303487780441844e-13
+3.255438202682331e-13
+1.048043062124909e-13
+-1.868241061638807e-01
+9.211453206895676e-05
+-4.583502311429615e-02
+nan
+-1.035209226155327e-01
+3.377842822597870e-01
+nan
+2.434507116698796e+01
+5.876064194932147e+04
+3.237216665875953e-02
+4.423161278438099e+08
+nan
+0.000000000000000e+00
+1.763633351626242e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+6.010166298717880e-03
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.PM6.sky130_fd_pr__pfet_01v8_lvt__model.30_6"
+)
+"I0.NM6.msky130_fd_pr__nfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+2.563840656651979e-06
+7.490206290545987e-01
+7.490206007462961e-01
+0.000000000000000e+00
+-5.524075294416342e-11
+7.490206007462961e-01
+7.490206290545987e-01
+4.450834691524506e-01
+2.573671169857920e-01
+1.592040667200771e-05
+1.220689153695910e-07
+3.166736815100524e-06
+6.928396656433445e-05
+0.000000000000000e+00
+3.900517278900953e-16
+5.410472184376903e-16
+2.213309712367788e-14
+-2.777757101119788e-16
+-1.994912026792577e-14
+-1.906201013410592e-15
+-7.510209408245425e-15
+2.854654550466185e-16
+8.903263661988634e-15
+-1.678519632130413e-15
+-1.109046137894697e-14
+1.060747791479642e-17
+1.358801901531792e-14
+-2.508165132569337e-15
+-3.532426066018894e-15
+-1.829722335591722e-17
+-2.542162425523472e-15
+6.092885731863107e-15
+2.487111807173247e-16
+2.459558404345864e-16
+3.975785776216734e-20
+2.163838999641043e-14
+-3.181986342678118e-17
+-1.970040924977856e-14
+-3.532386294094064e-15
+-1.829722335591722e-17
+-2.542162425523472e-15
+-7.264253464317866e-15
+3.950960865493002e-17
+8.903263661988634e-15
+2.948231233040247e+05
+2.563840656651979e-06
+nan
+nan
+nan
+-1.159934359663241e-15
+1.920552127446787e-06
+6.238369544935166e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+3.648658102090747e-20
+1.034688827672436e-12
+9.999999960041972e-13
+2.082319378042537e-14
+-3.014137397765114e-15
+-5.201924043222308e-15
+-1.260713224379634e-14
+-3.384911055528432e-16
+3.922493687434442e-30
+4.653346610564278e-19
+1.642921318629267e-17
+2.065324428013071e-14
+-3.352628562785961e-15
+0.000000000000000e+00
+-5.032004298429344e-15
+-1.226861152228204e-14
+0.000000000000000e+00
+2.563842074621227e-06
+0.000000000000000e+00
+-2.563841392500200e-06
+-7.501805266650658e-13
+7.501805138555044e-13
+-7.501246208673106e-27
+0.000000000000000e+00
+3.166736815100524e-06
+3.039371300998256e-01
+nan
+2.573671169857920e-01
+4.916535065206957e-01
+nan
+1.305892616388689e+02
+8.227403395709545e+06
+5.539816575277531e-05
+1.144615207117476e+08
+nan
+0.000000000000000e+00
+2.096633474062179e+01
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+3.490525018853269e-02
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.NM6.sky130_fd_pr__nfet_01v8_lvt__model.49_8"
+)
+"I0.NM2.msky130_fd_pr__nfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+2.507253171241240e-06
+5.800217057186553e-01
+9.560964671767125e-01
+-1.689989074506517e-01
+-3.760747614580572e-01
+1.125095336034864e+00
+7.490206280704682e-01
+5.513110852745331e-01
+8.401508031936125e-02
+4.593158825424227e-05
+4.524976797157856e-07
+7.410723217046505e-06
+1.076250429027690e-03
+0.000000000000000e+00
+8.686687998751389e-16
+4.779254832798099e-15
+7.135557780624839e-15
+-5.545888588680225e-16
+-5.677208562608151e-15
+-9.037601879493769e-16
+-2.480803928036494e-15
+5.548306637879448e-16
+2.280833434802429e-15
+-3.548601764295040e-16
+-3.462484462138894e-15
+3.150793393710708e-19
+3.993873262958366e-15
+-5.317038505173329e-16
+-1.192269200829040e-15
+-5.568894009097490e-19
+-5.974980902986980e-16
+1.790324166936540e-15
+5.749746735557327e-16
+5.535793887458976e-16
+2.303143213338403e-20
+6.006980561274014e-15
+-1.009452713625292e-18
+-5.102233864907178e-15
+-1.192246125539002e-15
+-5.568894009097490e-19
+-5.974980902986980e-16
+-1.927224577259650e-15
+1.251262736382140e-18
+2.280833434802429e-15
+3.860434421981384e+05
+2.507253175076995e-06
+nan
+nan
+nan
+-1.275690051233112e-14
+2.398195633867440e-06
+1.836311926853197e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+6.442347288763503e-15
+2.507595326014872e-13
+2.499999990010493e-13
+5.073464680473912e-15
+8.771012021398250e-16
+-8.739139458260062e-16
+-5.076651804747110e-15
+-1.168659341926003e-15
+-2.111463859892628e-16
+-1.252821180627856e-17
+2.945546064825946e-17
+4.966468300349059e-15
+-4.888260359639102e-16
+0.000000000000000e+00
+-7.808132179255713e-16
+-3.696828950617030e-15
+0.000000000000000e+00
+2.507253818784810e-06
+0.000000000000000e+00
+-2.507253398614915e-06
+-3.362804676698440e-13
+2.844438172883911e-13
+4.539430462698884e-14
+1.689989074506517e-01
+7.410723217046505e-06
+2.871060698717329e-02
+nan
+8.401508031936125e-02
+8.720814017615394e-01
+nan
+1.014537895255965e+02
+2.225337094895425e+06
+7.269547299614054e-03
+1.023884612133608e+09
+nan
+0.000000000000000e+00
+5.528563111150743e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+3.396901660230828e-02
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.NM2.sky130_fd_pr__nfet_01v8_lvt__model.76_1"
+)
+"I0.NM4.msky130_fd_pr__nfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+1.030372634114692e-05
+5.867472907145581e-01
+3.845400464400995e-01
+-1.622733364092686e-01
+2.022072367165370e-01
+5.468133702204334e-01
+7.490206141055850e-01
+5.501513429054845e-01
+8.800144627689083e-02
+1.885701112306739e-04
+2.473859559898681e-06
+3.052429382110124e-05
+4.305406041046503e-03
+0.000000000000000e+00
+4.083821603776152e-15
+4.794794676600471e-15
+2.895423655812018e-14
+-2.402963829313553e-15
+-2.299108749984108e-14
+-3.560184672397845e-15
+-1.022102471306004e-14
+2.425274419573474e-15
+9.257062088649492e-15
+-1.461311576661952e-15
+-1.402745131551703e-14
+3.703668205449727e-17
+1.615494515925861e-14
+-2.164530216926974e-15
+-4.705759883801228e-15
+-5.934730173497363e-17
+-2.420919349966222e-15
+7.186026640816720e-15
+2.299923101334656e-15
+2.294058626273244e-15
+9.212572853353613e-20
+2.436016186550934e-14
+-1.089052327805020e-16
+-2.069116446967930e-14
+-4.705667755765246e-15
+-5.934730173497363e-17
+-2.420919349966222e-15
+-7.926966399937440e-15
+1.312158511674638e-16
+9.257062088649492e-15
+3.766235997571147e+04
+1.030372634114692e-05
+nan
+nan
+nan
+-2.525005870410604e-14
+3.963385331110482e-06
+1.833576419847487e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+1.052671884297054e-18
+1.003313458837933e-12
+1.000000020803133e-12
+2.176749532784879e-14
+-4.367251182472624e-17
+-3.639731205521763e-15
+-1.808409173217671e-14
+-2.507068110788931e-15
+-8.128674744043045e-16
+4.228677677283056e-17
+1.191786162389952e-16
+2.011205972197666e-14
+-2.126474054077821e-15
+0.000000000000000e+00
+-3.221498584278354e-15
+-1.476408761115464e-14
+0.000000000000000e+00
+1.030372728166950e-05
+0.000000000000000e+00
+-1.030372673188056e-05
+-7.343367735511135e-13
+5.594932857566268e-13
+1.748424401375547e-13
+1.622733364092686e-01
+3.052429382110124e-05
+3.659591771041710e-02
+nan
+8.800144627689083e-02
+2.965385962418110e-01
+nan
+7.631187706849417e+01
+4.070734376737495e+05
+1.624254751846444e-02
+1.036113597834665e+09
+nan
+0.000000000000000e+00
+4.163605666546774e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+3.397220600034299e-02
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.NM2.sky130_fd_pr__nfet_01v8_lvt__model.76_1"
+)
+"I0.NM5.msky130_fd_pr__nfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+1.020628233585283e-05
+5.829114039883097e-01
+7.333243666257068e-01
+-1.661092151766620e-01
+-1.504129820660049e-01
+8.994335967035300e-01
+7.490206340661328e-01
+5.508127932272054e-01
+8.567996591465588e-02
+1.869013826531354e-04
+1.958505719228079e-06
+3.019527282119284e-05
+4.305159851067949e-03
+0.000000000000000e+00
+3.672442981759975e-15
+4.785931643777927e-15
+2.868591321769854e-14
+-2.258784996458220e-15
+-2.283074522025904e-14
+-3.596383175525455e-15
+-1.000977374385654e-14
+2.261099387490833e-15
+9.179210346701214e-15
+-1.430536275617355e-15
+-1.391545322389395e-14
+3.270111616774149e-18
+1.605341032250342e-14
+-2.141227714480189e-15
+-4.760686099645730e-15
+-5.584454432395898e-18
+-2.401876663430572e-15
+7.168147383247682e-15
+2.299909479245434e-15
+2.248578549684582e-15
+9.212572853353613e-20
+2.413733266084102e-14
+-1.020640269929580e-17
+-2.053083595827849e-14
+-4.760594193966015e-15
+-5.584454432395898e-18
+-2.401876663430572e-15
+-7.761195037197995e-15
+1.252074511297133e-17
+9.179210346701214e-15
+7.228723111925999e+04
+1.020628233585283e-05
+nan
+nan
+nan
+-2.525744974319089e-14
+7.487264400263984e-06
+1.833460918855236e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+3.192156001737182e-18
+1.003156427341305e-12
+9.999999960041972e-13
+2.086413829874483e-14
+2.171885769921750e-15
+-3.555736591902539e-15
+-1.948028728436807e-14
+-3.869379960171814e-15
+-8.309576363833334e-16
+-2.038278831657880e-17
+1.184047453319104e-16
+1.995661000752134e-14
+-2.013087332997554e-15
+0.000000000000000e+00
+-3.163642683851956e-15
+-1.477987958593330e-14
+0.000000000000000e+00
+1.020628358203009e-05
+0.000000000000000e+00
+-1.020628263009638e-05
+-1.090800283157172e-12
+9.121135124531706e-13
+1.786835702356775e-13
+1.661092151766620e-01
+3.019527282119284e-05
+3.209858987250162e-02
+nan
+8.567996591465588e-02
+6.476444241346248e-01
+nan
+9.541543739681930e+01
+5.124042177389950e+05
+2.122711319522426e-02
+1.036647133262983e+09
+nan
+0.000000000000000e+00
+5.205994493637150e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+3.397026485313743e-02
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.NM2.sky130_fd_pr__nfet_01v8_lvt__model.76_1"
+)
+"I0.NM3.msky130_fd_pr__nfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+1.003713135791302e-05
+5.784679081388587e-01
+1.145021561846065e+00
+-1.705527018065654e-01
+-5.665536904034864e-01
+1.315574278553792e+00
+7.490206248465854e-01
+5.515790180844394e-01
+8.312345942713924e-02
+1.834569741004759e-04
+1.736933817393993e-06
+2.957343790746176e-05
+4.304919974002727e-03
+0.000000000000000e+00
+3.334148590814914e-15
+4.775664695775779e-15
+2.846665021160627e-14
+-2.198433989951137e-15
+-2.264335583929983e-14
+-3.624861036167046e-15
+-9.878767873434286e-15
+2.198984791611818e-15
+9.093551116459772e-15
+-1.413768130800700e-15
+-1.381509056876965e-14
+6.557641174554439e-19
+1.593357198394734e-14
+-2.119137244626506e-15
+-4.772792666167445e-15
+-1.206537683126954e-18
+-2.383767210532223e-15
+7.157766335527191e-15
+2.299892895090876e-15
+2.196274572113202e-15
+9.212572853353613e-20
+2.397039114105469e-14
+-2.159415953016300e-18
+-2.034346257210498e-14
+-4.772700582660319e-15
+-1.206537683126954e-18
+-2.383767210532223e-15
+-7.682493198773365e-15
+2.710189509592473e-18
+9.093551116459772e-15
+1.156027957973571e+05
+1.003713218026057e-05
+nan
+nan
+nan
+-8.837943236429667e-13
+1.149523511965766e-05
+1.832456203605887e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+8.585339750286154e-13
+1.002974521864606e-12
+9.999999960041972e-13
+1.983809575749820e-14
+4.591551018480522e-15
+-3.463445829307750e-15
+-2.096620102829250e-14
+-5.323015234106465e-15
+-8.519133020237329e-16
+-7.041745093435067e-17
+1.175084144145916e-16
+1.981302849109050e-14
+-1.920194239437502e-15
+0.000000000000000e+00
+-3.101630831445777e-15
+-1.479120404015261e-14
+0.000000000000000e+00
+1.003713448479049e-05
+0.000000000000000e+00
+-1.003713226740773e-05
+-2.369921335134068e-12
+1.328254223991014e-12
+1.831331400134854e-13
+1.705527018065654e-01
+2.957343790746176e-05
+2.688888058260427e-02
+nan
+8.312345942713924e-02
+1.061898144891448e+00
+nan
+1.055584708411581e+02
+5.799901659899122e+05
+3.449300743420337e-02
+1.025044046502218e+09
+nan
+0.000000000000000e+00
+5.764513389259361e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+3.396837130904120e-02
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.NM2.sky130_fd_pr__nfet_01v8_lvt__model.76_1"
+)
+"I0.M26.msky130_fd_pr__nfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+2.507253611513131e-06
+5.437992722772881e-01
+1.689989046215557e-01
+0.000000000000000e+00
+3.748003631870016e-01
+1.689989046215557e-01
+5.437992722772881e-01
+4.988842904567719e-01
+8.484921660909409e-02
+4.611866094356726e-05
+1.426177012988709e-06
+8.507793035299726e-06
+1.104656098442366e-03
+0.000000000000000e+00
+1.770297701279780e-15
+2.341866866986501e-14
+1.714734587594854e-14
+-2.304938755709089e-15
+-1.301885024781602e-14
+-1.823557130884697e-15
+-6.530498338750962e-15
+2.543792425075393e-15
+5.163666021257700e-15
+-1.176960152598012e-15
+-8.175380078128500e-15
+5.719460061883737e-16
+9.163030205732350e-15
+-1.559596365865698e-15
+-2.441467690261110e-15
+-8.107996398339068e-16
+-1.307846333811341e-15
+4.560113620222026e-15
+8.896846230046363e-16
+8.891689737962361e-16
+3.503143175257030e-20
+1.536845760720449e-14
+-1.415769789849910e-15
+-1.212916552955867e-14
+-2.441432660151044e-15
+-8.107996398339068e-16
+-1.307846333811341e-15
+-5.641329262606966e-15
+1.654623438945319e-15
+5.163666021257700e-15
+6.763661328958278e+04
+2.507253611513131e-06
+nan
+nan
+nan
+-4.241221341263292e-15
+4.241645504566183e-07
+1.841101770420923e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+2.603430901428198e-20
+2.111007495111256e-13
+8.426020455425126e-14
+1.175343000433654e-14
+-1.380396235665857e-15
+-2.395549384482229e-15
+-7.977484268598905e-15
+-3.135092080496948e-16
+1.293286050091858e-29
+2.961284713043100e-17
+4.275498274595819e-17
+1.100778026074913e-14
+-1.389678588862572e-15
+0.000000000000000e+00
+-1.954145409254463e-15
+-7.663956468213717e-15
+0.000000000000000e+00
+2.507253666450253e-06
+0.000000000000000e+00
+-2.507253611513131e-06
+-1.832446323985089e-14
+1.832443747654307e-14
+-1.399043648351714e-27
+0.000000000000000e+00
+8.507793035299726e-06
+4.491499337027043e-02
+nan
+8.484921660909409e-02
+8.414969049577924e-02
+nan
+3.336025678911435e+01
+7.248320601037022e+05
+2.509960089928513e-03
+4.280894164308674e+08
+nan
+0.000000000000000e+00
+1.811417190349023e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+3.426699170029336e-02
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.M26.sky130_fd_pr__nfet_01v8_lvt__model.60_4"
+)
+"I0.NM8.msky130_fd_pr__nfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+1.055071685951344e-05
+5.468133835244312e-01
+1.622733350439334e-01
+0.000000000000000e+00
+3.845400354888576e-01
+1.622733350439334e-01
+5.468133835244312e-01
+4.988842904567719e-01
+8.644920605432595e-02
+1.916825499378160e-04
+6.433601742623571e-06
+3.533560070716352e-05
+4.419289117889799e-03
+0.000000000000000e+00
+7.105618234880246e-15
+2.341866866986501e-14
+6.919557449470236e-14
+-1.000497735304063e-14
+-5.200840425502935e-14
+-7.182194250072040e-15
+-2.668669757575763e-14
+1.107367561409882e-14
+2.041719611101269e-14
+-4.804174590423143e-15
+-3.300076613801161e-14
+2.624076157872423e-15
+3.666691302954568e-14
+-6.290224126256448e-15
+-9.508111877155902e-15
+-3.692774075714713e-15
+-5.075706780885627e-15
+1.827659290141103e-14
+3.558759382411504e-15
+3.556871911204321e-15
+1.401257270102812e-19
+6.207980502323252e-14
+-6.448105515495306e-15
+-4.844964437006390e-14
+-9.507971994323137e-15
+-3.692774075714713e-15
+-5.075706780885627e-15
+-2.312982486530817e-14
+7.516803340576266e-15
+2.041719611101269e-14
+1.540002888515599e+04
+1.055071685951344e-05
+nan
+nan
+nan
+-1.694577863325544e-14
+1.713239184344238e-06
+1.817612372747833e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+1.005941240673955e-19
+8.444029980445023e-13
+3.376121229205784e-13
+4.727810495185670e-14
+-5.711245323838024e-15
+-9.694233364333419e-15
+-3.187262591786058e-14
+-1.206575803239967e-15
+5.167317083298414e-29
+1.214689885319153e-16
+1.719601097789838e-16
+4.425409750787298e-14
+-5.669290791263164e-15
+0.000000000000000e+00
+-7.918831389864024e-15
+-3.066597554661721e-14
+0.000000000000000e+00
+1.055071699093565e-05
+0.000000000000000e+00
+-1.055071685951344e-05
+-7.103688880197907e-14
+7.103679061268549e-14
+-5.590414516721302e-27
+0.000000000000000e+00
+3.533560070716352e-05
+4.792909900320524e-02
+nan
+8.644920605432595e-02
+7.582412955240128e-02
+nan
+3.040756472255132e+01
+1.587011071315050e+05
+9.209916751967915e-03
+4.409231578922821e+08
+nan
+0.000000000000000e+00
+1.672528189124952e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+3.427214630245618e-02
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.M26.sky130_fd_pr__nfet_01v8_lvt__model.60_4"
+)
+"I0.NM9.msky130_fd_pr__nfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+1.057200149505409e-05
+5.468133835244312e-01
+1.661092129764818e-01
+0.000000000000000e+00
+3.807041587239007e-01
+1.661092129764818e-01
+5.468133835244312e-01
+4.988842904567719e-01
+8.644920458870926e-02
+1.921187916713053e-04
+6.230186770675991e-06
+3.541281535080988e-05
+4.419289117889799e-03
+0.000000000000000e+00
+7.091686234372609e-15
+2.341866866986501e-14
+6.900893700113910e-14
+-9.649297647572254e-15
+-5.215003204561935e-14
+-7.209608679857531e-15
+-2.647158780816274e-14
+1.066681619942861e-14
+2.057170556327196e-14
+-4.766934200036004e-15
+-3.292239762377867e-14
+2.471606597062926e-15
+3.672758386399221e-14
+-6.276793795687357e-15
+-9.614952457840387e-15
+-3.489124828474495e-15
+-5.149259272766233e-15
+1.825333662294586e-14
+3.558759382411504e-15
+3.556794222506593e-15
+1.401257270102812e-19
+6.189324510187136e-14
+-6.092503517434723e-15
+-4.859127216065390e-14
+-9.614812500167344e-15
+-3.489124828474495e-15
+-5.149259272766233e-15
+-2.291479296927653e-14
+7.110021652023914e-15
+2.057170556327196e-14
+1.572865972304582e+04
+1.057200149505409e-05
+nan
+nan
+nan
+-1.695667838473113e-14
+1.757727450084827e-06
+1.818073258122965e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+1.050630988406243e-19
+8.444029980445023e-13
+3.372862835875813e-13
+4.724528195783157e-14
+-5.648018369852773e-15
+-9.686583635700994e-15
+-3.191067962762909e-14
+-1.233644843495664e-15
+5.170642087533957e-29
+1.202806080289567e-16
+1.719601097789838e-16
+4.423372849211053e-14
+-5.645587290537228e-15
+0.000000000000000e+00
+-7.911181652761215e-15
+-3.067695995578420e-14
+0.000000000000000e+00
+1.057200170683543e-05
+0.000000000000000e+00
+-1.057200149505409e-05
+-7.232641523094934e-14
+7.232631170977334e-14
+-5.593700362366856e-27
+0.000000000000000e+00
+3.541281535080988e-05
+4.792909900320524e-02
+nan
+8.644920458870926e-02
+7.966000975788097e-02
+nan
+3.172110809431443e+01
+1.650982539591554e+05
+9.228485219553752e-03
+4.431577406082996e+08
+nan
+0.000000000000000e+00
+1.744261026246359e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+3.427214630245618e-02
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.M26.sky130_fd_pr__nfet_01v8_lvt__model.60_4"
+)
+"I0.M19.msky130_fd_pr__nfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+9.999999362263980e-06
+5.437992722772881e-01
+1.634450227512249e-01
+0.000000000000000e+00
+3.803542441028029e-01
+1.634450227512249e-01
+5.437992722772881e-01
+4.988842904567719e-01
+8.484921873112770e-02
+1.838822496192088e-04
+5.973124035721835e-06
+3.392614776074359e-05
+4.418624393769465e-03
+0.000000000000000e+00
+7.101362637069309e-15
+2.341866866986501e-14
+6.885337208650795e-14
+-9.721980163586102e-15
+-5.187609913637866e-14
+-7.255293704249612e-15
+-2.642648910710434e-14
+1.075012246999139e-14
+2.043705696491551e-14
+-4.760690792833967e-15
+-3.281213073844971e-14
+2.502609318010341e-15
+3.656691430665290e-14
+-6.257394060294541e-15
+-9.614753494410485e-15
+-3.530751461185526e-15
+-5.127873553738990e-15
+1.827337844087260e-14
+3.558738492018545e-15
+3.556790721932175e-15
+1.401257270102812e-19
+6.173770398412160e-14
+-6.165189459837478e-15
+-4.831736026334925e-14
+-9.614613428228938e-15
+-3.530751461185526e-15
+-5.127873553738990e-15
+-2.286969775717817e-14
+7.193331688185740e-15
+2.043705696491551e-14
+1.640522461401169e+04
+9.999999362263980e-06
+nan
+nan
+nan
+-1.694910419770524e-14
+1.635677432782121e-06
+1.840526793476073e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+9.798891642126261e-20
+8.444029980445023e-13
+3.375125936999572e-13
+4.706044588216088e-14
+-5.612209543690043e-15
+-9.592938988369198e-15
+-3.185529685456099e-14
+-1.214844174203145e-15
+5.168330194847732e-29
+1.201716730436870e-16
+1.710199309838328e-16
+4.405981485481064e-14
+-5.592113832432366e-15
+0.000000000000000e+00
+-7.827323087458133e-15
+-3.064037855523491e-14
+0.000000000000000e+00
+9.999999488123213e-06
+0.000000000000000e+00
+-9.999999362263980e-06
+-7.143077701367075e-14
+7.143068114943337e-14
+-5.591417173650345e-27
+0.000000000000000e+00
+3.392614776074359e-05
+4.491499337027043e-02
+nan
+8.484921873112770e-02
+7.859580544239800e-02
+nan
+3.148622817333174e+01
+1.716834706927019e+05
+1.001082557193536e-02
+4.250385430632566e+08
+nan
+0.000000000000000e+00
+1.710221780394767e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+3.426699170029336e-02
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.M26.sky130_fd_pr__nfet_01v8_lvt__model.60_4"
+)
+"I0.M20.msky130_fd_pr__nfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+1.003713191499903e-05
+5.437992722772881e-01
+1.705526986392998e-01
+0.000000000000000e+00
+3.732465694363034e-01
+1.705526986392998e-01
+5.437992722772881e-01
+4.988842904567719e-01
+8.484921601541867e-02
+1.846403762323532e-04
+5.629614061916617e-06
+3.406055451876449e-05
+4.418624393769465e-03
+0.000000000000000e+00
+7.075547388038431e-15
+2.341866866986501e-14
+6.851552815538199e-14
+-9.079248898025458e-15
+-5.213115911451487e-14
+-7.305121209178474e-15
+-2.603680542895708e-14
+1.001431676988513e-14
+2.071554342120464e-14
+-4.693054862471547e-15
+-3.267057514260731e-14
+2.227682952509634e-15
+3.667595881198900e-14
+-6.233067481422039e-15
+-9.808148416629450e-15
+-3.162750687178647e-15
+-5.260344537228006e-15
+1.823124343656654e-14
+3.558738492018545e-15
+3.556643770426607e-15
+1.401257270102812e-19
+6.140000726130298e-14
+-5.522605163142035e-15
+-4.857242024148546e-14
+-9.808008281009379e-15
+-3.162750687178647e-15
+-5.260344537228006e-15
+-2.248016131029736e-14
+6.457672953071392e-15
+2.071554342120464e-14
+1.705013604956522e+04
+1.003713191499903e-05
+nan
+nan
+nan
+-1.696930041816210e-14
+1.713718621250358e-06
+1.841262630114757e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+1.058573342681504e-19
+8.444029980445023e-13
+3.369088309079041e-13
+4.700064765266175e-14
+-5.496231151167099e-15
+-9.579192432342286e-15
+-3.192522361607754e-14
+-1.265001652653176e-15
+5.174491001245183e-29
+1.179701093261180e-16
+1.710199309838328e-16
+4.402309345541293e-14
+-5.549370277066522e-15
+0.000000000000000e+00
+-7.813576531431223e-15
+-3.066014752575791e-14
+0.000000000000000e+00
+1.003713216101465e-05
+0.000000000000000e+00
+-1.003713191499903e-05
+-7.382019958161946e-14
+7.382009451714346e-14
+-5.597505563443696e-27
+0.000000000000000e+00
+3.406055451876449e-05
+4.491499337027043e-02
+nan
+8.484921601541867e-02
+8.570348540403652e-02
+nan
+3.388454854040990e+01
+1.838726701900478e+05
+1.004795774584671e-02
+4.289429507512159e+08
+nan
+0.000000000000000e+00
+1.839728347532625e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+3.426699170029336e-02
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.M26.sky130_fd_pr__nfet_01v8_lvt__model.60_4"
+)
+"I0.M10.msky130_fd_pr__nfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+3.004175358560479e-05
+5.437992722772881e-01
+1.661092129764818e-01
+0.000000000000000e+00
+3.776900543354326e-01
+1.661092129764818e-01
+5.437992722772881e-01
+4.988842904567719e-01
+8.484921771319082e-02
+5.524992610757069e-04
+1.753309566649708e-05
+1.019295834762548e-04
+1.325587318130840e-02
+0.000000000000000e+00
+2.127505870311783e-14
+2.341866866986501e-14
+2.061802112751907e-13
+-2.844319016471434e-14
+-1.559151119648242e-13
+-2.182191206590603e-14
+-7.884126862066437e-14
+3.142295502449930e-14
+6.162432848932259e-14
+-1.420601587815555e-14
+-9.827721316411813e-14
+7.198673676106805e-15
+1.098233632995916e-13
+-1.874482698011196e-14
+-2.906173277776357e-14
+-1.017843807548278e-14
+-1.553258407973768e-14
+5.477275457465697e-14
+1.067621547605564e-14
+1.067020691905305e-14
+4.203771810308436e-19
+1.848333725035483e-13
+-1.777298331973282e-14
+-1.452388953457360e-13
+-2.906131250113542e-14
+-1.017843807548278e-14
+-1.553258407973768e-14
+-6.817106013222002e-14
+2.075274794099120e-14
+6.162432848932259e-14
+5.548986196211642e+03
+3.004175358560479e-05
+nan
+nan
+nan
+-5.087002321216008e-14
+4.994789495533707e-06
+1.840802609201359e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+3.028147731098470e-19
+2.533208994133507e-12
+1.011858850762744e-12
+1.411140946287812e-13
+-1.670621110589046e-14
+-2.876335898385976e-14
+-9.564452310016180e-14
+-3.700934530486992e-15
+1.551191840192356e-28
+3.580393640945946e-16
+5.130597929514983e-16
+1.321381514069187e-13
+-1.672827643459940e-14
+0.000000000000000e+00
+-2.346651128112657e-14
+-9.194336584285131e-14
+0.000000000000000e+00
+3.004175409829817e-05
+0.000000000000000e+00
+-3.004175358560479e-05
+-2.169792330676864e-13
+2.169789351293200e-13
+-1.678109790597073e-26
+0.000000000000000e+00
+1.019295834762548e-04
+4.491499337027043e-02
+nan
+8.484921771319082e-02
+8.125999719456026e-02
+nan
+3.238519736939827e+01
+5.875079425422749e+04
+3.007423178863226e-02
+4.265020432230109e+08
+nan
+0.000000000000000e+00
+1.758765092682563e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+3.426699170029336e-02
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.M26.sky130_fd_pr__nfet_01v8_lvt__model.60_4"
+)
+"I0.NM7.msky130_fd_pr__nfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+2.998163438130010e-05
+5.437992722772881e-01
+1.622733350439334e-01
+0.000000000000000e+00
+3.815259316087199e-01
+1.622733350439334e-01
+5.437992722772881e-01
+4.988842904567719e-01
+8.484921917880750e-02
+5.512718213930741e-04
+1.808925312874453e-05
+1.017119731384187e-04
+1.325587318130840e-02
+0.000000000000000e+00
+2.131685470464074e-14
+2.341866866986501e-14
+2.067271951699793e-13
+-2.948379980291946e-14
+-1.555021588601742e-13
+-2.174123918650058e-14
+-7.947218330158866e-14
+3.261425618628260e-14
+6.117344690622228e-14
+-1.431552136636719e-14
+-9.850639777869726e-14
+7.643791318683576e-15
+1.096468155426576e-13
+-1.878421276044614e-14
+-2.874861805809075e-14
+-1.077424719947874e-14
+-1.531810784435346e-14
+5.484097296379735e-14
+1.067621547605564e-14
+1.067044483987819e-14
+4.203771810308436e-19
+1.853801180617386e-13
+-1.881335500900681e-14
+-1.448259422410859e-13
+-2.874819789388656e-14
+-1.077424719947874e-14
+-1.531810784435346e-14
+-6.880173643937423e-14
+2.194381116011438e-14
+6.117344690622228e-14
+5.432970704272927e+03
+2.998163438130010e-05
+nan
+nan
+nan
+-5.083732466023201e-14
+4.868437445698086e-06
+1.840405492117134e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+2.900754652721391e-19
+2.533208994133507e-12
+1.012836368761735e-12
+1.412109105412764e-13
+-1.689398512521973e-14
+-2.878561525091914e-14
+-9.553130865751425e-14
+-3.619727409719901e-15
+1.550194379066716e-28
+3.616037907008319e-16
+5.130597929514983e-16
+1.321976049362383e-13
+-1.679748009415073e-14
+0.000000000000000e+00
+-2.348876754818595e-14
+-9.191135902699227e-14
+0.000000000000000e+00
+2.998163469945511e-05
+0.000000000000000e+00
+-2.998163438130010e-05
+-2.131106548808398e-13
+2.131103718380565e-13
+-1.677124054031950e-26
+0.000000000000000e+00
+1.017119731384187e-04
+4.491499337027043e-02
+nan
+8.484921917880750e-02
+7.742411706358684e-02
+nan
+3.109086933360652e+01
+5.655803429051253e+04
+3.001411319765947e-02
+4.243949084118916e+08
+nan
+0.000000000000000e+00
+1.688872853527753e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+3.426699170029336e-02
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "mtm_I0.M26.sky130_fd_pr__nfet_01v8_lvt__model.60_4"
+)
+"I0.NM0.msky130_fd_pr__nfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+7.669293168503489e-13
+0.000000000000000e+00
+2.052213393999945e-01
+-5.437992729224917e-01
+-2.052213393999945e-01
+7.490206123224863e-01
+5.437992729224917e-01
+6.279466684144022e-01
+5.159021841507523e-02
+2.006710188321285e-11
+1.648674567650472e-12
+2.176722911262888e-12
+1.290249383925057e-02
+0.000000000000000e+00
+2.845830072455044e-15
+2.650108611312432e-15
+5.230897274754864e-15
+-1.959864745012543e-15
+-1.765955438801839e-15
+-1.505077090940481e-15
+-1.900099123771538e-15
+1.917907317071190e-15
+-6.248564088264489e-18
+-1.155962921138714e-17
+-1.839454494381292e-15
+7.652993462177712e-17
+1.770724215197748e-15
+-7.799655438233305e-18
+-1.491343656602033e-15
+-3.457250668042372e-17
+1.479787692355741e-18
+1.524436375590101e-15
+1.773952978466034e-15
+1.803027712946080e-15
+1.257858000000000e-21
+1.653915325484749e-15
+7.997539664194620e-18
+-1.568370320664633e-16
+-1.491342398744033e-15
+1.479787692355741e-18
+-3.457250668042364e-17
+-6.550151591525793e-17
+-3.228763268285872e-18
+7.652993462177711e-17
+2.675883355754406e+11
+-7.602583580032999e-13
+nan
+nan
+nan
+-1.334191827043731e-14
+1.660146103119573e-13
+2.616551674621737e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+6.459792967548319e-25
+1.000000000037275e-12
+1.000000017254413e-12
+2.801554707348641e-15
+1.735996751114581e-15
+2.671082137463717e-15
+-7.208633595926939e-15
+-1.754148218777786e-15
+-2.317318727921147e-15
+3.307266598107995e-18
+-2.256508394270223e-17
+3.142765795495575e-15
+-1.815146766320543e-17
+-9.191135902699227e-14
+1.255163737337008e-17
+-3.137165965205740e-15
+0.000000000000000e+00
+-4.216804244971297e-13
+-0.000000000000000e+00
+1.727842227979891e-12
+-1.306161803482761e-12
+5.504702317476155e-13
+7.556915717181727e-13
+5.437992729224917e-01
+2.176722911262888e-12
+-6.279466684144022e-01
+nan
+5.159021841507523e-02
+1.536311209849193e-01
+nan
+1.217165732823216e+01
+6.065478412911416e+11
+2.138788867076064e-12
+6.105603475823712e+02
+nan
+0.000000000000000e+00
+2.557693511934663e-01
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+2.809554285142316e-02
+2147483647
+2147483647
+2147483647
+0
+1
+-1
+) PROP(
+"model" "I0.NM0.sky130_fd_pr__nfet_01v8_lvt__model.7"
+)
+"I0.NM1.msky130_fd_pr__nfet_01v8_lvt" "bsim4" (
+0.000000000000000e+00
+0.000000000000000e+00
+9.999999484886257e-06
+5.855755908100695e-01
+3.803542514100750e-01
+-1.634450215124168e-01
+2.052213393999945e-01
+5.437992729224917e-01
+7.490206123224863e-01
+5.503830455508602e-01
+8.723658877068942e-02
+1.843850276206019e-04
+2.422533194723730e-06
+2.981922374566867e-05
+4.305341960280718e-03
+0.000000000000000e+00
+4.087299086803138e-15
+4.791042845271451e-15
+2.891494298736935e-14
+-2.401798353928306e-15
+-2.294631864000062e-14
+-3.566825993440430e-15
+-1.020468639424937e-14
+2.423870560297714e-15
+9.237949841582905e-15
+-1.457134007631254e-15
+-1.400335556098103e-14
+3.648915977526669e-17
+1.612524361841785e-14
+-2.158377217212086e-15
+-4.706901032138959e-15
+-5.856136614467548e-17
+-2.416874820000135e-15
+7.182337218283770e-15
+2.299919004402048e-15
+2.294256693036377e-15
+9.212572800000000e-20
+2.432067516420293e-14
+-1.075416608919281e-16
+-2.064639963559857e-14
+-4.706808906410959e-15
+-5.856136614467548e-17
+-2.416874820000135e-15
+-7.910429701212988e-15
+1.296138672613369e-16
+9.237949841582905e-15
+3.803542710026462e+04
+9.999999497567165e-06
+nan
+nan
+nan
+-2.526525895689895e-14
+3.803542327127766e-06
+1.843850371185286e+01
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+1.010353173640537e-18
+1.002857615063541e-12
+1.000000032796517e-12
+2.174729104841586e-14
+-5.100747822736967e-17
+-3.614081920449168e-15
+-1.808220164973932e-14
+-2.495403333162699e-15
+-8.190193585845696e-16
+4.286851013710674e-17
+1.189422113213263e-16
+2.008798973945611e-14
+-2.115820020028591e-15
+-9.191135902699227e-14
+-3.204459765504666e-15
+-1.476770995392286e-14
+0.000000000000000e+00
+1.000000042172069e-05
+-0.000000000000000e+00
+-9.999999689211137e-06
+-7.325095533906629e-13
+5.564791720268897e-13
+1.760293710100273e-13
+1.634450215124168e-01
+2.981922374566867e-05
+3.519254525920934e-02
+nan
+8.723658877068942e-02
+2.931176626393855e-01
+nan
+7.611248754906312e+01
+4.127910412860378e+05
+1.614836876292871e-02
+1.014900447522006e+09
+nan
+0.000000000000000e+00
+4.127910586942900e+00
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+nan
+3.397170144357508e-02
+2147483647
+2147483647
+2147483647
+2
+0
+-1
+) PROP(
+"model" "I0.NM2.sky130_fd_pr__nfet_01v8_lvt__model.76"
+)
+"CL" "capacitor" (
+nan
+8.994335924712137e-01
+5.000000000000000e-12
+) PROP(
+"model" "capacitor"
+)
+"IBIAS" "isource" (
+1.000000000000000e-05
+1.256200727077508e+00
+1.256200727077508e-05
+) PROP(
+"model" "isource"
+)
+"VSUP" "vsource" (
+1.800000000000000e+00
+-1.062543390049707e-04
+-1.912578102089473e-04
+) PROP(
+"model" "vsource"
+)
+"VINC" "vsource" (
+9.000000000000000e-01
+0.000000000000000e+00
+0.000000000000000e+00
+) PROP(
+"model" "vsource"
+)
+"VIND" "vsource" (
+0.000000000000000e+00
+0.000000000000000e+00
+0.000000000000000e+00
+) PROP(
+"model" "vsource"
+)
+END

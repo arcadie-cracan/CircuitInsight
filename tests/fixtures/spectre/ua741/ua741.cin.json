@@ -1,0 +1,502 @@
+{
+  "cin_version": "0.1",
+  "design": {
+    "name": "ua741",
+    "source": {
+      "kind": "hand"
+    },
+    "note": "uA741 (Gross/Roberts Ch.10) with DC-closed/AC-open feedback rig: Lf (1e9 H, 22->2) shorts at DC so the operating point is the linear closed-loop bias (output ~0 V); Cf (1e9 F, 2->0) grounds the inverting input at AC so the loop opens. tf(Vin,'22') is the open-loop gain in the plateau above the rig corner. Output node 22; supplies at 25(+15)/26(-15)."
+  },
+  "top": "main",
+  "ground": [
+    "0"
+  ],
+  "definitions": {
+    "main": {
+      "ports": [],
+      "instances": [
+        {
+          "name": "Vcc",
+          "device_type": "vsource",
+          "terminals": {
+            "p": "25",
+            "n": "0"
+          }
+        },
+        {
+          "name": "Vee",
+          "device_type": "vsource",
+          "terminals": {
+            "p": "26",
+            "n": "0"
+          }
+        },
+        {
+          "name": "Vin",
+          "device_type": "vsource",
+          "terminals": {
+            "p": "1",
+            "n": "0"
+          },
+          "params": {
+            "acm": "1"
+          }
+        },
+        {
+          "name": "Lf",
+          "device_type": "inductor",
+          "terminals": {
+            "p": "22",
+            "n": "2"
+          },
+          "params": {
+            "l": "1e9"
+          }
+        },
+        {
+          "name": "Cf",
+          "device_type": "capacitor",
+          "terminals": {
+            "p": "2",
+            "n": "0"
+          },
+          "params": {
+            "c": "1e9"
+          }
+        },
+        {
+          "name": "Q1",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "4",
+            "b": "1",
+            "e": "12"
+          },
+          "params": {
+            "polarity": "npn"
+          }
+        },
+        {
+          "name": "Q2",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "4",
+            "b": "2",
+            "e": "13"
+          },
+          "params": {
+            "polarity": "npn"
+          }
+        },
+        {
+          "name": "Q3",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "7",
+            "b": "3",
+            "e": "12"
+          },
+          "params": {
+            "polarity": "pnp"
+          }
+        },
+        {
+          "name": "Q4",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "8",
+            "b": "3",
+            "e": "13"
+          },
+          "params": {
+            "polarity": "pnp"
+          }
+        },
+        {
+          "name": "Q5",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "7",
+            "b": "9",
+            "e": "10"
+          },
+          "params": {
+            "polarity": "npn"
+          }
+        },
+        {
+          "name": "Q6",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "8",
+            "b": "9",
+            "e": "11"
+          },
+          "params": {
+            "polarity": "npn"
+          }
+        },
+        {
+          "name": "Q7",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "25",
+            "b": "7",
+            "e": "9"
+          },
+          "params": {
+            "polarity": "npn"
+          }
+        },
+        {
+          "name": "Q8",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "4",
+            "b": "4",
+            "e": "25"
+          },
+          "params": {
+            "polarity": "pnp"
+          }
+        },
+        {
+          "name": "Q9",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "3",
+            "b": "4",
+            "e": "25"
+          },
+          "params": {
+            "polarity": "pnp"
+          }
+        },
+        {
+          "name": "Q13B",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "16",
+            "b": "6",
+            "e": "25"
+          },
+          "params": {
+            "polarity": "pnp"
+          }
+        },
+        {
+          "name": "Q16",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "25",
+            "b": "8",
+            "e": "14"
+          },
+          "params": {
+            "polarity": "npn"
+          }
+        },
+        {
+          "name": "Q17",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "16",
+            "b": "14",
+            "e": "15"
+          },
+          "params": {
+            "polarity": "npn"
+          }
+        },
+        {
+          "name": "Q13A",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "17",
+            "b": "6",
+            "e": "25"
+          },
+          "params": {
+            "polarity": "pnp"
+          }
+        },
+        {
+          "name": "Q14",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "25",
+            "b": "17",
+            "e": "23"
+          },
+          "params": {
+            "polarity": "npn"
+          }
+        },
+        {
+          "name": "Q18",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "17",
+            "b": "18",
+            "e": "19"
+          },
+          "params": {
+            "polarity": "npn"
+          }
+        },
+        {
+          "name": "Q19",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "17",
+            "b": "17",
+            "e": "18"
+          },
+          "params": {
+            "polarity": "npn"
+          }
+        },
+        {
+          "name": "Q20",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "26",
+            "b": "19",
+            "e": "21"
+          },
+          "params": {
+            "polarity": "pnp"
+          }
+        },
+        {
+          "name": "Q23",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "26",
+            "b": "16",
+            "e": "19"
+          },
+          "params": {
+            "polarity": "pnp"
+          }
+        },
+        {
+          "name": "Q15",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "17",
+            "b": "23",
+            "e": "22"
+          },
+          "params": {
+            "polarity": "npn"
+          }
+        },
+        {
+          "name": "Q21",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "20",
+            "b": "21",
+            "e": "22"
+          },
+          "params": {
+            "polarity": "pnp"
+          }
+        },
+        {
+          "name": "Q22",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "8",
+            "b": "20",
+            "e": "26"
+          },
+          "params": {
+            "polarity": "npn"
+          }
+        },
+        {
+          "name": "Q24",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "20",
+            "b": "20",
+            "e": "26"
+          },
+          "params": {
+            "polarity": "npn"
+          }
+        },
+        {
+          "name": "Q10",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "3",
+            "b": "5",
+            "e": "24"
+          },
+          "params": {
+            "polarity": "npn"
+          }
+        },
+        {
+          "name": "Q11",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "5",
+            "b": "5",
+            "e": "26"
+          },
+          "params": {
+            "polarity": "npn"
+          }
+        },
+        {
+          "name": "Q12",
+          "device_type": "bjt",
+          "terminals": {
+            "c": "6",
+            "b": "6",
+            "e": "25"
+          },
+          "params": {
+            "polarity": "pnp"
+          }
+        },
+        {
+          "name": "R1",
+          "device_type": "resistor",
+          "terminals": {
+            "p": "10",
+            "n": "26"
+          },
+          "params": {
+            "r": "1k"
+          }
+        },
+        {
+          "name": "R2",
+          "device_type": "resistor",
+          "terminals": {
+            "p": "11",
+            "n": "26"
+          },
+          "params": {
+            "r": "1k"
+          }
+        },
+        {
+          "name": "R3",
+          "device_type": "resistor",
+          "terminals": {
+            "p": "9",
+            "n": "26"
+          },
+          "params": {
+            "r": "50k"
+          }
+        },
+        {
+          "name": "R8",
+          "device_type": "resistor",
+          "terminals": {
+            "p": "15",
+            "n": "26"
+          },
+          "params": {
+            "r": "100"
+          }
+        },
+        {
+          "name": "R9",
+          "device_type": "resistor",
+          "terminals": {
+            "p": "14",
+            "n": "26"
+          },
+          "params": {
+            "r": "50k"
+          }
+        },
+        {
+          "name": "R6",
+          "device_type": "resistor",
+          "terminals": {
+            "p": "22",
+            "n": "23"
+          },
+          "params": {
+            "r": "27"
+          }
+        },
+        {
+          "name": "R7",
+          "device_type": "resistor",
+          "terminals": {
+            "p": "21",
+            "n": "22"
+          },
+          "params": {
+            "r": "27"
+          }
+        },
+        {
+          "name": "R10",
+          "device_type": "resistor",
+          "terminals": {
+            "p": "18",
+            "n": "19"
+          },
+          "params": {
+            "r": "40k"
+          }
+        },
+        {
+          "name": "R11",
+          "device_type": "resistor",
+          "terminals": {
+            "p": "20",
+            "n": "26"
+          },
+          "params": {
+            "r": "50k"
+          }
+        },
+        {
+          "name": "R4",
+          "device_type": "resistor",
+          "terminals": {
+            "p": "24",
+            "n": "26"
+          },
+          "params": {
+            "r": "5k"
+          }
+        },
+        {
+          "name": "R5",
+          "device_type": "resistor",
+          "terminals": {
+            "p": "6",
+            "n": "5"
+          },
+          "params": {
+            "r": "39k"
+          }
+        },
+        {
+          "name": "Cc",
+          "device_type": "capacitor",
+          "terminals": {
+            "p": "8",
+            "n": "16"
+          },
+          "params": {
+            "c": "30p"
+          }
+        }
+      ]
+    }
+  }
+}

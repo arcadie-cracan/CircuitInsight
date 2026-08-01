@@ -1,0 +1,55 @@
+{
+  "cin_version": "0.1",
+  "design": {
+    "name": "hier_diffpair",
+    "source": { "kind": "hand" },
+    "note": "Exercises hierarchy: ports, global nets, and internal-net prefixing."
+  },
+  "top": "tb",
+  "ground": ["0"],
+  "globals": ["vdd!"],
+  "definitions": {
+    "diffpair": {
+      "ports": ["inp", "inn", "outp", "outn", "tail"],
+      "instances": [
+        { "name": "M1", "device_type": "mosfet",
+          "terminals": { "d": "outn", "g": "inp", "s": "s1", "b": "0" },
+          "params": { "polarity": "n" } },
+        { "name": "M2", "device_type": "mosfet",
+          "terminals": { "d": "outp", "g": "inn", "s": "s2", "b": "0" },
+          "params": { "polarity": "n" } },
+        { "name": "RS1", "device_type": "resistor",
+          "terminals": { "p": "s1", "n": "tail" },
+          "params": { "r": "200" } },
+        { "name": "RS2", "device_type": "resistor",
+          "terminals": { "p": "s2", "n": "tail" },
+          "params": { "r": "200" } },
+        { "name": "RL1", "device_type": "resistor",
+          "terminals": { "p": "vdd!", "n": "outn" },
+          "params": { "r": "20k" } },
+        { "name": "RL2", "device_type": "resistor",
+          "terminals": { "p": "vdd!", "n": "outp" },
+          "params": { "r": "20k" } }
+      ]
+    },
+    "tb": {
+      "ports": [],
+      "instances": [
+        { "name": "VDD", "device_type": "vsource",
+          "terminals": { "p": "vdd!", "n": "0" },
+          "params": { "dc": "1.8" } },
+        { "name": "VIP", "device_type": "vsource",
+          "terminals": { "p": "vip", "n": "0" },
+          "params": { "dc": "900m", "mag": "0.5" } },
+        { "name": "VIN", "device_type": "vsource",
+          "terminals": { "p": "vin", "n": "0" },
+          "params": { "dc": "900m", "mag": "-0.5" } },
+        { "name": "I0", "subckt": "diffpair",
+          "terminals": { "inp": "vip", "inn": "vin", "outp": "vop", "outn": "von", "tail": "ntail" } },
+        { "name": "IB", "device_type": "isource",
+          "terminals": { "p": "ntail", "n": "0" },
+          "params": { "dc": "200u" } }
+      ]
+    }
+  }
+}

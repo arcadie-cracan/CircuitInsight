@@ -1,0 +1,68 @@
+// tb_ota2s (SKY130) -- closed-form-Cc phase-margin check, Cc=7.32p
+// spectre tb_ota2s_cc732.scs -format psfascii -raw ./psf_cc732 +log cc732.log
+// Point Netlist Generated on: Jul 17 08:06:02 2026
+// Generated for: spectre
+// Design Netlist Generated on: Jul 17 08:06:01 2026
+// Design library name: worklib
+// Design cell name: tb_ota2s
+// Design view name: schematic
+simulator lang=spectre
+global 0 vdd!
+parameters temperature=27
+include "<pdk-models>" section=tt
+
+// Library name: analogLib
+// Cell name: ideal_balun
+// View name: schematic
+subckt ideal_balun d c p n
+    K0 (d 0 p c) transformer n1=2
+    K1 (d 0 c n) transformer n1=2
+ends ideal_balun
+// End of subcircuit definition.
+
+// Library name: worklib
+// Cell name: ota2s
+// View name: schematic
+subckt ota2s out vdd inp inn vss vbn
+    MN3 (out vbn vss vss) nfet_01v8 w=(40u) l=1u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(4)*(1)
+    MN2 (tail vbn vss vss) nfet_01v8 w=(40u) l=1u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(2)*(1)
+    MN1 (outd inp tail vss) nfet_01v8 w=(40u) l=2u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(1)*(1)
+    MN0 (mirr inn tail vss) nfet_01v8 w=(40u) l=2u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(1)*(1)
+    Cc (net1 out) capacitor c=7.32p
+    Rz (outd net1) resistor r=0
+    MP2 (out outd vdd vdd) pfet_01v8 w=(40u) l=1u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(4)*(1)
+    MP1 (outd mirr vdd vdd) pfet_01v8 w=(40u) l=2u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(2)*(1)
+    MP0 (mirr mirr vdd vdd) pfet_01v8 w=(40u) l=2u as=10.6p ad=10.6p \
+        ps=80.53u pd=80.53u nrd=0.008500 nrs=0.008500 m=(2)*(1)
+ends ota2s
+// End of subcircuit definition.
+
+// Library name: worklib
+// Cell name: tb_ota2s
+// View name: schematic
+CL (vout 0) capacitor c=5p
+VIND (vin_dm 0) vsource dc=0 mag=1 type=dc
+VINC (vin_cm 0) vsource dc=900.0m type=dc
+VSUP (vdd! 0) vsource dc=1.8 type=dc
+I5 (vin_dm vin_cm vin_p net1) ideal_balun
+IB (vdd! vbn) isource dc=40u type=dc
+S1 (vout vin_n) switch position=0 dc_position=1 ac_position=0 \
+        tran_position=0 ic_position=1
+S0 (vin_n net1) switch position=0 dc_position=0 ac_position=1 \
+        tran_position=0 ic_position=0
+I0 (vout vdd! vin_p vin_n 0 vbn) ota2s
+MN2 (vbn vbn 0 0) nfet_01v8 w=(40u) l=1u as=10.6p ad=10.6p ps=80.53u \
+        pd=80.53u nrd=0.008500 nrs=0.008500 m=(2)*(1)
+simulatorOptions options psfversion="1.4.0" temp=27 tnom=27 scalem=1.0 \
+    scale=1.0 gmin=1e-12 rforce=1 maxnotes=5 maxwarns=5 digits=5 cols=80 \
+    pivrel=1e-3 
+ac ac start=1m stop=10G dec=20 annotate=status 
+dcOp dc write="spectre.dc" maxiters=150 maxsteps=10000 annotate=status
+dcOpInfo info what=oppoint where=rawfile
+saveOptions options save=allpub

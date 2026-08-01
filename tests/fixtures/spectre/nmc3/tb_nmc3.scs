@@ -1,0 +1,55 @@
+// tb_nmc3.scs -- behavioral gm-C THREE-STAGE nested-Miller (NMC) amplifier.
+//
+// PDK-free by construction: ideal transconductors (Spectre vccs), output
+// conductances (resistor), node/load caps (capacitor), analogLib iprobes
+// marking the THREE nested loops. Nothing foundry-derived -> ships in the
+// public repo. The circuit is linear, so its small-signal parameters ARE the
+// element values (the dcOpInfo OP is trivial) and stb is exact ground truth.
+//
+// Topology (single-ended, unity-feedback follower):
+//     inp --(gm1)--> n1 --(gm2)--> n2 --(gm3)--> out --[IPRB0]--> inn(fb)
+//     Cm2 (outer, spans stages 2-3): out -[IPRB2]- n1
+//     Cm1 (inner, spans stage 3):    out -[IPRB1]- n2
+// gm2 non-inverting into n2, gm3 the inverting output stage: the two Miller
+// loops are negative feedback, the outer feedback loop is negative. The three
+// nested loops -> IPRB0 (outer), IPRB2 (Cm2), IPRB1 (Cm1).
+//
+// Sizing (local, exact): outer loop |T(0)|=21266, PM 82.95 deg @ 2.651 MHz;
+// closed-loop poles -18.87 MHz + (-104.6 +/- 142.4j) MHz. Uncompensated
+// (both Miller caps removed) is unstable; the inner cap alone does not
+// stabilize -- both nested caps are needed (the NMC story).
+//
+//   spectre tb_nmc3.scs -format psfascii -raw ./psf +log nmc3.log
+simulator lang=spectre
+global 0
+
+VIN (inp 0) vsource dc=0 mag=1 type=dc
+
+// ---- stage 1: gm1 = 100 uS, senses (inp, inn); Ro1 = 200k, C1 = 300 fF
+G1 (n1 0 inp inn) vccs gm=100u
+R1 (n1 0) resistor r=200k
+CN1 (n1 0) capacitor c=300f
+// ---- stage 2: gm2 = 300 uS, senses n1 (out into n2); Ro2 = 200k, C2 = 300 fF
+G2 (0 n2 n1 0) vccs gm=300u
+R2 (n2 0) resistor r=200k
+CN2 (n2 0) capacitor c=300f
+// ---- stage 3 (output): gm3 = 3 mS, senses n2 (inverting); Ro3 = 10k, CL = 10 pF
+G3 (out 0 n2 0) vccs gm=3m
+R3 (out 0) resistor r=10k
+CL (out 0) capacitor c=10p
+// ---- inner Miller Cm1 = 2 pF (out <-> n2) through iprobe IPRB1
+CM1 (out n2i) capacitor c=2p
+IPRB1 (n2i n2) iprobe
+// ---- outer Miller Cm2 = 6 pF (out <-> n1) through iprobe IPRB2
+CM2 (out n1i) capacitor c=6p
+IPRB2 (n1i n1) iprobe
+// ---- outer unity feedback out -> inn through iprobe IPRB0
+IPRB0 (out inn) iprobe
+
+simulatorOptions options psfversion="1.4.0" temp=27 tnom=27 scalem=1.0 \
+    scale=1.0 gmin=1e-12 rforce=1 maxnotes=5 maxwarns=5 digits=8 cols=80 \
+    pivrel=1e-3
+stb stb start=1 stop=10G dec=40 probe=IPRB0 annotate=status
+dcOp dc write="spectre.dc" maxiters=150 maxsteps=10000 annotate=status
+dcOpInfo info what=oppoint where=rawfile
+saveOptions options save=allpub

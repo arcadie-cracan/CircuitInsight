@@ -1,0 +1,691 @@
+{
+ "cin_version": "0.1",
+ "design": {
+  "name": "tb_fdota_stb",
+  "source": {
+   "kind": "hand",
+   "deck": "tb_fdota_stb.scs"
+  }
+ },
+ "top": "tb_fdota",
+ "ground": [
+  "0",
+  "gnd!"
+ ],
+ "globals": [
+  "vdd!"
+ ],
+ "definitions": {
+  "tb_fdota": {
+   "ports": [],
+   "instances": [
+    {
+     "name": "VSUP",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "vdd!",
+      "n": "gnd!"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "vdc"
+     }
+    },
+    {
+     "name": "VIND",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "vin_dm",
+      "n": "gnd!"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "vdc"
+     },
+     "params": {
+      "acm": "1"
+     }
+    },
+    {
+     "name": "VINC",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "vin_cm",
+      "n": "gnd!"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "vdc"
+     }
+    },
+    {
+     "name": "VCMR",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "vcmref",
+      "n": "gnd!"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "vdc"
+     }
+    },
+    {
+     "name": "I5",
+     "device_type": "balun",
+     "terminals": {
+      "d": "vin_dm",
+      "c": "vin_cm",
+      "p": "srcp",
+      "n": "srcn"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "ideal_balun"
+     }
+    },
+    {
+     "name": "R1A",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "srcp",
+      "n": "inn"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "res"
+     }
+    },
+    {
+     "name": "R1B",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "srcn",
+      "n": "inp"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "res"
+     }
+    },
+    {
+     "name": "R2A",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "voutp",
+      "n": "inn"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "res"
+     }
+    },
+    {
+     "name": "R2B",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "voutn",
+      "n": "inp"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "res"
+     }
+    },
+    {
+     "name": "I0",
+     "subckt": "fdota2s",
+     "terminals": {
+      "outp": "outpi",
+      "outn": "outni",
+      "vdd": "vdd!",
+      "inp": "inp",
+      "inn": "inn",
+      "vss": "gnd!",
+      "vbn": "vbn",
+      "vcmsense": "vcm_sense",
+      "vcmref": "vcmref"
+     }
+    },
+    {
+     "name": "FDPRB",
+     "subckt": "fd_probe",
+     "terminals": {
+      "in1": "outpi",
+      "in2": "outni",
+      "out1": "voutp",
+      "out2": "voutn"
+     }
+    },
+    {
+     "name": "CLP",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "voutp",
+      "n": "gnd!"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     }
+    },
+    {
+     "name": "CLN",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "voutn",
+      "n": "gnd!"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     }
+    },
+    {
+     "name": "RCMA",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "voutp",
+      "n": "vcm_sense"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "res"
+     }
+    },
+    {
+     "name": "RCMB",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "voutn",
+      "n": "vcm_sense"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "res"
+     }
+    },
+    {
+     "name": "CCMA",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "voutp",
+      "n": "vcm_sense"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     }
+    },
+    {
+     "name": "CCMB",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "voutn",
+      "n": "vcm_sense"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     }
+    },
+    {
+     "name": "IB",
+     "device_type": "isource",
+     "terminals": {
+      "p": "vdd!",
+      "n": "vbn"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "idc"
+     }
+    },
+    {
+     "name": "MN2",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "vbn",
+      "g": "vbn",
+      "s": "gnd!",
+      "b": "gnd!"
+     },
+     "params": {
+      "polarity": "n",
+      "m": "2"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "w": "iPar(\"totalW\")",
+      "nf": "1",
+      "cell": "nfet_01v8",
+      "l": "1u"
+     }
+    }
+   ]
+  },
+  "fdota2s": {
+   "ports": [
+    "outp",
+    "outn",
+    "vdd",
+    "inp",
+    "inn",
+    "vss",
+    "vbn",
+    "vcmsense",
+    "vcmref"
+   ],
+   "instances": [
+    {
+     "name": "MN2",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "tail",
+      "g": "vbn",
+      "s": "vss",
+      "b": "vss"
+     },
+     "params": {
+      "polarity": "n",
+      "m": "2"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "w": "iPar(\"totalW\")",
+      "nf": "1",
+      "cell": "nfet_01v8",
+      "l": "1u"
+     }
+    },
+    {
+     "name": "MN1P",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "x1p",
+      "g": "inp",
+      "s": "tail",
+      "b": "vss"
+     },
+     "params": {
+      "polarity": "n",
+      "m": "1"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "w": "iPar(\"totalW\")",
+      "nf": "1",
+      "cell": "nfet_01v8",
+      "l": "2u"
+     }
+    },
+    {
+     "name": "MN1N",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "x1n",
+      "g": "inn",
+      "s": "tail",
+      "b": "vss"
+     },
+     "params": {
+      "polarity": "n",
+      "m": "1"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "w": "iPar(\"totalW\")",
+      "nf": "1",
+      "cell": "nfet_01v8",
+      "l": "2u"
+     }
+    },
+    {
+     "name": "MPLP",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "x1p",
+      "g": "vcmfb",
+      "s": "vdd",
+      "b": "vdd"
+     },
+     "params": {
+      "polarity": "p",
+      "m": "2"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "w": "iPar(\"totalW\")",
+      "nf": "1",
+      "cell": "pfet_01v8",
+      "l": "2u"
+     }
+    },
+    {
+     "name": "MPLN",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "x1n",
+      "g": "vcmfb",
+      "s": "vdd",
+      "b": "vdd"
+     },
+     "params": {
+      "polarity": "p",
+      "m": "2"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "w": "iPar(\"totalW\")",
+      "nf": "1",
+      "cell": "pfet_01v8",
+      "l": "2u"
+     }
+    },
+    {
+     "name": "MP2P",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "outp",
+      "g": "x1p",
+      "s": "vdd",
+      "b": "vdd"
+     },
+     "params": {
+      "polarity": "p",
+      "m": "4"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "w": "iPar(\"totalW\")",
+      "nf": "1",
+      "cell": "pfet_01v8",
+      "l": "1u"
+     }
+    },
+    {
+     "name": "MN3P",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "outp",
+      "g": "vbn",
+      "s": "vss",
+      "b": "vss"
+     },
+     "params": {
+      "polarity": "n",
+      "m": "4"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "w": "iPar(\"totalW\")",
+      "nf": "1",
+      "cell": "nfet_01v8",
+      "l": "1u"
+     }
+    },
+    {
+     "name": "MP2N",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "outn",
+      "g": "x1n",
+      "s": "vdd",
+      "b": "vdd"
+     },
+     "params": {
+      "polarity": "p",
+      "m": "4"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "w": "iPar(\"totalW\")",
+      "nf": "1",
+      "cell": "pfet_01v8",
+      "l": "1u"
+     }
+    },
+    {
+     "name": "MN3N",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "outn",
+      "g": "vbn",
+      "s": "vss",
+      "b": "vss"
+     },
+     "params": {
+      "polarity": "n",
+      "m": "4"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "w": "iPar(\"totalW\")",
+      "nf": "1",
+      "cell": "nfet_01v8",
+      "l": "1u"
+     }
+    },
+    {
+     "name": "CCP",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "netp",
+      "n": "outp"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     }
+    },
+    {
+     "name": "RZP",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "x1p",
+      "n": "netp"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "res"
+     }
+    },
+    {
+     "name": "CCN",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "netn",
+      "n": "outn"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     }
+    },
+    {
+     "name": "RZN",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "x1n",
+      "n": "netn"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "res"
+     }
+    },
+    {
+     "name": "MNT",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "ctail",
+      "g": "vbn",
+      "s": "vss",
+      "b": "vss"
+     },
+     "params": {
+      "polarity": "n",
+      "m": "1"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "w": "iPar(\"totalW\")",
+      "nf": "1",
+      "cell": "nfet_01v8",
+      "l": "1u"
+     }
+    },
+    {
+     "name": "MNS",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "vcmfb",
+      "g": "vcmsense",
+      "s": "ctail",
+      "b": "vss"
+     },
+     "params": {
+      "polarity": "n",
+      "m": "1"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "w": "iPar(\"totalW\")",
+      "nf": "1",
+      "cell": "nfet_01v8",
+      "l": "2u"
+     }
+    },
+    {
+     "name": "MNR",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "dumm",
+      "g": "vcmref",
+      "s": "ctail",
+      "b": "vss"
+     },
+     "params": {
+      "polarity": "n",
+      "m": "1"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "w": "iPar(\"totalW\")",
+      "nf": "1",
+      "cell": "nfet_01v8",
+      "l": "2u"
+     }
+    },
+    {
+     "name": "MPA",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "vcmfb",
+      "g": "vcmfb",
+      "s": "vdd",
+      "b": "vdd"
+     },
+     "params": {
+      "polarity": "p",
+      "m": "1"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "w": "iPar(\"totalW\")",
+      "nf": "1",
+      "cell": "pfet_01v8",
+      "l": "2u"
+     }
+    },
+    {
+     "name": "MPB",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "dumm",
+      "g": "dumm",
+      "s": "vdd",
+      "b": "vdd"
+     },
+     "params": {
+      "polarity": "p",
+      "m": "1"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "w": "iPar(\"totalW\")",
+      "nf": "1",
+      "cell": "pfet_01v8",
+      "l": "2u"
+     }
+    }
+   ]
+  },
+  "fd_probe": {
+   "ports": [
+    "in1",
+    "in2",
+    "out1",
+    "out2"
+   ],
+   "instances": [
+    {
+     "name": "BI",
+     "device_type": "balun",
+     "terminals": {
+      "d": "dmi",
+      "c": "cmi",
+      "p": "in1",
+      "n": "in2"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "ideal_balun"
+     }
+    },
+    {
+     "name": "BO",
+     "device_type": "balun",
+     "terminals": {
+      "d": "dmo",
+      "c": "cmo",
+      "p": "out1",
+      "n": "out2"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "ideal_balun"
+     }
+    },
+    {
+     "name": "IPRB_DM",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "dmi",
+      "n": "dmo"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "iprobe",
+      "note": "Tian probe: 0 V series branch, joins the stb run's iprobe OP record"
+     },
+     "params": {}
+    },
+    {
+     "name": "IPRB_CM",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "cmi",
+      "n": "cmo"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "iprobe",
+      "note": "Tian probe: 0 V series branch, joins the stb run's iprobe OP record"
+     },
+     "params": {}
+    }
+   ]
+  }
+ }
+}

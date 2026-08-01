@@ -1,0 +1,46 @@
+// r2r_bias_pos_loop.scs (SKY130) -- floating-pair isolation bench: two
+// common-gate devices (MN0/MP0) in a positive-feedback ring closed through
+// the Tian probe VPRB; switches tie the sources to fixed bias in DC and to
+// the sense resistors RSN/RSP in AC. IT (mag=1) measures the closed-loop
+// node resistance at vsn in the ac sweep. stb loopGain(1 mHz) = +1.0041:
+// over unity via the impact-ionization conductances (gii_d/gii_m in the
+// CIN fixtures); the first-order model is provably sub-unity here.
+//   spectre -64 input.scs -format psfascii -raw ./psf +log run.log
+// SKY130 regeneration of the original foundry-PDK bench
+// (devices nfet/pfet_g5v0d10v5, section=tt).
+simulator lang=spectre
+global 0 vdd!
+include "<pdk-models>" section=tt
+parameters temperature=27
+
+IT (0 vsn) isource mag=1 type=dc
+S1 (net5 vsn) switch position=0 dc_position=1 ac_position=0 \
+        tran_position=0 ic_position=0
+S3 (vsp net10) switch position=0 dc_position=1 ac_position=0 \
+        tran_position=0 ic_position=0
+S0 (net4 vsn) switch position=0 dc_position=0 ac_position=1 \
+        tran_position=0 ic_position=0
+S2 (vsp net8) switch position=0 dc_position=0 ac_position=1 \
+        tran_position=0 ic_position=0
+RSN (0 net4) resistor r=707.1312M
+RSP (net8 vdd!) resistor r=54.1351M
+MN0 (net3 vgn vsn 0) nfet_g5v0d10v5 w=(5u) l=1u nf=1 as=(1.325p) \
+        ad=(1.325p) ps=(10.53u) pd=(10.53u) nrd=0.068000 nrs=0.068000 \
+        sa=0.265u sb=0.265u sd=0u m=4
+MP0 (vsn vgp vsp vdd!) pfet_g5v0d10v5 w=(4u) l=1u nf=1 as=(1.06p) \
+        ad=(1.06p) ps=(8.53u) pd=(8.53u) nrd=0.085000 nrs=0.085000 \
+        sa=0.265u sb=0.265u sd=0u m=4
+VPRB (vsp net3) vsource type=dc
+VSUP (vdd! 0) vsource dc=5.5 type=dc
+VB_SN (net5 0) vsource dc=0.75 type=dc
+VB_GN (vgn 0) vsource dc=2.05 type=dc
+VB_GP (vgp 0) vsource dc=3.35 type=dc
+VB_SP (net10 0) vsource dc=4.75 type=dc
+simulatorOptions options psfversion="1.4.0" temp=27 tnom=27 scalem=1.0 \
+    scale=1.0 gmin=1e-12 rforce=1 maxnotes=5 maxwarns=5 digits=5 cols=80 \
+    pivrel=1e-3
+stb stb start=1m stop=10G dec=20 probe=VPRB annotate=status
+ac ac start=1m stop=10G dec=20 annotate=status
+dcOp dc write="spectre.dc" maxiters=150 maxsteps=10000 annotate=status
+dcOpInfo info what=oppoint where=rawfile
+saveOptions options save=allpub

@@ -1,0 +1,496 @@
+{
+ "cin_version": "0.1",
+ "design": {
+  "name": "tb_nmc3d",
+  "source": {
+   "kind": "hand",
+   "note": "behavioral fd gm-C 3-stage nested-Miller; matches tb_nmc3d.scs"
+  }
+ },
+ "top": "tb_nmc3d",
+ "ground": [
+  "0"
+ ],
+ "globals": [],
+ "definitions": {
+  "tb_nmc3d": {
+   "ports": [],
+   "instances": [
+    {
+     "name": "G1p",
+     "device_type": "vccs",
+     "terminals": {
+      "p": "n1p",
+      "n": "0",
+      "cp": "inp",
+      "cn": "inn"
+     },
+     "params": {
+      "gm": "100u"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "vccs"
+     }
+    },
+    {
+     "name": "R1p",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "n1p",
+      "n": "0"
+     },
+     "params": {
+      "r": "200k"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "res"
+     }
+    },
+    {
+     "name": "CN1p",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "n1p",
+      "n": "0"
+     },
+     "params": {
+      "c": "300f"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     }
+    },
+    {
+     "name": "G2p",
+     "device_type": "vccs",
+     "terminals": {
+      "p": "0",
+      "n": "n2p",
+      "cp": "n1p",
+      "cn": "0"
+     },
+     "params": {
+      "gm": "300u"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "vccs"
+     }
+    },
+    {
+     "name": "R2p",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "n2p",
+      "n": "0"
+     },
+     "params": {
+      "r": "200k"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "res"
+     }
+    },
+    {
+     "name": "CN2p",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "n2p",
+      "n": "0"
+     },
+     "params": {
+      "c": "300f"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     }
+    },
+    {
+     "name": "G3p",
+     "device_type": "vccs",
+     "terminals": {
+      "p": "outp",
+      "n": "0",
+      "cp": "n2p",
+      "cn": "0"
+     },
+     "params": {
+      "gm": "3m"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "vccs"
+     }
+    },
+    {
+     "name": "R3p",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "outp",
+      "n": "0"
+     },
+     "params": {
+      "r": "10k"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "res"
+     }
+    },
+    {
+     "name": "CLp",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "outp",
+      "n": "0"
+     },
+     "params": {
+      "c": "10p"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     }
+    },
+    {
+     "name": "CM1p",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "outp",
+      "n": "n2ip"
+     },
+     "params": {
+      "c": "2p"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     }
+    },
+    {
+     "name": "IPRB1p",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "n2ip",
+      "n": "n2p"
+     },
+     "params": {},
+     "meta": {
+      "lib": "analogLib",
+      "cell": "iprobe"
+     }
+    },
+    {
+     "name": "CM2p",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "outp",
+      "n": "n1ip"
+     },
+     "params": {
+      "c": "6p"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     }
+    },
+    {
+     "name": "IPRB2p",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "n1ip",
+      "n": "n1p"
+     },
+     "params": {},
+     "meta": {
+      "lib": "analogLib",
+      "cell": "iprobe"
+     }
+    },
+    {
+     "name": "G1n",
+     "device_type": "vccs",
+     "terminals": {
+      "p": "n1n",
+      "n": "0",
+      "cp": "inn",
+      "cn": "inp"
+     },
+     "params": {
+      "gm": "100u"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "vccs"
+     }
+    },
+    {
+     "name": "R1n",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "n1n",
+      "n": "0"
+     },
+     "params": {
+      "r": "200k"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "res"
+     }
+    },
+    {
+     "name": "CN1n",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "n1n",
+      "n": "0"
+     },
+     "params": {
+      "c": "300f"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     }
+    },
+    {
+     "name": "G2n",
+     "device_type": "vccs",
+     "terminals": {
+      "p": "0",
+      "n": "n2n",
+      "cp": "n1n",
+      "cn": "0"
+     },
+     "params": {
+      "gm": "300u"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "vccs"
+     }
+    },
+    {
+     "name": "R2n",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "n2n",
+      "n": "0"
+     },
+     "params": {
+      "r": "200k"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "res"
+     }
+    },
+    {
+     "name": "CN2n",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "n2n",
+      "n": "0"
+     },
+     "params": {
+      "c": "300f"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     }
+    },
+    {
+     "name": "G3n",
+     "device_type": "vccs",
+     "terminals": {
+      "p": "outn",
+      "n": "0",
+      "cp": "n2n",
+      "cn": "0"
+     },
+     "params": {
+      "gm": "3m"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "vccs"
+     }
+    },
+    {
+     "name": "R3n",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "outn",
+      "n": "0"
+     },
+     "params": {
+      "r": "10k"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "res"
+     }
+    },
+    {
+     "name": "CLn",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "outn",
+      "n": "0"
+     },
+     "params": {
+      "c": "10p"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     }
+    },
+    {
+     "name": "CM1n",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "outn",
+      "n": "n2in"
+     },
+     "params": {
+      "c": "2p"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     }
+    },
+    {
+     "name": "IPRB1n",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "n2in",
+      "n": "n2n"
+     },
+     "params": {},
+     "meta": {
+      "lib": "analogLib",
+      "cell": "iprobe"
+     }
+    },
+    {
+     "name": "CM2n",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "outn",
+      "n": "n1in"
+     },
+     "params": {
+      "c": "6p"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "cap"
+     }
+    },
+    {
+     "name": "IPRB2n",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "n1in",
+      "n": "n1n"
+     },
+     "params": {},
+     "meta": {
+      "lib": "analogLib",
+      "cell": "iprobe"
+     }
+    },
+    {
+     "name": "BI",
+     "device_type": "balun",
+     "terminals": {
+      "d": "dmi",
+      "c": "cmi",
+      "p": "outp",
+      "n": "outn"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "ideal_balun"
+     }
+    },
+    {
+     "name": "BO",
+     "device_type": "balun",
+     "terminals": {
+      "d": "dmo",
+      "c": "cmo",
+      "p": "voutp",
+      "n": "voutn"
+     },
+     "meta": {
+      "lib": "analogLib",
+      "cell": "ideal_balun"
+     }
+    },
+    {
+     "name": "IPRB_DM",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "dmi",
+      "n": "dmo"
+     },
+     "params": {},
+     "meta": {
+      "lib": "analogLib",
+      "cell": "iprobe"
+     }
+    },
+    {
+     "name": "IPRB_CM",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "cmi",
+      "n": "cmo"
+     },
+     "params": {},
+     "meta": {
+      "lib": "analogLib",
+      "cell": "iprobe"
+     }
+    },
+    {
+     "name": "FBP",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "voutp",
+      "n": "inn"
+     },
+     "params": {},
+     "meta": {
+      "lib": "analogLib",
+      "cell": "iprobe"
+     }
+    },
+    {
+     "name": "FBN",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "voutn",
+      "n": "inp"
+     },
+     "params": {},
+     "meta": {
+      "lib": "analogLib",
+      "cell": "iprobe"
+     }
+    }
+   ]
+  }
+ }
+}
