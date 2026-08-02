@@ -100,7 +100,8 @@ class MainWindow(QMainWindow):
         self._t0: float | None = None
         self._phase = ""
         self._phase_units: tuple = (None, None)
-        self._est_s: float | None = None
+        self._est_s: float | None = None      # keep-set label
+        self._run_est: float | None = None    # the RUNNING job
         self._live_est: float | None = None   # estimate refined mid-solve
         self._calib_thread = None             # one-shot calibration
         self._phase_t0: float | None = None   # current phase started
@@ -213,15 +214,18 @@ class MainWindow(QMainWindow):
         # enforced where |H| stays within this many dB of the band peak
         # -- relative error deep in a stopband is noise, but the window
         # is the user's to widen (200 ~ the whole band, strictly)
-        self.floor_spin = self._spin(60.0, 20.0, 200.0, 10.0, " dB window")
+        self.floor_spin = self._spin(0.0, -120.0, 80.0, 10.0, " dB floor")
         self.floor_spin.setDecimals(0)
         self.floor_spin.setToolTip(
-            "Where the error budget is ENFORCED: the part of the band in "
-            "which |H| stays within this many dB of its peak. Below that, "
-            "relative dB error is stopband noise. 60 dB covers the useful "
-            "dynamic range; raise toward 200 dB to enforce the full band "
-            "strictly (expect more reactances kept). The result's note "
-            "always names the band actually enforced.")
+            "Where the error budget is ENFORCED: everywhere |H| is at "
+            "least this level. An ABSOLUTE level, not a drop from the "
+            "peak — the number that matters is where your question "
+            "lives. 0 dB (the default) enforces down to unity gain, so "
+            "the crossover region a phase margin depends on is covered; "
+            "go lower (-20, -40) to certify further into the rolloff, "
+            "higher to certify only the strong passband. Lower costs "
+            "more kept reactances. The result's note always names the "
+            "band actually enforced.")
         self._floor_act = tb.addWidget(self.floor_spin)
         # budget spins only exist for the budgeted forms
         self._budget_lbl_act.setVisible(False)
@@ -314,6 +318,10 @@ class MainWindow(QMainWindow):
         # Two overlapping Bode curves cannot show a 0.5 dB residual. The Error
         # tab is where "how good is this model" actually becomes readable.
         self.err_canvas = FigureCanvasQTAgg(Figure(figsize=(5.2, 3.0)))
+        # the Error tab is often first SHOWN long after the solve, and
+        # its pane resizes independently: re-align on its own draws too
+        self.err_canvas.mpl_connect("draw_event",
+                                    lambda _e: self._align_error_axes())
         tabs = QTabWidget()
         # a live operations log: what ran, in which phase, how long it
         # took and how that compared with the estimate. The status bar
@@ -1401,7 +1409,7 @@ class MainWindow(QMainWindow):
             run,
             f"resolving each numeral of {inp} → {out} (hybrid-grid "
             f"derivative sweep) …",
-            on_done=self._on_explain_deep_done)
+            on_done=self._on_explain_deep_done, est_s=None)
 
     def _shown_numerals(self) -> dict:
         """(part, k) -> the collapsed numeral the expression displays for
@@ -1468,7 +1476,7 @@ class MainWindow(QMainWindow):
             lambda cb: self.controller.scan_removals(inp, out,
                                                      budget_db=budget),
             f"pricing element removals for {inp} → {out} …",
-            on_done=self._on_removal_scan_done)
+            on_done=self._on_removal_scan_done, est_s=None)
 
     def _on_removal_scan_done(self, rep):
         self._tick.stop()
@@ -1496,7 +1504,7 @@ class MainWindow(QMainWindow):
         self._launch(
             lambda cb: self.controller.pole_attribution(inp),
             f"attributing poles of {inp}'s network …",
-            on_done=self._on_attribution_done)
+            on_done=self._on_attribution_done, est_s=None)
 
     def _on_attribution_done(self, atts):
         self._tick.stop()
@@ -1526,7 +1534,7 @@ class MainWindow(QMainWindow):
             lambda cb: self.controller.explain_numerals(inp, out, keep=keep,
                                                         progress=cb),
             f"explaining the numbers of {inp} → {out} …",
-            on_done=self._on_explain_done)
+            on_done=self._on_explain_done, est_s=None)
 
     def _on_explain_done(self, stories):
         self._tick.stop()
@@ -1563,7 +1571,7 @@ class MainWindow(QMainWindow):
             lambda cb: self.controller.scan_ac_grounds(inp, out,
                                                        budget_db=budget),
             f"scanning AC-ground candidates for {inp} → {out} …",
-            on_done=self._on_acg_scan_done)
+            on_done=self._on_acg_scan_done, est_s=None)
 
     def _on_acg_scan_done(self, rep):
         self._tick.stop()
@@ -1737,7 +1745,7 @@ class MainWindow(QMainWindow):
             lambda cb: self.controller.apply_reduction(nodes, inp=inp,
                                                        out=out),
             f"applying reduction ({', '.join(nodes)}) …",
-            on_done=self._on_reduction_applied)
+            on_done=self._on_reduction_applied, est_s=None)
 
     def _on_reduction_applied(self, summ):
         self._tick.stop()
@@ -2918,7 +2926,11 @@ class MainWindow(QMainWindow):
                 f"suggested keep-set ({len(keep)} symbols): {keep}")
 
     # ---------------------------------------------------------------- solve
-    def _launch(self, fn, label, on_done=None):
+    #: sentinel: "use the keep-set estimate" (a solve), vs an explicit
+    #: value or None for jobs the keep-set estimator does not describe
+    _KEEP_EST = object()
+
+    def _launch(self, fn, label, on_done=None, est_s=_KEEP_EST):
         for b in (self.solve_btn,
                   self.a_solve, self.a_simplify, self.a_reduce):
             b.setEnabled(False)
@@ -2926,7 +2938,12 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 0)      # busy until an estimate exists
         self._live_est = None             # fresh launch, fresh refinement
         self._t0 = time.monotonic()
-        est = f"  [estimate ~{self._est_s:.0f}s]" if self._est_s else ""
+        # an advisory pass is NOT priced by the keep-set estimator; it
+        # used to inherit the solve's number and log a promise that
+        # belonged to a different analysis entirely
+        self._run_est = (self._est_s if est_s is self._KEEP_EST else est_s)
+        est = (f"  [estimate ~{self._run_est:.0f}s]" if self._run_est
+               else "  [no estimate for this pass]")
         self.log(f"START {label.rstrip(' …')}{est}")
         self._phase_totals, self._phase_runs = {}, {}
         self._phase, self._phase_t0 = None, None
@@ -3047,6 +3064,21 @@ class MainWindow(QMainWindow):
         if "lowest" in form:
             fmin, fmax = self.band_slider.values()
             mask = (f >= fmin) & (f <= fmax)
+            # ...and only where the budget is ENFORCED. The window means
+            # the pursuit checks the error where |H| is within N dB of
+            # its peak; a tube drawn past that promises accuracy nobody
+            # measured -- exactly the misleading decoration. Prefer the
+            # solved result's own enforced band, else the live window.
+            lo = getattr(r, "enforced_fmin", None)
+            hi = getattr(r, "enforced_fmax", None)
+            if lo and hi:
+                mask &= (f >= lo) & (f <= hi)
+            else:
+                # the same criterion the pursuit uses: the stated floor
+                # widened by the magnitude budget (the crossing can sit
+                # anywhere within it)
+                floor = self.floor_spin.value() - abs(self.mag_spin.value())
+                mask &= np.abs(h) >= 10.0 ** (floor / 20.0)
         if not mask.any():
             self.canvas.draw_idle()
             return
@@ -3060,6 +3092,38 @@ class MainWindow(QMainWindow):
                 f[mask], ph[mask] - pd, ph[mask] + pd,
                 color="#c9962a", alpha=0.18, zorder=0))
         self.canvas.draw_idle()
+
+    def _align_error_axes(self):
+        """Put the Error plots' frequency axis at the same WINDOW x range
+        as the Bode's. Both figures run tight_layout, but the residual's
+        y labels are wider, so equal fractions are not equal pixels --
+        and the two canvases have different widths anyway. Map through
+        window coordinates instead, and only move when it actually
+        differs so the draw loop converges."""
+        from PySide6.QtCore import QPoint
+
+        mains = self.canvas.figure.axes
+        errs = self.err_canvas.figure.axes
+        if not mains or not errs or self.err_canvas.width() < 50:
+            return
+        mpos = mains[0].get_position()
+        mx0 = self.canvas.mapTo(self, QPoint(0, 0)).x()
+        mw = self.canvas.width()
+        left_px = mx0 + mpos.x0 * mw
+        right_px = mx0 + mpos.x1 * mw
+        ex0 = self.err_canvas.mapTo(self, QPoint(0, 0)).x()
+        ew = max(1, self.err_canvas.width())
+        left = (left_px - ex0) / ew
+        right = (right_px - ex0) / ew
+        if not (0.0 <= left < right <= 1.0):
+            return                              # off-canvas: leave it be
+        cur = errs[0].get_position()
+        if abs(cur.x0 - left) < 0.002 and abs(cur.x1 - right) < 0.002:
+            return                              # already aligned
+        for ax in errs:
+            p = ax.get_position()
+            ax.set_position([left, p.y0, right - left, p.height])
+        self.err_canvas.draw_idle()
 
     def _sync_band_row(self):
         """Keep the slider groove visually aligned with the Bode's
@@ -3080,6 +3144,7 @@ class MainWindow(QMainWindow):
             lay.setContentsMargins(left, m.top(), right, m.bottom())
         # the legend's measured anchor also drifts with canvas height
         view.refresh_legend(self.canvas.figure)
+        self._align_error_axes()      # the residual tracks the Bode
 
     def _on_band_changed(self, fmin: float, fmax: float):
         """Mirror the chosen band onto every axis of the Bode — the
@@ -3142,10 +3207,11 @@ class MainWindow(QMainWindow):
             lambda cb: self.controller.attach_template(
                 self.controller.reduce_solve(
                     inp, out, keep, tol_db=mag, mag_db=mag, phase_deg=ph,
-                    fmin=fmin, fmax=fmax, floor_db=floor, progress=cb)),
+                    fmin=fmin, fmax=fmax, floor_abs_db=floor,
+                    progress=cb)),
             f"reducing {inp} → {out} within {mag} dB over "
             f"{view.eng(fmin, 'Hz')}–{view.eng(fmax, 'Hz')} "
-            f"({floor:g} dB window) …")
+            f"(enforced down to {floor:g} dB) …")
 
     def solve_sync(self):
         inp, out = self._io()
@@ -3180,7 +3246,7 @@ class MainWindow(QMainWindow):
             inp, out, self.checked_keep(),
             tol_db=self.mag_spin.value(), mag_db=self.mag_spin.value(),
             phase_deg=self.phase_spin.value(), fmin=fmin, fmax=fmax,
-            floor_db=self.floor_spin.value())))
+            floor_abs_db=self.floor_spin.value())))
         return self.result
 
     #: keep the log bounded -- it is a session record, not a data store
@@ -3231,6 +3297,12 @@ class MainWindow(QMainWindow):
             tail = f", est ~{est:.0f}s" if est else ""
             took = f" [{prev} took {dur:.1f}s]" if prev and dur else ""
             self.log(f"  phase: {phase} (at {el:.0f}s{tail}){took}")
+            if phase == "reconstructing" and prev == "evaluating" and dur:
+                # reconstruction is the DOMINANT phase (measured 90% of a
+                # sparse solve) and no cost model prices it. The learned
+                # ratio turns the end of evaluation into a real
+                # projection instead of a bar creeping on elapsed.
+                self._project_from_recon_ratio(dur)
         else:
             self._phase = phase
             self._phase_units = (done, total)
@@ -3270,12 +3342,12 @@ class MainWindow(QMainWindow):
         el = time.monotonic() - self._t0
         done, total = self._phase_units
         units = f" {done}/{total}" if total else ""
-        live = self._live_est or self._est_s    # keep refinements across phases
+        live = self._live_est or self._run_est  # keep refinements across phases
         if total and done:
             frac = done / total
             observed = el / frac                # projected total from data
             w = frac                            # confidence grows with coverage
-            prior = self._est_s
+            prior = self._run_est
             live = observed if not prior else (1 - w) * prior + w * observed
         elif live and el > live:
             # no units to project from (reconstruction, a direct symbolic
@@ -3293,7 +3365,7 @@ class MainWindow(QMainWindow):
             # elapsed rarely overtakes it -- what the user needs to see
             # is the live estimate having run away from the pre-solve one
             blown = (el > 1.2 * live
-                     or (self._est_s and live > 1.5 * self._est_s))
+                     or (self._run_est and live > 1.5 * self._run_est))
             if blown:
                 est += " (over)"
             self.progress.setRange(0, 1000)
@@ -3332,7 +3404,7 @@ class MainWindow(QMainWindow):
         promised, and which solver actually ran — the three numbers a
         report about a slow or surprising solve needs."""
         el = (time.monotonic() - self._t0) if self._t0 else 0.0
-        est = self._est_s
+        est = self._run_est
         acc = ""
         if est:
             acc = f" (estimate ~{est:.0f}s, {el / est:.1f}x)"
@@ -3391,6 +3463,30 @@ class MainWindow(QMainWindow):
         self._calib_thread.done.connect(finished)
         self._calib_thread.start()
 
+    def _solve_key(self) -> str:
+        try:
+            from ..engine import interp
+            tl = getattr(interp, "LAST_SOLVE", None) or {}
+        except Exception:                        # pragma: no cover
+            return "parallel"
+        if tl.get("backend") == "bot":
+            return "bot"
+        return "parallel" if tl.get("n_dense_dets", 0) else "serial"
+
+    def _project_from_recon_ratio(self, eval_s: float):
+        try:
+            from ..analysis import estimate as _est
+
+            r = getattr(_est.get_calibration(), "r_" + self._solve_key(), 1.0)
+        except Exception:                        # pragma: no cover
+            return
+        total = eval_s * (1.0 + r)
+        if total > (self._live_est or 0):
+            self._live_est = total
+            self.log(f"  projected total ~{total:.0f}s "
+                     f"(reconstruction runs ~{r:.1f}x evaluation here)")
+        self._refresh_progress()
+
     def _learn_from_solve(self):
         """Feed the finished solve back into this machine's persistent
         calibration: the pre-solve estimate vs the wall clock. The model
@@ -3398,7 +3494,7 @@ class MainWindow(QMainWindow):
         so on real circuits (reconstruction included) it runs low --
         this is what closes that gap over sessions instead of leaving
         every user with the factory number."""
-        if self._t0 is None or not self._est_s:
+        if self._t0 is None or not self._run_est:
             return
         actual = time.monotonic() - self._t0
         try:
@@ -3412,8 +3508,12 @@ class MainWindow(QMainWindow):
             # dense correction taught both the wrong thing
             key = "bot" if bk == "bot" else (
                 "parallel" if tl.get("n_dense_dets", 0) else "serial")
-            _est.observe(self._est_s, actual, parallel=(key != "serial"),
+            _est.observe(self._run_est, actual, parallel=(key != "serial"),
                          key=key)
+            ev = self._phase_totals.get("evaluating", 0.0)
+            rc = self._phase_totals.get("reconstructing", 0.0)
+            if ev > 0 and rc > 0:
+                _est.observe_phases(ev, rc, key=key)
         except Exception:
             pass                                # never break a finished solve
 
@@ -3515,6 +3615,7 @@ class MainWindow(QMainWindow):
         try:
             view.error_figure(result, self.err_canvas.figure)
             theme.style_figure(self.err_canvas.figure)
+            self._align_error_axes()
             self.err_canvas.draw_idle()
         except Exception:
             self.err_canvas.figure.clear()

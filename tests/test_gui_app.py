@@ -54,6 +54,7 @@ def test_progress_bar_is_time_driven_with_live_estimate(qapp, tmp_path):
         MainWindow.settings_path = None
     try:
         win._est_s = 10.0
+        win._run_est = 10.0          # what _launch records
         win._live_est = None
         win._t0 = _t.monotonic() - 2.0          # 2 s elapsed
         win._phase = "evaluating"
@@ -105,6 +106,7 @@ def test_rank_keeps_the_ticks_and_a_running_solve_keeps_its_estimate(
         # while a solve is in flight the estimate is frozen
         import time as _t
         win._est_s = 300.0
+        win._run_est = 300.0          # what _launch records
         win._t0 = _t.monotonic()
         for i in range(win.keep_tbl.rowCount()):  # empty the table
             win.keep_tbl.item(i, 0).setCheckState(Qt.Unchecked)
@@ -1202,6 +1204,7 @@ def test_log_tab_records_the_run(qapp, tmp_path):
 
         import time as _t
         win._est_s = 4.0
+        win._run_est = 4.0          # what _launch records
         win._t0 = _t.monotonic() - 8.0
         win._set_phase("evaluating", 5, 10)              # a phase change
         win._log_finish("DONE")
@@ -1236,6 +1239,7 @@ def test_log_reports_phase_durations_and_a_breakdown(qapp, tmp_path):
         MainWindow.settings_path = None
     try:
         win._est_s = 10.0
+        win._run_est = 10.0          # what _launch records
         win._t0 = _t.monotonic()
         win._phase_totals, win._phase_runs = {}, {}
         win._phase, win._phase_t0 = None, None
@@ -1257,4 +1261,140 @@ def test_log_reports_phase_durations_and_a_breakdown(qapp, tmp_path):
         assert "%" in win._phase_breakdown()
     finally:
         win._t0 = None
+        win.close()
+
+
+def test_error_plots_align_with_the_bode(qapp, tmp_path):
+    """The residual must sit under the main plots, frequency axis for
+    frequency axis. Both figures run tight_layout, but the Error tab's
+    y labels are wider ('Δ|H| (dB)'), so equal fractions are not equal
+    pixels -- and the two canvases have different widths. The alignment
+    is computed in WINDOW coordinates."""
+    from PySide6.QtCore import QPoint
+
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "gui.ini")
+    try:
+        win = MainWindow()
+    finally:
+        MainWindow.settings_path = None
+    try:
+        win.resize(1200, 800)
+        win.show()
+        qapp.processEvents()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"))
+            win.in_combo.setCurrentText("VIND")
+            win.out_combo.setCurrentText("vout")
+            win.solve_sync()
+        # the Error page must be SHOWN to be laid out (a hidden tab
+        # page keeps a stale width, and the aligner correctly declines
+        # rather than computing from it)
+        win.tabs.setCurrentWidget(win.err_canvas)
+        qapp.processEvents()
+        win.err_canvas.draw()
+        win._align_error_axes()
+        qapp.processEvents()
+
+        def span(canvas):
+            ax = canvas.figure.axes[0].get_position()
+            x0 = canvas.mapTo(win, QPoint(0, 0)).x()
+            w = canvas.width()
+            return x0 + ax.x0 * w, x0 + ax.x1 * w
+
+        ml, mr = span(win.canvas)
+        el, er = span(win.err_canvas)
+        assert abs(ml - el) <= 3 and abs(mr - er) <= 3   # within 3 px
+    finally:
+        win.close()
+
+
+def test_tolerance_tube_stops_where_enforcement_stops(qapp, tmp_path):
+    """The tube used to span the whole certification band, drawing a
+    promise across frequencies the pursuit never checked: the budget is
+    enforced only where |H| stays within the enforcement window of its
+    peak. The shaded region must equal the enforced region."""
+    import numpy as np
+
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "gui.ini")
+    try:
+        win = MainWindow()
+    finally:
+        MainWindow.settings_path = None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"))
+        win.in_combo.setCurrentText("VIND")
+        win.out_combo.setCurrentText("vout")
+    try:
+        win.mode_combo.setCurrentText("Transfer")
+        win.form_combo.setCurrentText("Simplified · lowest order")
+        win.band_slider.setValues(1.0, 1e10)
+
+        win.mag_spin.setValue(1.0)
+        win.floor_spin.setValue(-60.0)           # enforce deep into rolloff
+        win._update_tol_bands()
+        wide = win._tol_bands[0].get_paths()[0].vertices.shape[0]
+
+        win.floor_spin.setValue(20.0)            # only the strong passband
+        win._update_tol_bands()
+        narrow = win._tol_bands[0].get_paths()[0].vertices.shape[0]
+
+        assert narrow < wide, "a higher floor must shade a smaller region"
+
+        # and the shaded x-range must stay inside where |H| is within the
+        # window of its peak -- never beyond it
+        # ...and never past where |H| meets the floor, widened by the
+        # magnitude budget exactly as the pursuit widens it
+        f = np.asarray(win.result.freqs, dtype=float)
+        mag = np.abs(np.asarray(win.result.h))
+        keep = mag >= 10.0 ** ((20.0 - win.mag_spin.value()) / 20.0)
+        verts = win._tol_bands[0].get_paths()[0].vertices
+        assert verts[:, 0].max() <= f[keep].max() * 1.001
+    finally:
+        win.close()
+
+
+def test_advisory_passes_do_not_inherit_the_solve_estimate(qapp, tmp_path):
+    """Caught in the Log: 'START explaining the numbers ... [estimate
+    ~537s]' -- the explain passes had silently inherited the SOLVE's
+    estimate, which prices a completely different analysis. A job the
+    keep-set estimator does not describe must say so, and must not feed
+    its own wall time back into the solve-time model."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "gui.ini")
+    try:
+        win = MainWindow()
+    finally:
+        MainWindow.settings_path = None
+    try:
+        win._est_s = 537.0
+        win._run_est = 537.0          # what _launch records                       # a solve's estimate
+        launched = []
+        win._thread = None
+        orig = win._launch
+
+        def spy(fn, label, on_done=None, est_s=win._KEEP_EST):
+            launched.append((label, est_s))
+            win._run_est = (win._est_s if est_s is win._KEEP_EST else est_s)
+
+        win._launch = spy
+        win.controller = object()                # only the launch is exercised
+        win.result = None
+        win.explain_numbers()                    # needs no result
+        assert launched and launched[-1][1] is None
+        assert win._run_est is None              # no inherited promise
+
+        win._launch = orig
+        win._est_s = 537.0
+        win._run_est = 537.0          # what _launch records
+        win._run_est = win._est_s                # a real solve keeps its own
+        assert win._run_est == 537.0
+    finally:
+        win.controller = None
         win.close()

@@ -95,6 +95,18 @@ class Calibration:
     # learning could correct it. It learns on its own key now.
     k_bot: float = 1.0
     n_obs_bot: int = 0
+    # reconstruction / evaluation, learned per path. Both cost models
+    # price DETERMINANT EVALUATIONS, but the CRT lift, rational
+    # reconstruction and tensor assembly that follow were measured at
+    # 90% of a real sparse solve (482 s against 54 s). Knowing the ratio
+    # turns the moment evaluation ends into a real projection of the
+    # total instead of a bar creeping on elapsed alone.
+    r_serial: float = 1.0
+    r_parallel: float = 1.0
+    r_bot: float = 1.0
+    n_rec_serial: int = 0
+    n_rec_parallel: int = 0
+    n_rec_bot: int = 0
 
     def predict(self, raw: float, spread: float, parallel: bool) -> float:
         if parallel:
@@ -588,3 +600,23 @@ def plan_keep(analyzer, inp: str, out: str, budget_s: float,
     dropped = [n for n in ranked if n not in chosen]
     return KeepPlan(keep=chosen, dropped=dropped, estimate=est,
                     budget_s=budget_s, feasible=est.seconds <= budget_s)
+
+
+def observe_phases(eval_s: float, recon_s: float, key: str = "parallel",
+                   path=None) -> Calibration:
+    """Learn the reconstruction/evaluation ratio for one path. Same
+    geometric averaging and clamping as observe(): the ratio is a scale
+    factor, and one odd solve must not run away with it."""
+    if not (eval_s > 0 and recon_s >= 0):
+        return _CAL
+    ratio = max(recon_s / eval_s, 1e-3)
+    cal = replace(_CAL)
+    n = getattr(cal, "n_rec_" + key, 0)
+    r = getattr(cal, "r_" + key, 1.0)
+    w = max(_OBS_MIN_WEIGHT, 1.0 / (n + 1))
+    r_new = math.exp((1 - w) * math.log(r) + w * math.log(ratio))
+    setattr(cal, "r_" + key, min(max(r_new, 1e-3), _K_CLAMP))
+    setattr(cal, "n_rec_" + key, n + 1)
+    set_calibration(cal)
+    save_calibration(cal, path)
+    return cal

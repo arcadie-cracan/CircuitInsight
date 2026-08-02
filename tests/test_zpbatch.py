@@ -192,3 +192,149 @@ def test_prime_ceiling_is_high_enough_for_real_coefficients():
 
     for mod in (botsparse, ratfun, zpbatch):
         assert mod._MAX_PRIMES >= 256
+
+
+# ------------------------------------------------- S-G: where the time is
+def _residues(vals: list, primes: list[int]):
+    """Per-prime residue rows for exact rationals (a, b)."""
+    import numpy as np
+
+    return [np.array([a % p * pow(b, -1, p) % p for a, b in vals],
+                     dtype=np.int64) for p in primes]
+
+
+def test_lift_state_folds_only_the_new_primes():
+    """The incremental CRT cache must be bit-identical to the from-scratch
+    combine, and a grown prime list must extend the cached (val, mod)
+    rather than redo every prime -- the old full recombine cost 58.4 s
+    across 11 rounds on the fc 8-symbol solve."""
+    from circuitinsight.engine import zpbatch
+
+    all_primes = zpbatch._primes(24)
+    vals = [(7 * k + 1, 2 * k + 3) for k in range(1, 2600)]
+    stacks = _residues(vals, all_primes)
+
+    fresh = zpbatch._lift(stacks, all_primes)
+    state: dict = {}
+    for cut in (6, 14, 24):                   # three rounds, growing
+        rounds = zpbatch._lift(stacks[:cut], all_primes[:cut], state=state)
+    assert rounds == fresh
+    assert len(fresh) == len(vals)
+    assert fresh[0] == (8, 5)
+    assert state["k"] == 24                   # the cache followed the rounds
+
+    # a rewound or reordered prime list must invalidate the cache, not
+    # silently combine against the wrong modulus
+    other = zpbatch._lift(stacks[:6], all_primes[:6], state=state)
+    assert other is not None
+    assert state["k"] == 6
+
+
+def test_lift_retests_the_hardest_coefficient_before_a_full_sweep():
+    """A doomed round must not pay for a full sweep. The coefficient that
+    failed last time is the one needing the most primes, so re-testing just
+    it rejects the round after one Euclid run."""
+    from circuitinsight.engine import zpbatch
+
+    primes = zpbatch._primes(4)               # far too few for a huge ratio
+    vals = [(3, 4)] * 400 + [(10 ** 40 + 7, 10 ** 39 + 3)]
+    stacks = _residues(vals, primes)
+
+    hard: list[int] = []
+    assert zpbatch._lift(stacks, primes, hard=hard) is None
+    assert hard == [400]                      # the offender is remembered
+
+    seen = []
+    orig = zpbatch._ratrec
+
+    def counting(u, m):
+        seen.append(1)
+        return orig(u, m)
+
+    zpbatch._ratrec = counting
+    try:
+        assert zpbatch._lift(stacks, primes, hard=hard) is None
+    finally:
+        zpbatch._ratrec = orig
+    assert len(seen) == 1                     # the probe alone, not 401
+
+
+def test_lift_clears_the_common_denominator_after_one_euclid():
+    """Tensor coefficients share Vandermonde-difference denominators, so
+    after the first full reconstruction the rest reduce to one mulmod each
+    (the FireFly clearing trick). Correctness net: confirming prime plus
+    the caller's exact probe check, unchanged."""
+    from circuitinsight.engine import zpbatch
+
+    primes = zpbatch._primes(24)
+    vals = [(k * 11 + 5, 840) for k in range(500)]   # one shared denominator
+    stacks = _residues(vals, primes)
+
+    seen = []
+    orig = zpbatch._ratrec
+
+    def counting(u, m):
+        seen.append(1)
+        return orig(u, m)
+
+    zpbatch._ratrec = counting
+    try:
+        out = zpbatch._lift(stacks, primes)
+    finally:
+        zpbatch._ratrec = orig
+    assert len(out) == len(vals)
+    from math import gcd
+    for ix, (a, b) in out.items():
+        va, vb = vals[ix]
+        g = gcd(va, vb)
+        assert (a, b) == (va // g, vb // g)
+    assert len(seen) <= 5                     # Euclid seeds; mulmod does the rest
+
+
+def test_prime_rounds_never_report_the_evaluation_as_finished(_system):
+    """done == total means "evaluation over, reconstruction next". The
+    mod-p backends add primes in rounds, so a completed round is NOT the
+    end -- reporting it as one mislabels every later round as
+    reconstruction and inflates that phase in the log."""
+    import warnings
+
+    from circuitinsight.engine import interp
+
+    seen = []
+    old = interp.PROBE_BACKEND
+    interp.PROBE_BACKEND = "bot"
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _system.tf("VIND", "vout",
+                       keep=["gm_I0_MN0", "gds_I0_MN0", "gds_I0_MP0"],
+                       method="interp",
+                       progress=lambda d, t: seen.append((d, t)))
+    finally:
+        interp.PROBE_BACKEND = old
+
+    assert seen, "the backend reported no progress at all"
+    # exactly one completion signal, and it is the last thing reported
+    done = [i for i, (d, t) in enumerate(seen) if t > 0 and d >= t]
+    assert done == [len(seen) - 1], f"boundary mislabelled: {seen}"
+
+
+def test_worker_cap_scales_with_the_machine():
+    """MEASURED (fc, 8 kept symbols, bot): 5039 s of worker CPU against
+    211 s in the parent -- ~96% parallel, so the pool size sets the wall
+    time. A fixed 10 left 22 of a 32-thread host idle."""
+    import os
+
+    from circuitinsight.engine.interp import _worker_cap
+
+    old = os.environ.get("CIRCUITINSIGHT_WORKERS")
+    try:
+        os.environ["CIRCUITINSIGHT_WORKERS"] = "17"
+        assert _worker_cap() == 17             # explicit override wins
+        os.environ.pop("CIRCUITINSIGHT_WORKERS")
+        assert _worker_cap() == max(1, (os.cpu_count() or 4) - 2)
+    finally:
+        if old is None:
+            os.environ.pop("CIRCUITINSIGHT_WORKERS", None)
+        else:
+            os.environ["CIRCUITINSIGHT_WORKERS"] = old

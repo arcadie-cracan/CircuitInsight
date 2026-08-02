@@ -124,6 +124,8 @@ def test_progress_text_names_the_phase_and_ticks_elapsed(qapp, win):
     import time as _t
 
     win._est_s = 4.0
+
+    win._run_est = 4.0          # what _launch records
     win._live_est = None
     win._t0 = _t.monotonic() - 1.0
     win._set_phase("preparing")
@@ -156,6 +158,8 @@ def test_progress_flags_an_estimate_that_has_been_blown(qapp, win):
     import time as _t
 
     win._est_s = 2.0
+
+    win._run_est = 2.0          # what _launch records
     win._live_est = None
     win._t0 = _t.monotonic() - 30.0
     win._set_phase("evaluating", 5, 40)

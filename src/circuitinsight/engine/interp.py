@@ -99,7 +99,25 @@ LAST_SOLVE: dict | None = None
 
 # parallelize the grid when there are at least this many QQ determinants
 _PARALLEL_MIN_DETS = 600
-_MAX_WORKERS = 10
+
+
+def _worker_cap() -> int:
+    """How many processes the mod-p prime rounds may use.
+
+    MEASURED (fc, 8 kept symbols, bot backend, 101 primes): 5039 s of worker
+    CPU against 211 s in the parent -- the solve is ~96% parallel, so this
+    cap, not the serial reconstruction, sets the wall time. The former fixed
+    10 left 22 of a 32-thread host idle. Scale with the machine instead,
+    keeping two cores for the GUI; CIRCUITINSIGHT_WORKERS overrides."""
+    env = os.environ.get("CIRCUITINSIGHT_WORKERS", "").strip()
+    if env.isdigit() and int(env) > 0:
+        return int(env)
+    return max(1, (os.cpu_count() or 4) - 2)
+
+
+#: resolved once at import; the call sites still clamp to the local host, so
+#: tests may monkeypatch this to force a serial or narrow pool.
+_MAX_WORKERS = _worker_cap()
 
 
 def _spawn_would_deadlock() -> bool:
@@ -820,6 +838,8 @@ def solve_tf_interp_batch(tasks, keep: list[str],
             fb_reason = f"{backend}: probe self-check failed"
 
     if den_t is None:
+        # gather()'s last tick is already done == total: the caller's one
+        # evaluation-complete signal on this path.
         raw = gather()
         den_t = {idx: _matvec(svinv, [QQ(p, q) for p, q in dd])
                  for idx, dd, _ in raw}
@@ -830,6 +850,11 @@ def solve_tf_interp_batch(tasks, keep: list[str],
             rows = _vinv_rows(g)
             den_t = _transform_axis(den_t, rows, a)
             num_ts = [_transform_axis(nt, rows, a) for nt in num_ts]
+    elif progress is not None:
+        # the mod-p backends never report done == total themselves (their
+        # prime rounds continue past any one round), so THIS is the caller's
+        # one evaluation-complete signal on the backend path
+        progress(1, 1)
 
     den_ok = reduced_ok or _tensor_check(den_t, probe_qq, d_probe, L)
     den = _tensor_to_expr(den_t, gens) if den_ok else None

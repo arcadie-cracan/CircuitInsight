@@ -26,6 +26,7 @@ import numpy as np
 import sympy as sp
 
 from ..engine.mna import MnaError, S, _det
+from ..units import eng
 
 
 def _np(mat: sp.Matrix, dtype=float) -> np.ndarray:
@@ -53,7 +54,7 @@ class SensitivityReport:
         for n, s_ in self.dc_gain[:top]:
             lines.append(f"  {n:24s} S = {s_:+.3f}")
         for i, (p, sens) in enumerate(zip(self.poles, self.pole_sens), 1):
-            lines.append(f"p{i} = {p:.4g} Hz:")
+            lines.append(f"p{i} = {eng(p, 'Hz')}:")
             for n, s_ in sens[:top]:
                 lines.append(f"  {n:24s} S = {s_:+.3f}")
         return "\n".join(lines)
@@ -373,7 +374,10 @@ class ReactanceReduction:
     tol_db: float
     freqs: np.ndarray
     metric: str
-    floor_db: float = 60.0       # enforcement window below the band peak
+    floor_db: float = 60.0       # the enforcement level (see floor_is_abs)
+    floor_is_abs: bool = False   # True: dB absolute; False: dB below peak
+    floor_eff_db: float | None = None   # the level actually enforced to
+                                        # (the stated floor minus tol_db)
     sig_lo: float = 0.0          # the band actually ENFORCED: where |H|
     sig_hi: float = 0.0          # stays within floor_db of its peak
 
@@ -381,8 +385,10 @@ class ReactanceReduction:
         lines = [f"reactance reduction ({self.metric}, tol {self.tol_db:g} dB): "
                  f"{self.baseline_db:.3g} dB with no reactances"]
         if self.sig_hi:
-            lines.append(f"  enforced over {self.sig_lo:.4g}-{self.sig_hi:.4g}"
-                         f" Hz (|H| within {self.floor_db:g} dB of peak)")
+            how = (f"|H| >= {self.floor_db:g} dB" if self.floor_is_abs
+                   else f"|H| within {self.floor_db:g} dB of peak")
+            lines.append(f"  enforced over {eng(self.sig_lo, 'Hz')}-"
+                         f"{eng(self.sig_hi, 'Hz')} ({how})")
         for name, e in zip(self.selected, self.errors_db):
             lines.append(f"  + {name:22s} -> {e:.3g} dB")
         if not self.selected:
@@ -402,6 +408,8 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
                         exclude: tuple[str, ...] = (),
                         max_elements: int | None = None,
                         floor_db: float = 60.0,
+                        floor_abs_db: float | None = None,
+                        phase_tol_deg: float | None = None,
                         progress=None) -> ReactanceReduction:
     """The minimal set of reactive elements that reproduces H(f) over the
     band: start with every reactance removed and greedily add the one whose
@@ -464,7 +472,38 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
     # enforced sub-band is reported, never silently narrower than the
     # band the user asked for (that silence once certified a 1-pole
     # model at 0.6 dB over a band it visibly left by 25 dB)
-    sig = m & (mag_full > peak * 10.0 ** (-floor_db / 20.0))
+    if floor_abs_db is not None:
+        # ABSOLUTE floor: "enforce wherever |H| is at least X dB". The
+        # relative form ("within N dB of peak") hides the level that
+        # actually matters for stability -- with A0 = 56 dB a 60 dB
+        # window stops at -4 dB, barely reaching unity gain, and the
+        # crossover region a phase margin lives in goes unchecked.
+        #
+        # The floor alone is still not a guarantee: a model allowed to
+        # err by tol_db could cross the floor anywhere within tol_db of
+        # it, so enforcement must reach that far BELOW the stated level
+        # -- otherwise the very frequency the user cares about sits in
+        # the unchecked region.
+        eff = floor_abs_db - abs(tol_db)
+        sig = m & (mag_full >= 10.0 ** (eff / 20.0))
+        if phase_tol_deg:
+            # ...and the gain-margin point lives where the phase CROSSES
+            # +/-180 deg, typically well below unity. Include a bounded
+            # neighbourhood of each crossing -- not every frequency whose
+            # phase is near 180, which on a rolloff asymptoting there
+            # would sweep in the whole tail and defeat the floor.
+            ph = np.degrees(np.unwrap(np.angle(H_full)))
+            d = np.abs(ph) - 180.0
+            cross = np.nonzero(np.diff(np.sign(d)) != 0)[0]
+            for i in cross:
+                fc = float(freqs[i])
+                if fc <= 0:
+                    continue
+                # +/- half a decade, widened by the phase budget
+                span = 10.0 ** (0.5 + abs(phase_tol_deg) / 180.0)
+                sig = sig | (m & (freqs >= fc / span) & (freqs <= fc * span))
+    else:
+        sig = m & (mag_full > peak * 10.0 ** (-floor_db / 20.0))
     if not sig.any():
         sig = m
 
@@ -519,6 +558,10 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
     return ReactanceReduction(selected=selected, errors_db=errors,
                               baseline_db=baseline, tol_db=tol_db,
                               freqs=freqs, metric=metric,
-                              floor_db=floor_db,
+                              floor_db=(floor_db if floor_abs_db is None
+                                        else floor_abs_db),
+                              floor_eff_db=(None if floor_abs_db is None
+                                            else floor_abs_db - abs(tol_db)),
+                              floor_is_abs=floor_abs_db is not None,
                               sig_lo=float(freqs[sig].min()),
                               sig_hi=float(freqs[sig].max()))

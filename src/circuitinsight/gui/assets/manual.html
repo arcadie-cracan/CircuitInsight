@@ -116,8 +116,9 @@ form shows the tolerance spins, and a <b>tolerance tube</b> shades the
 plot around the model trace &ndash; the region the next solve is
 promised to stay inside, widening and tightening live as you change
 the tolerance. Lowest order additionally shows the band slider, and
-the tube spans only the highlighted band &ndash; because that is
-exactly where the promise applies. The reported error is always
+the tube spans only the part of that band where the budget is
+actually enforced (see the enforcement floor below) &ndash; a tube
+drawn past it would promise accuracy nobody measured. The reported error is always
 measured against the full model, never assumed.</p>
 
 <p><b>The certification band.</b> A lowest-order result is certified
@@ -128,12 +129,27 @@ slider appears above the Bode, aligned with its frequency axis and
 spanning exactly the frequencies the simulation covered; each cursor
 prints its frequency above itself, and the span is highlighted on the
 plot &ndash; drag the cursors to the frequencies your question lives in.
-Within the band, the budget is enforced through the <b>enforcement
-window</b> (the dB spin beside the tolerances): only where |H| stays
-within that many dB of its peak, because relative dB error deep in a
-stopband is noise, not signal. 60 dB covers the useful dynamic range;
-raise it toward 200 dB to enforce the whole band strictly, at the
-price of more reactances kept. The result's note always names the
+Within the band, the budget is enforced down to the <b>enforcement
+floor</b> (the dB spin beside the tolerances): everywhere |H| is at
+least that level. It is an <i>absolute</i> level, because that is the
+number a designer reasons about. The default <b>0 dB</b> enforces down
+to unity gain, so the crossover region a phase margin depends on is
+covered; go lower (&minus;20, &minus;40 dB) to certify further into
+the rolloff, higher to certify only the strong passband. Enforcing
+deeper costs kept reactances, and far below unity the relative dB
+error is stopband noise &ndash; poles bought to track a response that
+has already died.</p>
+
+<p>The floor is read <b>together with the tolerances</b>, because a
+floor alone is not a guarantee: a model allowed to err by the
+magnitude budget could cross the stated level anywhere within that
+budget, so enforcement reaches that far below it. The gain-margin
+point lives where the phase crosses &plusmn;180&deg;, typically well
+below unity, so a bounded neighbourhood of that crossing is enforced
+too. Widening the tolerances therefore widens the checked region
+rather than quietly shrinking what the certificate covers. The
+tolerance tube is drawn over exactly the enforced region and stops
+where it stops: where the shading ends, so does the promise. The result's note always names the
 band actually enforced &ndash; it is never silently narrower than what
 it claims. The full-order form
 keeps every pole, so it needs no band &ndash; it is certified over the

@@ -364,6 +364,10 @@ def solve_tensors_sparse(pay_den: dict, pay_num: dict, grids_pairs: list,
     primes = [p1]
     stacks_d = [cd1.reshape(-1)]
     stacks_n = [cn1.reshape(-1)]
+    hard_d: list[int] = []           # coefficients that needed the most primes
+    hard_n: list[int] = []
+    st_d: dict = {}                  # incremental CRT state, one per tensor
+    st_n: dict = {}
     want = max(start_primes, stream)
     while True:
         new = [q for q in _primes(want) if q not in primes]
@@ -377,10 +381,13 @@ def solve_tensors_sparse(pay_den: dict, pay_num: dict, grids_pairs: list,
             stacks_d.append(cd)
             stacks_n.append(cn)
         if progress is not None:
-            progress(len(primes), want)
+            # never report done == total: the caller reads that as "the
+            # evaluation is finished", and more prime rounds may follow
+            progress(len(primes), want + step_primes)
         if len(primes) >= 2:
-            lift_d = _lift(stacks_d, primes)
-            lift_n = _lift(stacks_n, primes) if lift_d is not None else None
+            lift_d = _lift(stacks_d, primes, hard=hard_d, state=st_d)
+            lift_n = (_lift(stacks_n, primes, hard=hard_n, state=st_n)
+                      if lift_d is not None else None)
             if lift_n is not None:
                 want += 1
                 (q, cd, cn), = list(run(

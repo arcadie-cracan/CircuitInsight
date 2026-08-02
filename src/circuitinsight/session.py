@@ -22,6 +22,7 @@ import numpy as np
 import sympy as sp
 
 from .keep import ALL, is_all, norm_keep  # noqa: F401  (ALL re-exported)
+from .units import eng
 
 __all__ = ["SessionController", "Result", "DeviceInfo", "SolveTooLarge"]
 
@@ -81,6 +82,13 @@ class Result:
     # simplify/reduce band (for plot shading); None for plain solves
     band_fmin: float | None = None
     band_fmax: float | None = None
+    # the band the budget was actually ENFORCED over: inside the chosen
+    # band, the part where |H| stays within the enforcement window of its
+    # peak. The tolerance tube must be drawn HERE and nowhere else -- a
+    # tube spanning frequencies the pursuit never checked draws a promise
+    # that was not made.
+    enforced_fmin: float | None = None
+    enforced_fmax: float | None = None
     # designer-form summary (A0, GBW, per-root formulas), pre-rendered by
     # attach_template(); None when not computed or not computable
     template_text: str | None = None
@@ -1339,6 +1347,7 @@ class SessionController:
                      mag_db: float = 1.0, phase_deg: float = 5.0,
                      reference: bool = True, fmin: float = 1e3, fmax: float = 1e7,
                      floor_db: float = 60.0,
+                     floor_abs_db: float | None = None,
                      points: int = 400, progress=None) -> Result:
         """Reduced-ORDER symbolic solve: keep only the reactances that shape H(s)
         over [fmin, fmax] (within tol_db), drop the rest, then collapse the
@@ -1350,7 +1359,7 @@ class SessionController:
         the real cost of the lower order -- report it, do not hide it.
         """
         key = ("reduce", inp, out, norm_keep(keep), tol_db, max_elements,
-               mag_db, phase_deg, fmin, fmax, floor_db,
+               mag_db, phase_deg, fmin, fmax, floor_db, floor_abs_db,
                tuple(self._matches))
         if key not in self._cache:
             an = self._analyzer_ready()
@@ -1358,6 +1367,8 @@ class SessionController:
                                    fmin=fmin, fmax=fmax,
                                    max_elements=max_elements,
                                    floor_db=floor_db,
+                                   floor_abs_db=floor_abs_db,
+                                   phase_tol_deg=phase_deg,
                                    progress=progress)
             Hs = H.simplify(mag_tol_db=mag_db, phase_tol_deg=phase_deg,
                             fmin=fmin, fmax=fmax)
@@ -1374,13 +1385,21 @@ class SessionController:
             # applies where |H| stays within floor_db of its peak, and
             # silently claiming the full band certified a 1-pole model
             # over decades it visibly left
-            span = f"{fmin:g}-{fmax:g} Hz"
+            span = f"{eng(fmin, 'Hz')}-{eng(fmax, 'Hz')}"
             if red.sig_hi and (red.sig_hi < 0.99 * fmax
                                or red.sig_lo > 1.01 * fmin):
-                span = (f"{red.sig_lo:.4g}-{red.sig_hi:.4g} Hz — the part "
-                        f"of the band where |H| is within {red.floor_db:g} "
-                        f"dB of peak; widen the enforcement window to "
-                        f"cover more")
+                how = (f"|H| is at least {red.floor_eff_db:g} dB "
+                       f"({red.floor_db:g} dB floor widened by the "
+                       f"{abs(tol_db):g} dB budget), plus the "
+                       f"+/-180 deg phase crossing"
+                       if red.floor_is_abs else
+                       f"|H| is within {red.floor_db:g} dB of peak")
+                span = (f"{eng(red.sig_lo, 'Hz')}-{eng(red.sig_hi, 'Hz')}"
+                        f" — the part of the band where {how}; lower the "
+                        f"enforcement floor to cover more")
+            if red.sig_hi:                     # the ENFORCED sub-band
+                r.enforced_fmin = float(red.sig_lo)
+                r.enforced_fmax = float(red.sig_hi)
             r.warnings.insert(
                 0, f"reduced to {len(red.selected)} reactance(s) "
                    f"[{', '.join(red.selected)}] -- {band_err:.3f} dB vs the full "

@@ -21,6 +21,7 @@ import numpy as np
 import sympy as sp
 
 from ..engine.mna import MnaError, S, _det, build_mna, symbol_name
+from ..units import eng
 
 
 @dataclass
@@ -46,8 +47,8 @@ class BandwidthReport:
     def report(self) -> str:
         lines = [
             f"ZVTC bandwidth attribution: sum(tau) = {self.tau_total:.4g} s "
-            f"-> f_-3dB(ZVTC) ~ {self.f_zvtc:.4g} Hz "
-            f"(true dominant pole {self.f_dominant:.4g} Hz, "
+            f"-> f_-3dB(ZVTC) ~ {eng(self.f_zvtc, 'Hz')} "
+            f"(true dominant pole {eng(self.f_dominant, 'Hz')}, "
             f"estimate/true = {self.validity:.2f})",
         ]
         for r in self.rows:

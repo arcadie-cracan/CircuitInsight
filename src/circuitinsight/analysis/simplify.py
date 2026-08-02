@@ -15,6 +15,7 @@ import numpy as np
 import sympy as sp
 
 from ..engine.mna import MnaError, TransferFunction, numeric_eval
+from ..units import eng
 
 S = sp.Symbol("s")
 
@@ -141,11 +142,11 @@ class SimplifiedTF(TransferFunction):
         if p1 is not None:
             f1 = abs(val(p1)) / (2 * np.pi)
             lines.append(f"p1   = ({p1}) / 2pi")
-            lines.append(f"     = {f1:.4g} Hz   (separation x{self.pole_separation():.1f})")
-            lines.append(f"GBW  ~ {abs(v) * f1:.4g} Hz")
+            lines.append(f"     = {eng(f1, 'Hz')}   (separation x{self.pole_separation():.1f})")
+            lines.append(f"GBW  ~ {eng(abs(v) * f1, 'Hz')}")
         z1 = self.dominant_zero_expr()
         if z1 is not None:
-            lines.append(f"z1   = ({z1}) / 2pi = {abs(val(z1)) / (2 * np.pi):.4g} Hz")
+            lines.append(f"z1   = ({z1}) / 2pi = {eng(abs(val(z1)) / (2 * np.pi), 'Hz')}")
         return "\n".join(lines)
 
 

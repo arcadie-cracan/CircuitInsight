@@ -462,6 +462,8 @@ def solve_tensors_ratfun(pay_den: dict, pay_num: dict, grids_pairs: list,
 
     primes = [p1]
     stacks = [_flat_coeffs(slots, coeffs1)]
+    hard: list[int] = []             # coefficients that needed the most primes
+    st: dict = {}                    # incremental CRT state
     sup_list = [supports[sl] for sl in slots]
     wargs = (pay_den, pay_num, lens, radK, beta, sup_list, dN, dB,
              max(Tmax, dN + dB + 2))
@@ -477,9 +479,11 @@ def solve_tensors_ratfun(pay_den: dict, pay_num: dict, grids_pairs: list,
             primes.append(q)
             stacks.append(arr)
         if progress is not None:
-            progress(len(primes), want)
+            # never report done == total: the caller reads that as "the
+            # evaluation is finished", and more prime rounds may follow
+            progress(len(primes), want + step_primes)
         if len(primes) >= 2:
-            lift = _lift(stacks, primes)
+            lift = _lift(stacks, primes, hard=hard, state=st)
             if lift is not None:
                 want += 1
                 (q, arr), = list(run(_ratfun_prime_worker,

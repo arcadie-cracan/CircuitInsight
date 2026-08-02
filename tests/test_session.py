@@ -229,9 +229,59 @@ def test_reduce_enforcement_window_is_honest_and_adjustable(ota5t):
                                  fmin=1.0, fmax=1e10)
         r200 = ota5t.reduce_solve("VIND", "vout", keep=[], tol_db=1.0,
                                   fmin=1.0, fmax=1e10, floor_db=200.0)
-    assert "within 60 dB of peak" in r60.warnings[0]
-    assert "widen the enforcement window" in r60.warnings[0]
-    assert "1-1e+10 Hz" in r200.warnings[0]         # full band, no caveat
+    assert "within 60 dB of peak" in r60.warnings[0]   # the relative form
+    assert "lower the enforcement floor" in r60.warnings[0]
+    assert "10 GHz" in r200.warnings[0]        # full band, no caveat
+    assert "part of the band" not in r200.warnings[0]
     n60 = int(r60.warnings[0].split(" reactance")[0].split()[-1])
     n200 = int(r200.warnings[0].split(" reactance")[0].split()[-1])
     assert n200 >= n60                              # strictness costs order
+
+
+def test_enforcement_floor_is_an_absolute_level(ota5t):
+    """The window's reference was wrong for the question designers ask.
+    "Within N dB of peak" hides the level that matters: with A0 = 56 dB
+    a 60 dB window stops at -4 dB, barely reaching unity gain, so the
+    crossover region a phase margin lives in went unchecked. The floor
+    is an ABSOLUTE level -- 0 dB enforces down to unity."""
+    import numpy as np
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        r0 = ota5t.reduce_solve("VIND", "vout", keep=[], tol_db=1.0,
+                                fmin=1.0, fmax=1e10, floor_abs_db=0.0)
+        rlo = ota5t.reduce_solve("VIND", "vout", keep=[], tol_db=1.0,
+                                 fmin=1.0, fmax=1e10, floor_abs_db=-40.0)
+    assert "widened by the" in r0.warnings[0]     # the tolerance is in it
+    # the boundary IS the unity-gain region: |H| at the edge of the
+    # enforced band sits at 0 dB, within the pursuit's sampling grid
+    f = np.asarray(r0.freqs, dtype=float)
+    mag_db = 20 * np.log10(np.abs(np.asarray(r0.h)))
+    edge_db = float(np.interp(np.log10(r0.enforced_fmax),
+                              np.log10(f), mag_db))
+    assert abs(edge_db) < 8.0, edge_db
+    # a lower floor certifies further into the rolloff
+    assert rlo.enforced_fmax > r0.enforced_fmax
+
+
+def test_enforcement_accounts_for_the_tolerances(ota5t):
+    """A floor stated without the tolerance is not a guarantee: if the
+    budget allows +/-10 dB, the true unity crossing can sit anywhere
+    within 10 dB of the stated floor, in a region the pursuit never
+    checked. And the gain-margin point lives at the +/-180 deg phase
+    CROSSING, well below unity. Enforcement reaches below the floor by
+    the magnitude budget and includes a bounded neighbourhood of the
+    phase crossing."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        tight = ota5t.reduce_solve("VIND", "vout", keep=[], tol_db=1.0,
+                                   phase_deg=20.0, fmin=1.0, fmax=1e10,
+                                   floor_abs_db=0.0)
+        loose = ota5t.reduce_solve("VIND", "vout", keep=[], tol_db=10.0,
+                                   phase_deg=20.0, fmin=1.0, fmax=1e10,
+                                   floor_abs_db=0.0)
+    # a wider budget must enforce FURTHER, not less: the crossing it
+    # could move to is further out
+    assert loose.enforced_fmax > tight.enforced_fmax
+    assert "widened by the 10 dB budget" in loose.warnings[0]
+    assert "180" in loose.warnings[0]            # the phase crossing too
