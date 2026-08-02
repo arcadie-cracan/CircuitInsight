@@ -310,8 +310,12 @@ def bode_figure(result, fig=None, overlays=()):
     _annotate_margins(ax1, ax2, result)
     _pole_zero_ticks(ax1, result, f)
     # layout FIRST: the legend anchors to the axes' final position, so
-    # it stays centered on the frequency axis, not on the figure
-    fig.tight_layout(rect=(0, 0.06, 1, 1))
+    # it stays centered on the frequency axis, not on the figure.
+    # pad trimmed from the 1.08 default — the default costs ~15 px per
+    # side; the right edge then stretches to just half an x tick label,
+    # since no artist lives right of the axes
+    fig.tight_layout(rect=(0, 0.06, 1, 1), pad=0.35)
+    fig.subplots_adjust(right=0.985)
     figure_legend(fig, ax1)
     return fig
 

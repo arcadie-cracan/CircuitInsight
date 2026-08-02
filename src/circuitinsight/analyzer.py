@@ -263,7 +263,8 @@ class Analyzer:
                    metric: str = "complex", exclude: tuple[str, ...] = (),
                    max_elements: int | None = None, floor_db: float = 60.0,
                    floor_abs_db: float | None = None,
-                   phase_tol_deg: float | None = None, progress=None):
+                   phase_tol_deg: float | None = None,
+                   eps: float | None = None, progress=None):
         """Transfer function of the REDUCED-ORDER model: keep only the reactances
         that actually shape H(s) over the band, zero the rest, then solve keeping
         `keep` symbolic. This is what produces the textbook 2nd-order Miller form
@@ -284,6 +285,7 @@ class Analyzer:
                                        floor_db=floor_db,
                                        floor_abs_db=floor_abs_db,
                                        phase_tol_deg=phase_tol_deg,
+                                       eps=eps,
                                        progress=progress)
         keep = ALL if is_all(keep) else list(() if keep is None else keep)
         keep_set = set(() if is_all(keep) else keep)
@@ -462,6 +464,7 @@ class Analyzer:
                             floor_db: float = 60.0,
                             floor_abs_db: float | None = None,
                             phase_tol_deg: float | None = None,
+                            eps: float | None = None,
                             progress=None):
         """The minimal set of capacitors/inductors that reproduces the
         transfer function over the band, by frequency-domain matching
@@ -478,6 +481,7 @@ class Analyzer:
                                    floor_db=floor_db,
                                    floor_abs_db=floor_abs_db,
                                    phase_tol_deg=phase_tol_deg,
+                                   eps=eps,
                                    progress=progress)
 
     def estimate_solve_time(self, inp: str, out: str, keep=ALL):

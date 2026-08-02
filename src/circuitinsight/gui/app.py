@@ -240,28 +240,30 @@ class MainWindow(QMainWindow):
         self._budget_lbl_act = tb.addWidget(self._budget_lbl)
         self._mag_act = tb.addWidget(self.mag_spin)
         self._phase_act = tb.addWidget(self.phase_spin)
-        # the ENFORCEMENT WINDOW for the lowest-order form: the budget is
-        # enforced where |H| stays within this many dB of the band peak
-        # -- relative error deep in a stopband is noise, but the window
-        # is the user's to widen (200 ~ the whole band, strictly)
-        self.floor_spin = self._spin(0.0, -120.0, 80.0, 10.0, " dB floor")
-        self.floor_spin.setDecimals(0)
-        self.floor_spin.setToolTip(
-            "Where the error budget is ENFORCED: everywhere |H| is at "
-            "least this level. An ABSOLUTE level, not a drop from the "
-            "peak — the number that matters is where your question "
-            "lives. 0 dB (the default) enforces down to unity gain, so "
-            "the crossover region a phase margin depends on is covered; "
-            "go lower (-20, -40) to certify further into the rolloff, "
-            "higher to certify only the strong passband. Lower costs "
-            "more kept reactances. The result's note always names the "
-            "band actually enforced.")
-        self._floor_act = tb.addWidget(self.floor_spin)
+        # the LOWEST-ORDER form's single knob: one complex tolerance,
+        # |dH| <= eps*(|H| + anchor) over the band slider's span; the
+        # anchor is the smaller band-edge |H|, so the cursor placement
+        # states WHERE fidelity matters and this states HOW MUCH
+        self.eps_spin = self._spin(10.0, 0.1, 50.0, 1.0, " % tolerance")
+        self.eps_spin.setDecimals(1)
+        self.eps_spin.setToolTip(
+            "The model tolerance: the reduced model stays within this "
+            "fraction of the full response over the selected band — "
+            "magnitude AND phase jointly (the label shows the dB/deg "
+            "equivalents). The band edges set the anchor level: drag "
+            "the cursors to where your question lives (past crossover "
+            "for stability; the whole band for documentation). "
+            "PM trustworthy to ±5° ≈ 5%.")
+        self._eps_act = tb.addWidget(self.eps_spin)
+        self._eps_lbl = QLabel("")
+        self._eps_lbl_act = tb.addWidget(self._eps_lbl)
+        self.eps_spin.valueChanged.connect(self._on_eps_changed)
         # budget spins only exist for the budgeted forms
         self._budget_lbl_act.setVisible(False)
         self._mag_act.setVisible(False)
         self._phase_act.setVisible(False)
-        self._floor_act.setVisible(False)
+        self._eps_act.setVisible(False)
+        self._eps_lbl_act.setVisible(False)
         self.toolbar = tb
 
         left = QSplitter(Qt.Vertical)
@@ -366,6 +368,15 @@ class MainWindow(QMainWindow):
         bl = QHBoxLayout(band_row)
         bl.setContentsMargins(6, 2, 6, 0)
         bl.addWidget(self.band_slider, 1)
+        # the live order certificate: what the band DEMANDS at the set
+        # tolerance, before any solve (Loewner rank, ~50 ms, debounced)
+        self.cert_lbl = QLabel("")
+        self.cert_lbl.setStyleSheet("color: #555; font-size: 8pt;")
+        bl.addWidget(self.cert_lbl)
+        self._cert_timer = QTimer(self)
+        self._cert_timer.setSingleShot(True)
+        self._cert_timer.setInterval(250)
+        self._cert_timer.timeout.connect(self._refresh_certificate)
         band_row.setToolTip(
             "The frequency band a budgeted result is certified for: the "
             "error budget is enforced HERE, and a reduced-order model is "
@@ -1472,17 +1483,20 @@ class MainWindow(QMainWindow):
         inp, out = self.result.inp, self.result.out
 
         def run(cb):
+            # the float64 circle kernel (~20x): slots and values stay
+            # exact from the cached solve; unconfirmed slots arrive
+            # flagged approx and render with a leading ≈. Runs FIRST so
+            # its progress (which includes a hidden plain solve when the
+            # display is a lowest-order form) starts moving immediately
+            deep = self.controller.explain_per_numeral(
+                inp, out, keep=keep, progress=cb, fast=True)
             # the coefficient-level stories ride along (seconds next to
             # the deep sweep): they fill the A0/p1/z1 line hovers, which
             # are ratio attributions over whole coefficients -- without
             # them the formula-line numerals kept showing the run-me
             # prompt even after the deep pass
             self.controller.explain_numerals(inp, out, keep=keep)
-            # the float64 circle kernel (~20x): slots and values stay
-            # exact from the cached solve; unconfirmed slots arrive
-            # flagged approx and render with a leading ≈
-            return self.controller.explain_per_numeral(
-                inp, out, keep=keep, progress=cb, fast=True)
+            return deep
 
         self._launch(
             run,
@@ -3091,20 +3105,53 @@ class MainWindow(QMainWindow):
         form = self.form_combo.currentText()
         budgeted = transfer and form.startswith("Simplified")
         lowest = budgeted and "lowest" in form
-        self._budget_lbl_act.setVisible(budgeted)
-        self._mag_act.setVisible(budgeted)
-        self._phase_act.setVisible(budgeted)
-        self._floor_act.setVisible(lowest)   # enforcement window: lowest only
+        # full order: separate dB/deg collapse budgets. Lowest order: ONE
+        # anchored tolerance — the band slider is the only "where".
+        self._budget_lbl_act.setVisible(budgeted and not lowest)
+        self._mag_act.setVisible(budgeted and not lowest)
+        self._phase_act.setVisible(budgeted and not lowest)
+        self._eps_act.setVisible(lowest)
+        self._eps_lbl_act.setVisible(lowest)
         self.band_row.setVisible(lowest)
+        if lowest:
+            self._on_eps_changed(self.eps_spin.value())
         self._on_band_changed(*self.band_slider.values())
 
+    def _on_eps_changed(self, _v=None):
+        """The single knob's live translation: what eps means in dB and
+        degrees above the anchor. The tube and the certificate follow."""
+        import math
+
+        eps = self.eps_spin.value() / 100.0
+        self._eps_lbl.setText(f" ≈ ±{20 * math.log10(1 + eps):.2g} dB, "
+                              f"±{math.degrees(eps):.2g}° ")
+        self._update_tol_bands()
+        self._cert_timer.start()
+
+    def _refresh_certificate(self):
+        """The band's demand at the set tolerance, printed beside the
+        slider while dragging: 'lowpass band needs order 2 at 5%', plus
+        the doublet caveat. First call may cost a numeric sweep (~1 s);
+        after that ~50 ms."""
+        if (self.controller is None
+                or not self.band_row.isVisibleTo(self)):
+            self.cert_lbl.setText("")
+            return
+        try:
+            inp, out = self._io()
+            fmin, fmax = self.band_slider.values()
+            cert = self.controller.order_certificate(inp, out, fmin, fmax)
+            self.cert_lbl.setText(
+                " " + cert.describe(self.eps_spin.value() / 100.0))
+        except Exception:
+            self.cert_lbl.setText("")
+
     def _update_tol_bands(self):
-        """The tolerance made visible: a tube of ±mag dB around the model's
-        magnitude trace and ±phase° around its phase trace -- the region
-        the next budgeted solve is PROMISED to stay inside. Widens and
-        tightens live as the spins change; for the lowest-order form it
-        spans only the certification band, because that is exactly where
-        the promise applies."""
+        """The tolerance made visible. Full order: a fixed tube of ±mag
+        dB / ±phase° around the model traces. Lowest order: the ANCHORED
+        tube — |dH| <= eps*(|H| + anchor) rendered exactly, thin and
+        relative above the anchor, flaring open below it (where the
+        criterion stops caring), with the anchor level drawn dotted."""
         for artist in self._tol_bands:
             try:
                 artist.remove()
@@ -3126,36 +3173,48 @@ class MainWindow(QMainWindow):
         with np.errstate(divide="ignore", invalid="ignore"):
             mag = 20 * np.log10(np.abs(h))
             ph = np.degrees(np.unwrap(np.angle(h)))
-        mask = np.ones(f.shape, dtype=bool)
         if "lowest" in form:
+            eps = self.eps_spin.value() / 100.0
             fmin, fmax = self.band_slider.values()
             mask = (f >= fmin) & (f <= fmax)
-            # ...and only where the budget is ENFORCED. The window means
-            # the pursuit checks the error where |H| is within N dB of
-            # its peak; a tube drawn past that promises accuracy nobody
-            # measured -- exactly the misleading decoration. Prefer the
-            # solved result's own enforced band, else the live window.
-            lo = getattr(r, "enforced_fmin", None)
-            hi = getattr(r, "enforced_fmax", None)
-            if lo and hi:
-                mask &= (f >= lo) & (f <= hi)
-            else:
-                # the same criterion the pursuit uses: the stated floor
-                # widened by the magnitude budget (the crossing can sit
-                # anywhere within it)
-                floor = self.floor_spin.value() - abs(self.mag_spin.value())
-                mask &= np.abs(h) >= 10.0 ** (floor / 20.0)
-        if not mask.any():
+            if not mask.any():
+                self.canvas.draw_idle()
+                return
+            anchor = getattr(r, "anchor", None)
+            if not anchor:
+                edge = np.abs(h[mask])
+                anchor = float(min(edge[0], edge[-1]))
+            absh = np.abs(h)
+            A = eps * (absh + anchor)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                up = 20 * np.log10(absh + A)
+                lo_lin = absh - A
+                lo = np.where(lo_lin > 0,
+                              20 * np.log10(np.maximum(lo_lin, 1e-300)),
+                              mag - 80.0)      # visually "open", bounded
+            self._tol_bands.append(axes[0].fill_between(
+                f[mask], lo[mask], up[mask],
+                color="#c9962a", alpha=0.18, zorder=0))
+            a_db = 20 * np.log10(anchor)
+            self._tol_bands.append(axes[0].plot(
+                [fmin, fmax], [a_db, a_db], color="0.35", lw=0.8,
+                ls=":", zorder=1)[0])
+            if len(axes) > 1:
+                half = np.degrees(np.arcsin(np.minimum(1.0, A / absh)))
+                half = np.where(A >= absh, 180.0, half)
+                self._tol_bands.append(axes[1].fill_between(
+                    f[mask], (ph - half)[mask], (ph + half)[mask],
+                    color="#c9962a", alpha=0.18, zorder=0))
             self.canvas.draw_idle()
             return
         m = self.mag_spin.value()
         self._tol_bands.append(axes[0].fill_between(
-            f[mask], mag[mask] - m, mag[mask] + m,
+            f, mag - m, mag + m,
             color="#c9962a", alpha=0.18, zorder=0))
         if len(axes) > 1:
             pd = self.phase_spin.value()
             self._tol_bands.append(axes[1].fill_between(
-                f[mask], ph[mask] - pd, ph[mask] + pd,
+                f, ph - pd, ph + pd,
                 color="#c9962a", alpha=0.18, zorder=0))
         self.canvas.draw_idle()
 
@@ -3232,6 +3291,7 @@ class MainWindow(QMainWindow):
                 ax.axvspan(fmin, fmax, color="#4a78a8", alpha=0.10,
                            zorder=0))
         self._update_tol_bands()
+        self._cert_timer.start()          # the band's demand, debounced
 
     def simplify(self):
         """Menu/shortcut entry: select the form so the toolbar agrees, then
@@ -3265,19 +3325,17 @@ class MainWindow(QMainWindow):
         if self.controller is None:
             return
         inp, out, keep = *self._io(), self.checked_keep()
-        mag, ph = self.mag_spin.value(), self.phase_spin.value()
+        eps = self.eps_spin.value() / 100.0
         fmin, fmax = self.band_slider.values()
-        # the dB budget doubles as the reactance-reduction tolerance
-        floor = self.floor_spin.value()
         self._launch(
             lambda cb: self.controller.attach_template(
                 self.controller.reduce_solve(
-                    inp, out, keep, tol_db=mag, mag_db=mag, phase_deg=ph,
-                    fmin=fmin, fmax=fmax, floor_abs_db=floor,
+                    inp, out, keep, eps=eps,
+                    fmin=fmin, fmax=fmax,
                     progress=cb)),
-            f"reducing {inp} → {out} within {mag} dB over "
+            f"reducing {inp} → {out} within {eps:.0%} over "
             f"{view.eng(fmin, 'Hz')}–{view.eng(fmax, 'Hz')} "
-            f"(enforced down to {floor:g} dB) …")
+            f"(anchor from the band edge) …")
 
     def solve_sync(self):
         inp, out = self._io()
@@ -3310,9 +3368,7 @@ class MainWindow(QMainWindow):
         fmin, fmax = self.band_slider.values()
         self._show(self.controller.attach_template(self.controller.reduce_solve(
             inp, out, self.checked_keep(),
-            tol_db=self.mag_spin.value(), mag_db=self.mag_spin.value(),
-            phase_deg=self.phase_spin.value(), fmin=fmin, fmax=fmax,
-            floor_abs_db=self.floor_spin.value())))
+            eps=self.eps_spin.value() / 100.0, fmin=fmin, fmax=fmax)))
         return self.result
 
     #: keep the log bounded -- it is a session record, not a data store

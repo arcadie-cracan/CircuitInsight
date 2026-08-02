@@ -117,49 +117,49 @@ cascode at a 1 dB tolerance: full order returned the same degree
 &ndash; A<sub>0</sub>/(1+s/p<sub>1</sub>) &ndash; at 0.67 dB.</p>
 
 <p><b>What appears when.</b> Each control exists exactly when it means
-something. Exact shows neither tolerance nor band. Either Simplified
-form shows the tolerance spins, and a <b>tolerance tube</b> shades the
-plot around the model trace &ndash; the region the next solve is
-promised to stay inside, widening and tightening live as you change
-the tolerance. Lowest order additionally shows the band slider, and
-the tube spans only the part of that band where the budget is
-actually enforced (see the enforcement floor below) &ndash; a tube
-drawn past it would promise accuracy nobody measured. The reported error is always
-measured against the full model, never assumed.</p>
+something. Exact shows neither tolerance nor band. Full order shows
+the dB/degree collapse budgets and a fixed tolerance tube. Lowest
+order shows <b>one knob and one slider</b>: a single <b>model
+tolerance</b> in percent, and the band slider.</p>
 
-<p><b>The certification band.</b> A lowest-order result is certified
-only over a frequency band &ndash; outside it, it is not slightly off
-but structurally wrong: everything past the last kept pole is fiction.
-The band is yours to choose: with lowest order selected, a two-cursor
-slider appears above the Bode, aligned with its frequency axis and
-spanning exactly the frequencies the simulation covered; each cursor
-prints its frequency above itself, and the span is highlighted on the
-plot &ndash; drag the cursors to the frequencies your question lives in.
-Within the band, the budget is enforced down to the <b>enforcement
-floor</b> (the dB spin beside the tolerances): everywhere |H| is at
-least that level. It is an <i>absolute</i> level, because that is the
-number a designer reasons about. The default <b>0 dB</b> enforces down
-to unity gain, so the crossover region a phase margin depends on is
-covered; go lower (&minus;20, &minus;40 dB) to certify further into
-the rolloff, higher to certify only the strong passband. Enforcing
-deeper costs kept reactances, and far below unity the relative dB
-error is stopband noise &ndash; poles bought to track a response that
-has already died.</p>
+<p><b>The band states where; the tolerance states how much.</b> A
+lowest-order result is certified only over a frequency band &ndash;
+outside it, it is not slightly off but structurally wrong: everything
+past the last kept pole is fiction. Drag the two cursors to the
+frequencies your question lives in: past crossover for stability
+work, the passband only for gain accuracy, the whole sweep for
+documentation. The band edges do double duty: the smaller edge level
+of |H| becomes the <b>anchor</b>, and the criterion enforced at every
+band point is |&Delta;H| &le; &epsilon;&middot;(|H| + anchor). Far
+above the anchor that is pure relative error &ndash; &epsilon; = 10%
+means the model's gain is right to &plusmn;0.8 dB and its phase to
+&plusmn;5.7&deg; (the label beside the knob translates live). Near
+the anchor the allowance doubles, and below it the criterion lets go
+&ndash; you told the tool where you stopped caring by where you put
+the cursor. A phase margin trustworthy to &plusmn;5&deg; wants
+&epsilon; &asymp; 5% with the band ending just past crossover.</p>
 
-<p>The floor is read <b>together with the tolerances</b>, because a
-floor alone is not a guarantee: a model allowed to err by the
-magnitude budget could cross the stated level anywhere within that
-budget, so enforcement reaches that far below it. The gain-margin
-point lives where the phase crosses &plusmn;180&deg;, typically well
-below unity, so a bounded neighbourhood of that crossing is enforced
-too. Widening the tolerances therefore widens the checked region
-rather than quietly shrinking what the certificate covers. The
-tolerance tube is drawn over exactly the enforced region and stops
-where it stops: where the shading ends, so does the promise. The result's note always names the
-band actually enforced &ndash; it is never silently narrower than what
-it claims. The full-order form
-keeps every pole, so it needs no band &ndash; it is certified over the
-whole working range.</p>
+<p>The <b>tolerance tube</b> renders that criterion exactly: a thin
+ribbon hugging the model where |H| is far above the anchor, flaring
+open as the response approaches the band-edge level (drawn as a
+dotted line), fully open below it. Where the tube is wide, the tool
+has stopped demanding fidelity &ndash; the forgiveness is visible on
+the plot instead of encoded in a spinner. The reported error is
+always measured against the full model, never assumed.</p>
+
+<p><b>The order certificate.</b> While you drag the band, a label
+beside the slider reports what the band <i>demands</i>: "lowpass band
+needs order 2 at 5%" &ndash; computed from the response samples
+(Loewner rank) before any reduction runs. Watch it as you widen the
+band: the knee tells you where the response's complexity lives. After
+a solve, the note says whether the physical model reached that order
+("order-optimal for this band") or paid extra for named components.
+When the certificate's low order comes from a near-cancelling
+pole/zero pair, the note names the <b>doublet</b> &ndash; doublets
+are invisible in the frequency response but govern settling, so a
+band-certified model can be transient-blind; the caveat is part of
+the certificate. The full-order form keeps every pole, so it needs no
+band &ndash; it is certified over the whole working range.</p>
 
 <h3><a name="loopgain"></a>Loop gain</h3>
 

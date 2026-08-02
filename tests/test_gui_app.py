@@ -1398,11 +1398,12 @@ def test_error_plots_align_with_the_bode(qapp, tmp_path):
         win.close()
 
 
-def test_tolerance_tube_stops_where_enforcement_stops(qapp, tmp_path):
-    """The tube used to span the whole certification band, drawing a
-    promise across frequencies the pursuit never checked: the budget is
-    enforced only where |H| stays within the enforcement window of its
-    peak. The shaded region must equal the enforced region."""
+def test_anchored_tube_flares_below_the_band_edge_anchor(qapp, tmp_path):
+    """The lowest-order tube renders the criterion |dH| <= eps*(|H| +
+    anchor) exactly: a thin relative ribbon where |H| is far above the
+    anchor, flaring open as |H| falls toward the band-edge level — the
+    forgiveness is VISIBLE, not encoded in a floor spinner. The single
+    knob scales the whole tube."""
     import numpy as np
 
     from circuitinsight.gui.app import MainWindow
@@ -1420,28 +1421,47 @@ def test_tolerance_tube_stops_where_enforcement_stops(qapp, tmp_path):
     try:
         win.mode_combo.setCurrentText("Transfer")
         win.form_combo.setCurrentText("Simplified · lowest order")
-        win.band_slider.setValues(1.0, 1e10)
-
-        win.mag_spin.setValue(1.0)
-        win.floor_spin.setValue(-60.0)           # enforce deep into rolloff
+        win.band_slider.setValues(1e4, 1e9)      # deep into the rolloff
+        win.eps_spin.setValue(10.0)
         win._update_tol_bands()
-        wide = win._tol_bands[0].get_paths()[0].vertices.shape[0]
+        assert win._tol_bands, "the anchored tube must render"
 
-        win.floor_spin.setValue(20.0)            # only the strong passband
-        win._update_tol_bands()
-        narrow = win._tol_bands[0].get_paths()[0].vertices.shape[0]
-
-        assert narrow < wide, "a higher floor must shade a smaller region"
-
-        # and the shaded x-range must stay inside where |H| is within the
-        # window of its peak -- never beyond it
-        # ...and never past where |H| meets the floor, widened by the
-        # magnitude budget exactly as the pursuit widens it
-        f = np.asarray(win.result.freqs, dtype=float)
-        mag = np.abs(np.asarray(win.result.h))
-        keep = mag >= 10.0 ** ((20.0 - win.mag_spin.value()) / 20.0)
         verts = win._tol_bands[0].get_paths()[0].vertices
-        assert verts[:, 0].max() <= f[keep].max() * 1.001
+        f = np.asarray(win.result.freqs, dtype=float)
+        h = np.abs(np.asarray(win.result.h))
+        mask = (f >= 1e4) & (f <= 1e9)
+        anchor = min(h[mask][0], h[mask][-1])
+        # tube width at the passband edge vs near the anchor: the flare
+        xs, ys = verts[:, 0], verts[:, 1]
+
+        def width_at(freq):
+            near = np.abs(np.log10(xs / freq)) < 0.1
+            return ys[near].max() - ys[near].min()
+
+        w_pass = width_at(2e4)                    # |H| >> anchor here
+        w_edge = width_at(9e8)                    # |H| ~ anchor here
+        assert w_pass < 2.5, f"passband ribbon must be thin ({w_pass:.2f})"
+        assert w_edge > 2 * w_pass, (
+            f"the tube must flare near the anchor ({w_edge:.2f} vs "
+            f"{w_pass:.2f})")
+
+        # the knob scales it: half the tolerance, thinner ribbon
+        win.eps_spin.setValue(5.0)
+        win._update_tol_bands()
+        verts2 = win._tol_bands[0].get_paths()[0].vertices
+        xs, ys = verts2[:, 0], verts2[:, 1]
+        assert width_at(2e4) < w_pass
+
+        # the live translation label states what eps means
+        assert "dB" in win._eps_lbl.text() and "°" in win._eps_lbl.text()
+
+        # and an anchor line is drawn at the band-edge level
+        import math
+
+        a_db = 20 * math.log10(anchor)
+        lines = [a for a in win._tol_bands if hasattr(a, "get_ydata")]
+        assert lines and lines[0].get_ydata()[0] == pytest.approx(
+            a_db, abs=1.0)
     finally:
         win.close()
 

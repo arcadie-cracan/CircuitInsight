@@ -92,3 +92,35 @@ def test_pursuit_reports_per_candidate_progress():
     dones = [d for d, _t in calls]
     assert dones == sorted(dones) and dones[-1] >= len(calls)  # monotone
     assert all(t >= d for d, t in calls)      # total is a live lower bound
+
+
+def test_anchored_criterion_reads_the_band_edges():
+    """The eps mode: |dH| <= eps*(|H| + anchor) with the anchor at the
+    smaller band-edge |H|. On ota5t a band ending just past crossover
+    keeps a small set at 10%; the achieved error is within eps; and the
+    anchor equals the edge level, not a floor knob."""
+    import numpy as np
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        run = SpectreRun(FIX / "ota5t" / "tb_ota5t.cin.json",
+                         FIX / "ota5t" / "psf")
+        an = run.analyzer(cap_model="matrix")
+
+    red = an.dominant_reactances("VIND", "vout", fmin=1e3, fmax=3e8,
+                                 eps=0.10)
+    assert red.eps == pytest.approx(0.10)
+    assert red.anchor is not None and red.anchor > 0
+    achieved = red.errors_db[-1] if red.errors_db else red.baseline_db
+    assert achieved <= 0.10 + 1e-9
+    assert red.selected, "a band to past crossover needs reactances"
+    assert "anchored" in red.report()
+
+    # tighter eps can only grow the selection (same band)
+    red2 = an.dominant_reactances("VIND", "vout", fmin=1e3, fmax=3e8,
+                                  eps=0.02)
+    assert len(red2.selected) >= len(red.selected)
+    # the old floor path is untouched
+    old = an.dominant_reactances("VIND", "vout", fmin=1e3, fmax=3e8,
+                                 tol_db=1.0, floor_abs_db=0.0)
+    assert old.eps is None and old.floor_is_abs

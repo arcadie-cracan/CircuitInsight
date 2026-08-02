@@ -380,8 +380,24 @@ class ReactanceReduction:
                                         # (the stated floor minus tol_db)
     sig_lo: float = 0.0          # the band actually ENFORCED: where |H|
     sig_hi: float = 0.0          # stays within floor_db of its peak
+    eps: float | None = None     # anchored mode: |dH| <= eps*(|H|+anchor)
+    anchor: float | None = None  # min |H| at the band edges
 
     def report(self) -> str:
+        if self.eps is not None:
+            import math
+
+            lines = [f"reactance reduction (anchored, eps {self.eps:.1%}, "
+                     f"anchor {20 * math.log10(self.anchor):.1f} dB): "
+                     f"{self.baseline_db:.3g} with no reactances"]
+            lines.append(f"  band {eng(self.sig_lo, 'Hz')}-"
+                         f"{eng(self.sig_hi, 'Hz')}")
+            for name, e in zip(self.selected, self.errors_db):
+                lines.append(f"  + {name:22s} -> {e:.3g}")
+            if not self.selected:
+                lines.append("  (already within tolerance; no reactance "
+                             "needed)")
+            return "\n".join(lines)
         lines = [f"reactance reduction ({self.metric}, tol {self.tol_db:g} dB): "
                  f"{self.baseline_db:.3g} dB with no reactances"]
         if self.sig_hi:
@@ -410,6 +426,7 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
                         floor_db: float = 60.0,
                         floor_abs_db: float | None = None,
                         phase_tol_deg: float | None = None,
+                        eps: float | None = None,
                         progress=None) -> ReactanceReduction:
     """The minimal set of reactive elements that reproduces H(f) over the
     band: start with every reactance removed and greedily add the one whose
@@ -426,7 +443,15 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
 
     metric='magnitude' scores |H| in dB; 'complex' also requires the phase
     to track (max of the dB error and phase/10). `exclude` names reactances
-    kept always-on (e.g. a DC-feedback/AC-open measurement rig)."""
+    kept always-on (e.g. a DC-feedback/AC-open measurement rig).
+
+    eps (the ANCHORED mode, superseding the floor/budget knobs): accept
+    when |H_red - H_full| <= eps * (|H_full| + anchor) at every band
+    point, anchor = the smaller band-edge |H|. One dimensionless number
+    bounds magnitude (~8.7*eps dB) and phase (~57*eps deg) jointly above
+    the anchor and forgives the response below it -- the band placement
+    IS the statement of where fidelity matters. floor/phase/metric are
+    ignored in this mode."""
     if fmin is not None and fmax is not None:
         lo, hi = fmin, fmax
     else:
@@ -472,7 +497,15 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
     # enforced sub-band is reported, never silently narrower than the
     # band the user asked for (that silence once certified a 1-pole
     # model at 0.6 dB over a band it visibly left by 25 dB)
-    if floor_abs_db is not None:
+    anchor = None
+    if eps is not None:
+        # anchored mode: the band mask is the whole selected band; the
+        # anchor level comes from the band EDGES -- dragging the cursor
+        # to a level is how the user declares the depth of interest
+        sig = m
+        edges = mag_full[m]
+        anchor = float(min(edges[0], edges[-1])) if edges.size else 1.0
+    elif floor_abs_db is not None:
         # ABSOLUTE floor: "enforce wherever |H| is at least X dB". The
         # relative form ("within N dB of peak") hides the level that
         # actually matters for stability -- with A0 = 56 dB a 60 dB
@@ -508,6 +541,12 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
         sig = m
 
     def err(Hr: np.ndarray) -> float:
+        if eps is not None:
+            ok = sig & np.isfinite(Hr)
+            if not ok.any():
+                return float("inf")
+            return float((np.abs(Hr[ok] - H_full[ok])
+                          / (mag_full[ok] + anchor)).max())
         ok = sig & np.isfinite(Hr) & (np.abs(Hr) > 0)
         if not ok.any():
             return float("inf")
@@ -517,6 +556,8 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
         dph = np.abs(np.angle(Hr[ok]) - np.angle(H_full[ok]))
         dph = np.degrees(np.minimum(dph, 2 * np.pi - dph))
         return float(np.maximum(dmag, dph / 10.0).max())
+
+    tol = eps if eps is not None else tol_db
 
     Qsel = Q_base.copy()
     Hr = response(Qsel)
@@ -537,7 +578,7 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
             progress(ev_done, ev_done + len(remaining))
 
     while remaining and (max_elements is None or len(selected) < max_elements):
-        if baseline <= tol_db and not selected:
+        if baseline <= tol and not selected:
             break
         cur = err(Hr)
         best, best_err = None, cur
@@ -553,7 +594,7 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
         Qsel = Qsel + contrib[best]
         Hr = response(Qsel)
         errors.append(best_err)
-        if best_err <= tol_db:
+        if best_err <= tol:
             break
     return ReactanceReduction(selected=selected, errors_db=errors,
                               baseline_db=baseline, tol_db=tol_db,
@@ -564,4 +605,5 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
                                             else floor_abs_db - abs(tol_db)),
                               floor_is_abs=floor_abs_db is not None,
                               sig_lo=float(freqs[sig].min()),
-                              sig_hi=float(freqs[sig].max()))
+                              sig_hi=float(freqs[sig].max()),
+                              eps=eps, anchor=anchor)

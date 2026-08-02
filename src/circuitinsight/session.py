@@ -1223,7 +1223,10 @@ class SessionController:
         if fast:
             from .analysis.explain import explain_per_numeral_fast as _f
 
-            r = self.solve(inp, out, keep=list(keep))
+            # a lowest-order display leaves the plain solve uncached, so
+            # this may BE a full hybrid solve — without the progress
+            # thread the deep action sat on a dead bar for its duration
+            r = self.solve(inp, out, keep=list(keep), progress=progress)
             stories = _f(sysm, out, keep, r.tf.expr,
                          progress=progress, **kw)
         else:
@@ -1410,12 +1413,26 @@ class SessionController:
             self._cache[key] = r
         return self._cache[key]
 
+    def order_certificate(self, inp: str, out: str, fmin: float,
+                          fmax: float):
+        """Loewner order certificate over [fmin, fmax]: how much order
+        the band demands at a tolerance, from one cached wide numeric
+        sweep (milliseconds per call after the first). See
+        analysis/certificate.py — ships the doublet caveat."""
+        from .analysis.certificate import order_certificate as _cert
+
+        base = self.solve(inp, out, keep=[], reference=False,
+                          fmin=1.0, fmax=1e10, points=800)
+        return _cert(base.freqs, base.h, fmin, fmax,
+                     poles_hz=base.poles_hz, zeros_hz=base.zeros_hz)
+
     def reduce_solve(self, inp: str, out: str, keep=ALL, *,
                      tol_db: float = 0.5, max_elements: int | None = None,
                      mag_db: float = 1.0, phase_deg: float = 5.0,
                      reference: bool = True, fmin: float = 1e3, fmax: float = 1e7,
                      floor_db: float = 60.0,
                      floor_abs_db: float | None = None,
+                     eps: float | None = None,
                      points: int = 400, progress=None) -> Result:
         """Reduced-ORDER symbolic solve: keep only the reactances that shape H(s)
         over [fmin, fmax] (within tol_db), drop the rest, then collapse the
@@ -1427,28 +1444,79 @@ class SessionController:
         the real cost of the lower order -- report it, do not hide it.
         """
         key = ("reduce", inp, out, norm_keep(keep), tol_db, max_elements,
-               mag_db, phase_deg, fmin, fmax, floor_db, floor_abs_db,
+               mag_db, phase_deg, fmin, fmax, floor_db, floor_abs_db, eps,
                tuple(self._matches))
         if key not in self._cache:
             an = self._analyzer_ready()
+            if eps is not None:
+                # the anchored one-knob contract: the collapse budgets
+                # derive from the SAME eps (dB/deg are its projections)
+                mag_db = 20.0 * math.log10(1.0 + eps)
+                phase_deg = math.degrees(eps)
             H, red = an.reduced_tf(inp, out, keep, tol_db=tol_db,
                                    fmin=fmin, fmax=fmax,
                                    max_elements=max_elements,
                                    floor_db=floor_db,
                                    floor_abs_db=floor_abs_db,
                                    phase_tol_deg=phase_deg,
+                                   eps=eps,
                                    progress=progress)
             Hs = H.simplify(mag_tol_db=mag_db, phase_tol_deg=phase_deg,
                             fmin=fmin, fmax=fmax)
             r = self._assemble(Hs, inp, out, keep, reference=reference,
                                fmin=fmin, fmax=fmax, points=points)
-            band_err = float(red.errors_db[-1]) if red.errors_db else 0.0
+            band_err = float(red.errors_db[-1]) if red.errors_db else \
+                float(red.baseline_db)
             r.simplified = True
             r.reduced_order = True
             r.mag_err_db = band_err                 # reduced model vs full, in-band
             r.phase_err_deg = float(Hs.achieved_phase_err_deg)
             r.n_terms_full = _n_terms(H)
             r.band_fmin, r.band_fmax = float(fmin), float(fmax)
+            if eps is not None:
+                # anchored contract: enforcement IS the band; the note
+                # translates eps into its dB/deg projections and carries
+                # the certificate's doublet caveat
+                r.eps = float(eps)
+                r.anchor = float(red.anchor)
+                r.enforced_fmin, r.enforced_fmax = float(fmin), float(fmax)
+                a_db = 20.0 * math.log10(red.anchor) if red.anchor > 0 \
+                    else float("-inf")
+                head = (f"reduced to {len(red.selected)} reactance(s) "
+                        f"[{', '.join(red.selected)}] — within "
+                        f"{band_err:.1%} of the full response "
+                        f"(≈ ±{20 * math.log10(1 + band_err):.2g} dB, "
+                        f"±{math.degrees(band_err):.2g}° above the anchor) "
+                        f"over {eng(fmin, 'Hz')}–{eng(fmax, 'Hz')}, "
+                        f"anchor {a_db:.0f} dB (from the band edge)")
+                if band_err > eps:
+                    head += (f" — BUDGET NOT MET (asked {eps:.0%}): the "
+                             f"band edge demands fidelity at {a_db:.0f} dB;"
+                             f" narrow the band or raise the tolerance")
+                r.warnings.insert(0, head)
+                try:
+                    cert = self.order_certificate(inp, out, fmin, fmax)
+                    r.certificate = cert
+                    k = cert.order_at(eps)
+                    if len(red.selected) > k:
+                        r.warnings.append(
+                            f"an abstract order-{k} fit exists for this "
+                            f"band at {eps:.0%}; physical elements need "
+                            f"{len(red.selected)} — the cost of named "
+                            f"components")
+                    elif len(red.selected) <= k:
+                        r.warnings.append(
+                            f"order-optimal for this band ({eps:.0%})")
+                    if cert.doublets:
+                        d = cert.doublets[0]
+                        r.warnings.append(
+                            f"pole/zero doublet near {eng(d[0], 'Hz')} "
+                            f"(separation {d[2]:.1%}) — doublets affect "
+                            f"settling, not this frequency response")
+                except Exception:
+                    pass
+                self._cache[key] = r
+                return r
             # the claim must name the band actually ENFORCED: the budget
             # applies where |H| stays within floor_db of its peak, and
             # silently claiming the full band certified a 1-pole model

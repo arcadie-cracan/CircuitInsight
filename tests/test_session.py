@@ -285,3 +285,29 @@ def test_enforcement_accounts_for_the_tolerances(ota5t):
     assert loose.enforced_fmax > tight.enforced_fmax
     assert "widened by the 10 dB budget" in loose.warnings[0]
     assert "180" in loose.warnings[0]            # the phase crossing too
+
+
+def test_reduce_solve_anchored_contract():
+    """The one-knob path: eps sets the criterion, the band edges set the
+    anchor, the note translates eps to dB/deg, and the certificate rides
+    along with its order verdict."""
+    import warnings
+
+    from circuitinsight.session import SessionController
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        c = SessionController.open(FIX / "ota5t" / "tb_ota5t.cin.json",
+                                   FIX / "ota5t" / "psf")
+        r = c.reduce_solve("VIND", "vout", [], eps=0.10,
+                           fmin=1e3, fmax=3e8)
+    assert r.eps == 0.10 and r.anchor > 0
+    head = r.warnings[0]
+    assert "anchor" in head and "dB" in head and "°" in head
+    assert r.enforced_fmin == 1e3 and r.enforced_fmax == 3e8
+    assert hasattr(r, "certificate")
+    assert any("order" in w for w in r.warnings)
+
+    cert = c.order_certificate("VIND", "vout", 1e3, 3e8)
+    assert cert.order_at(0.10) >= 1
+    assert cert.shape in ("lowpass", "bandpass", "highpass", "flat")
