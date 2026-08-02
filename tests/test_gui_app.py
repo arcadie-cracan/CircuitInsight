@@ -613,10 +613,12 @@ def test_reduce_bench_scan_apply_revert(qapp):
         win.close()
 
 
-def test_bench_list_is_the_one_navigation_axis(qapp, tmp_path):
-    """U-A: the bench list selects the analysis; the hidden mode combo is
-    the state object it fronts, and the two never disagree — whichever
-    side is driven."""
+def test_tool_dropdown_is_the_one_navigation_axis(qapp, tmp_path):
+    """U-A revised: the Tool dropdown selects the analysis; the hidden
+    mode combo is the state object it fronts, and the two never disagree
+    — whichever side is driven. It shows ONLY tools the loaded run can
+    ground in simulator data: ota5t carries no stb results, so the
+    loop-analysis family is not offered."""
     from circuitinsight.gui.app import MainWindow
 
     MainWindow.settings_path = str(tmp_path / "gui.ini")
@@ -628,19 +630,104 @@ def test_bench_list_is_the_one_navigation_axis(qapp, tmp_path):
         warnings.simplefilter("ignore", UserWarning)
         win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"))
     try:
-        names = [win.bench_list.item(i).text()
-                 for i in range(win.bench_list.count())]
-        assert names == ["Transfer", "Loop gain", "Compensate", "Modes",
-                         "GFT", "Impedance", "Reduce circuit"]
+        names = [win.tool_combo.itemText(i)
+                 for i in range(win.tool_combo.count())]
+        assert names == ["Transfer", "Impedance", "Reduce circuit"]
 
-        # bench drives mode
-        win.bench_list.setCurrentRow(names.index("Impedance"))
+        # tool drives mode
+        win.tool_combo.setCurrentText("Impedance")
         assert win.mode_combo.currentText() == "Impedance"
-        # mode drives bench (the programmatic path every test uses)
+        # mode drives tool (the programmatic path every test uses)
         win.mode_combo.setCurrentText("Transfer")
-        assert win.bench_list.currentItem().text() == "Transfer"
+        assert win.tool_combo.currentText() == "Transfer"
+        # a programmatic mode outside the offering is reinstated, not lied
+        # about — the dropdown always names the active analysis
+        win.mode_combo.setCurrentText("Loop gain")
+        assert win.tool_combo.currentText() == "Loop gain"
     finally:
         win.close()
+
+
+def test_tool_dropdown_offers_the_loop_family_only_with_stb_truth(
+        qapp, tmp_path):
+    """The loop family is gated on SIMULATOR GROUND TRUTH: stb results
+    in the run (miller stb bench: Loop gain/Compensate/GFT but not the
+    two-iprobe Modes; nmc3 with three iprobes: everything), or the
+    user's explicit declaration that the AC data is a return-ratio
+    capture (plain miller: absent, declared: present, withdrawn:
+    absent). A vsource alone opens nothing."""
+    from circuitinsight.gui.app import MainWindow
+
+    spectre = FIX.parent
+    MainWindow.settings_path = str(tmp_path / "gui.ini")
+    try:
+        win = MainWindow()
+    finally:
+        MainWindow.settings_path = None
+
+    def names():
+        return [win.tool_combo.itemText(i)
+                for i in range(win.tool_combo.count())]
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win.open_session(
+                str(spectre / "miller" / "tb_ota2s_stb.cin.json"),
+                str(spectre / "miller" / "psf_stb"))
+        got = names()
+        assert "Loop gain" in got and "GFT" in got \
+            and "Compensate" in got
+        assert "Modes" not in got
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win.open_session(str(spectre / "nmc3" / "tb_nmc3.cin.json"),
+                             str(spectre / "nmc3" / "psf"))
+        assert names() == ["Transfer", "Loop gain", "Compensate", "Modes",
+                           "GFT", "Impedance", "Reduce circuit"]
+
+        # plain miller: AC data but no stb — probes exist, truth doesn't
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win.open_session(str(spectre / "miller" / "tb_ota2s.cin.json"),
+                             str(spectre / "miller" / "psf"))
+        assert "Loop gain" not in names()
+        assert win.controller.probes, "vsources alone must not gate it"
+
+        # the explicit declaration is the one other key that opens them
+        win.controller.declare_ac_loop_gain("vout")
+        win._refresh_tools()
+        got = names()
+        assert "Loop gain" in got and "Modes" not in got
+        win.controller.declare_ac_loop_gain(None)
+        win._refresh_tools()
+        assert "Loop gain" not in names()
+    finally:
+        win.close()
+
+
+def test_declared_return_ratio_is_the_loop_reference():
+    """Session side of the declaration: with no stb in the run, the
+    declared net's AC trace becomes the loop-gain reference — labeled as
+    a declaration, margins computed from the trace itself."""
+    from circuitinsight.session import SessionController
+
+    spectre = FIX.parent
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        c = SessionController.open(
+            spectre / "miller" / "tb_ota2s.cin.json",
+            spectre / "miller" / "psf")
+    assert not c.has_stb
+    fr, lg, obj, label = c._stb_reference(None)
+    assert fr is None, "no truth, no reference"
+
+    c.declare_ac_loop_gain("vout")
+    fr, lg, obj, label = c._stb_reference(None)
+    assert fr is not None and len(fr) == len(lg)
+    assert "declared" in label and "vout" in label
+    assert hasattr(obj, "phase_margin_deg")
 
 
 def test_bench_tabs_show_only_their_own_views(qapp, tmp_path):

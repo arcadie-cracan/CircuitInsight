@@ -79,6 +79,28 @@ class _Worker(QThread):
             self.failed.emit(f"{type(exc).__name__}: {exc}")
 
 
+#: (name, tooltip, requirement) — one row per tool. The Tool dropdown
+#: shows only the rows the loaded run can GROUND in simulator data:
+#: "loop" needs stb results in the run (or the user's explicit
+#: declaration that the AC data is a return-ratio capture), "modes"
+#: additionally needs two declared iprobes for the 2x2 matrix, "" only
+#: the AC/OP import. A reconstructed loop quantity is never offered
+#: without simulator truth to check it against.
+_TOOLS = (
+    ("Transfer", "H(s): exact, budgeted, or textbook", ""),
+    ("Loop gain", "T(s), margins, probe adequacy — needs stb results "
+     "(or a declared return-ratio AC)", "loop"),
+    ("Compensate", "suggest Cc / Rz / multi-branch networks — needs stb "
+     "results (or a declared return-ratio AC)", "loop"),
+    ("Modes", "DM/CM 2x2 loop matrix — needs stb results and two "
+     "iprobes", "modes"),
+    ("GFT", "error terms of one loop — needs stb results (or a declared "
+     "return-ratio AC)", "loop"),
+    ("Impedance", "Zin/Zout at a port", ""),
+    ("Reduce circuit", "AC grounds, dead sources, lumping", ""),
+)
+
+
 class MainWindow(QMainWindow):
     #: tests point this at a temp .ini so they never touch the registry
     settings_path: str | None = None
@@ -182,12 +204,20 @@ class MainWindow(QMainWindow):
             tb.addWidget(wdg)
         tb.addSeparator()
         # the mode combo is the STATE object -- every internal path and test
-        # drives it -- but it is no longer shown: the bench list is its face.
+        # drives it -- but it is no longer shown: the Tool dropdown is its
+        # face (the bench list it replaces cost a whole side column).
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(
-            ["Transfer", "Loop gain", "Compensate", "Modes", "GFT",
-             "Impedance", "Reduce circuit"])
+        self.mode_combo.addItems([name for name, _, _ in _TOOLS])
         self.mode_combo.currentTextChanged.connect(self._on_mode_changed)
+        tb.addWidget(QLabel(" tool: "))
+        self.tool_combo = QComboBox()
+        self.tool_combo.setObjectName("tool_combo")
+        for name, tip, _ in _TOOLS:
+            self.tool_combo.addItem(name)
+            self.tool_combo.setItemData(self.tool_combo.count() - 1, tip,
+                                        Qt.ToolTipRole)
+        self.tool_combo.currentTextChanged.connect(self._on_tool_selected)
+        tb.addWidget(self.tool_combo)
         tb.addWidget(QLabel(" in: "))
         tb.addWidget(self.in_combo)
         tb.addWidget(QLabel(" out: "))
@@ -233,33 +263,6 @@ class MainWindow(QMainWindow):
         self._phase_act.setVisible(False)
         self._floor_act.setVisible(False)
         self.toolbar = tb
-
-        # One axis of navigation (gui-ux-plan.md U-A): a Virtuoso-assistant
-        # style bench list. Selecting a bench selects the analysis; the tab
-        # area then shows only that bench's views. Two-way synced with the
-        # hidden mode combo so programmatic mode changes stay honest.
-        from PySide6.QtWidgets import QListWidget, QListWidgetItem
-
-        self.bench_list = QListWidget()
-        self.bench_list.setObjectName("bench_list")
-        for name, tip in (
-            ("Transfer", "H(s): exact, budgeted, or textbook"),
-            ("Loop gain", "T(s), margins, probe adequacy"),
-            ("Compensate", "suggest Cc / Rz / multi-branch networks"),
-            ("Modes", "DM/CM 2x2 loop matrix"),
-            ("GFT", "error terms of one loop"),
-            ("Impedance", "Zin/Zout at a port"),
-            ("Reduce circuit", "AC grounds, dead sources, lumping"),
-        ):
-            it = QListWidgetItem(name)
-            it.setToolTip(tip)
-            self.bench_list.addItem(it)
-        self.bench_list.setCurrentRow(0)
-        fm = self.bench_list.fontMetrics()
-        w = max(fm.horizontalAdvance(m) for m in
-                ("Reduce circuit", "Compensate")) + 26
-        self.bench_list.setFixedWidth(w)
-        self.bench_list.currentTextChanged.connect(self._on_bench_selected)
 
         left = QSplitter(Qt.Vertical)
         left.setObjectName("left_split")
@@ -443,11 +446,7 @@ class MainWindow(QMainWindow):
         inner.setContentsMargins(9, 4, 9, 9)  # content keeps its margins
         inner.addWidget(self.crumb)
         inner.addWidget(self.msg_strip)
-        benches_row = QHBoxLayout()
-        benches_row.setSpacing(4)
-        benches_row.addWidget(self.bench_list)
-        benches_row.addWidget(split, 1)
-        inner.addLayout(benches_row, 1)
+        inner.addWidget(split, 1)
         outer.addLayout(inner, 1)
         central = QWidget()
         central.setLayout(outer)
@@ -677,6 +676,14 @@ class MainWindow(QMainWindow):
             "grid separates the kept-monomials the operating-point sweep "
             "cannot. Costs a few multiples of the solve; needs a keep set.")
         self.a_explain_deep.triggered.connect(self.explain_per_numeral)
+        m_an.addSeparator()
+        self.a_declare_rr = m_an.addAction("Declare AC as return ra&tio…")
+        self.a_declare_rr.setToolTip(
+            "State that this run's AC sweep IS the loop gain: pick the "
+            "net whose v(net)/v(input) is the return ratio. Opens the "
+            "loop benches when the run carries no stb results — the "
+            "declared trace becomes their ground-truth overlay.")
+        self.a_declare_rr.triggered.connect(self.declare_return_ratio)
 
         m_dev = mb.addMenu("&Devices")
         m_dev.setTearOffEnabled(True)
@@ -1143,15 +1150,17 @@ class MainWindow(QMainWindow):
             self.probe2_combo.addItems(self.controller.probes)
             if self.probe2_combo.count() > 1:
                 self.probe2_combo.setCurrentIndex(1)
-        # keep the bench list honest under programmatic mode changes
-        if self.bench_list.currentItem() is None \
-                or self.bench_list.currentItem().text() != mode:
-            row = next((i for i in range(self.bench_list.count())
-                        if self.bench_list.item(i).text() == mode), None)
-            if row is not None:
-                self.bench_list.blockSignals(True)
-                self.bench_list.setCurrentRow(row)
-                self.bench_list.blockSignals(False)
+        # keep the Tool dropdown honest under programmatic mode changes:
+        # a mode driven from code or tests may be filtered out of the
+        # dropdown -- reinstate it rather than show a lie
+        if self.tool_combo.currentText() != mode:
+            self.tool_combo.blockSignals(True)
+            ix = self.tool_combo.findText(mode)
+            if ix < 0:
+                self.tool_combo.addItem(mode)
+                ix = self.tool_combo.count() - 1
+            self.tool_combo.setCurrentIndex(ix)
+            self.tool_combo.blockSignals(False)
         # each bench shows its own views; the shared result views stay
         self._set_tab_visibility(mode)
         if mode == "Compensate":
@@ -1176,9 +1185,76 @@ class MainWindow(QMainWindow):
             if idx >= 0:
                 self.tabs.setTabVisible(idx, on)
 
-    def _on_bench_selected(self, name: str):
+    def _on_tool_selected(self, name: str):
         if name and self.mode_combo.currentText() != name:
             self.mode_combo.setCurrentText(name)
+
+    def declare_return_ratio(self):
+        """Analysis menu: the user states that the run's AC data is a
+        return-ratio capture. A declaration, not a computation — it is
+        the one way the loop benches open without stb results."""
+        if self.controller is None:
+            return
+        from PySide6.QtWidgets import QInputDialog
+
+        c = self.controller
+        none_ = "(no declaration)"
+        items = [none_] + list(c.nets)
+        cur = items.index(c.ac_loop_gain) if c.ac_loop_gain in items else 0
+        choice, ok = QInputDialog.getItem(
+            self, "Declare AC as return ratio",
+            "v(net)/v(input) in this run's AC sweep IS the loop gain:",
+            items, cur, False)
+        if not ok:
+            return
+        c.declare_ac_loop_gain(None if choice == none_ else choice)
+        self._refresh_tools()
+        if c.ac_loop_gain:
+            self._set_strip(
+                f"AC declared as return ratio at v({c.ac_loop_gain}) — "
+                f"loop benches use it as ground truth", "info")
+        else:
+            self._set_strip("return-ratio declaration withdrawn", "info")
+
+    def _tool_ok(self, requirement: str) -> bool:
+        c = self.controller
+        if not requirement:
+            return True
+        if c is None:
+            return False
+        loop = c.has_stb or bool(c.ac_loop_gain)
+        if requirement == "loop":
+            return loop
+        return c.has_stb and len(c.tagged_probes) >= 2     # "modes"
+
+    def _refresh_tools(self):
+        """Rebuild the Tool dropdown from what the loaded run can GROUND
+        (per _TOOLS requirements); the hidden mode combo keeps every
+        entry as the state axis, with unavailable ones disabled. Falls
+        back to Transfer when the current tool loses its data."""
+        cur = self.mode_combo.currentText()
+        self.tool_combo.blockSignals(True)
+        self.tool_combo.clear()
+        for name, tip, req in _TOOLS:
+            if self._tool_ok(req):
+                self.tool_combo.addItem(name)
+                self.tool_combo.setItemData(self.tool_combo.count() - 1,
+                                            tip, Qt.ToolTipRole)
+        for i in range(self.mode_combo.count()):
+            req = next((rq for nm, _, rq in _TOOLS
+                        if nm == self.mode_combo.itemText(i)), "")
+            self.mode_combo.model().item(i).setEnabled(self._tool_ok(req))
+        ok = self.tool_combo.findText(cur) >= 0
+        if ok:
+            self.tool_combo.setCurrentText(cur)
+        self.tool_combo.blockSignals(False)
+        if not ok:
+            self.mode_combo.setCurrentText("Transfer")
+            self.mode_combo.setToolTip(
+                f"{cur} needs stb results in the run — or declare the "
+                f"AC data as a return ratio (Analysis menu)")
+        else:
+            self.mode_combo.setToolTip("")
 
     def _start_advisor(self, probe: str):
         """Second worker: the probe-adequacy verdict arrives a few seconds
@@ -1402,8 +1478,11 @@ class MainWindow(QMainWindow):
             # them the formula-line numerals kept showing the run-me
             # prompt even after the deep pass
             self.controller.explain_numerals(inp, out, keep=keep)
+            # the float64 circle kernel (~20x): slots and values stay
+            # exact from the cached solve; unconfirmed slots arrive
+            # flagged approx and render with a leading ≈
             return self.controller.explain_per_numeral(
-                inp, out, keep=keep, progress=cb)
+                inp, out, keep=keep, progress=cb, fast=True)
 
         self._launch(
             run,
@@ -2443,20 +2522,7 @@ class MainWindow(QMainWindow):
         self.probe_combo.addItems(probes)
         self.gft_ref_combo.clear()
         self.gft_ref_combo.addItems(c.nets)
-        idx = self.mode_combo.findText("Loop gain")
-        self.mode_combo.model().item(idx).setEnabled(bool(probes))
-        for i in range(self.bench_list.count()):
-            it = self.bench_list.item(i)
-            if it.text() == "Loop gain":
-                fl = it.flags()
-                it.setFlags(fl | Qt.ItemIsEnabled if probes
-                            else fl & ~Qt.ItemIsEnabled)
-        if not probes:
-            self.mode_combo.setCurrentText("Transfer")
-            self.mode_combo.setToolTip("Loop gain needs an iprobe in the "
-                                       "design; none found in this CIN")
-        else:
-            self.mode_combo.setToolTip("")
+        self._refresh_tools()
         self.history.clear()
         self._history_results = []
         self._report_sections = []

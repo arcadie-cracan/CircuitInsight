@@ -78,11 +78,17 @@ Reduce bench &ndash; each answers one kind of follow-up question.</li>
 
 <h2><a name="benches"></a>The benches</h2>
 
-<p>The list on the far left selects the analysis. Each bench shows its
-own controls and its own views; Summary, Expression and Error are views
-of any result and stay available everywhere. A bench that needs
-something the design does not carry &ndash; a loop probe, a port &ndash;
-says so.</p>
+<p>The <b>tool</b> dropdown in the toolbar selects the analysis. Each
+bench shows its own controls and its own views; Summary, Expression and
+Error are views of any result and stay available everywhere. The
+dropdown offers only the benches the imported run can ground in
+simulator data: the loop-analysis family (Loop gain, Compensate, GFT)
+appears when the run carries stb results, Modes when it also declares
+two iprobes. A run without stb data can still open the loop benches
+through <i>Analysis &rarr; Declare AC as return ratio</i>: an explicit
+statement that v(net)/v(input) in the AC sweep is the loop gain, which
+then serves as their ground-truth overlay. A reconstructed loop
+quantity is never shown without simulator truth beside it.</p>
 
 <h3><a name="transfer"></a>Transfer</h3>
 

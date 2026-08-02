@@ -42,7 +42,7 @@ from ..engine.interp import _s_degree_bound, _vinv_rows
 from ..engine.mna import S, MnaError, MnaSystem
 
 __all__ = ["CoefficientStory", "NumeralStory", "explain_coefficients",
-           "explain_per_numeral", "mono_key",
+           "explain_per_numeral", "explain_per_numeral_fast", "mono_key",
            "ratio_contributors", "ratio_lines"]
 
 
@@ -65,12 +65,15 @@ class NumeralStory:
     mono: str                      # kept-monomial key (mono_key), '1' = none
     value: float                   # the numeral, on a shared N/D scale
     contributors: list = field(default_factory=list)   # (name, share) desc.
+    approx: bool = False           # fast pass could not confirm this slot
 
     def describe(self, top: int = 6) -> str:
         who = ", ".join(f"{n} {s:+.0%}"
                         for n, s in self.contributors[:top])
         m = "" if self.mono == "1" else f" · {self.mono}"
-        return f"{self.part} s^{self.k}{m}: {who or '(no single contributor)'}"
+        mark = "≈ " if self.approx else ""
+        return (f"{self.part} s^{self.k}{m}: "
+                f"{mark}{who or '(no single contributor)'}")
 
 
 @dataclass
@@ -611,4 +614,316 @@ def _sweep(pts, P0, P1, K0, K1, col, patterns, values, top, min_share,
             stories.append(CoefficientStory(
                 part=part, k=k, value=float(c / cmax),
                 contributors=shares[:top]))
+    return stories
+
+
+def explain_per_numeral_fast(system: MnaSystem, out: str, keep, expr,
+                             *, top: int = 8, min_share: float = 0.02,
+                             rel_tol: float = 1e-2,
+                             progress=None) -> list[NumeralStory]:
+    """The float64 deep pass: same stories as explain_per_numeral at a
+    measured ~20x (fc 5-keep: 108.6 s exact vs 5.5 s), imprecise but
+    self-validating.
+
+    Three measured facts shape the design (spike, 2026-08-02):
+      * s samples live on a scaled COMPLEX CIRCLE, so the s-axis
+        inverse Vandermonde is a unitary DFT -- the 1e13-conditioned
+        integer grid ate all of float64 (shares off by O(1)); on the
+        circle the surviving shares matched exact to 4e-8.
+      * The numeral SLOTS and displayed values come from the solved
+        expression `expr` (exact, already computed) -- float64 cannot
+        classify which coefficients exist (kept-axis cancellation
+        deposits real-valued noise into zero slots).
+      * Each slot's kernel coefficient is cross-checked against the
+        exact one; a slot off by more than rel_tol is delivered with
+        approx=True instead of being silently wrong.
+
+    Shares are kernel-ratio DC/C, so the arbitrary display scaling of
+    `expr` (sp.cancel may divide a constant through) never enters.
+    """
+    import itertools
+
+    import gmpy2
+    import numpy as np
+
+    from ..engine.mna import hybrid_split
+
+    if out not in system.node_index:
+        raise MnaError(f"output node {out!r} not found (or it is ground)")
+    col = system.node_index[out]
+    subs, kept = hybrid_split(system, list(keep))
+    if not kept:
+        raise MnaError("per-numeral attribution needs a symbolic keep set")
+    rec = [n for n in kept if n in system.reciprocal]
+    if rec:
+        raise MnaError(f"kept resistances (1/r stamps) not supported "
+                       f"yet: {rec}")
+    ksyms = [system.symbols[n] for n in kept]
+    A = system.A.xreplace(subs)
+    free = set(A.free_symbols) - {S} - set(ksyms)
+    if free:
+        raise MnaError("explain_per_numeral needs numeric values; "
+                       f"missing {sorted(map(str, free))}")
+    Ak = A.copy()
+    Ak[:, col] = system.z
+
+    degs = [max(1, int(system.stamp_counts.get(n, 1))) for n in kept]
+    L = _s_degree_bound(A) + 1
+    n = A.rows
+    by_name = {s_: n_ for n_, s_ in system.symbols.items()}
+    kept_set = set(kept)
+
+    # ---- exact slots from the solved expression -------------------------
+    # normalize BEFORE any float conversion: fc-scale coefficients are
+    # thousands of bits and float(c) is inf, which poisoned sigma and
+    # flagged every slot. Exact division by the largest coefficient
+    # first keeps every representable slot in float range.
+    num_e, den_e = sp.fraction(sp.together(expr))
+    raw: dict[tuple, object] = {}
+    for part, e in (("num", num_e), ("den", den_e)):
+        try:
+            poly = sp.Poly(sp.expand(e), *ksyms, S)
+        except sp.PolynomialError as exc:
+            raise MnaError(f"expr is not polynomial in the kept "
+                           f"symbols: {exc}") from None
+        for mexps, c in poly.terms():
+            ex = tuple(int(x) for x in mexps)
+            if any(x > d for x, d in zip(ex[:-1], degs)) or ex[-1] >= L:
+                raise MnaError("expr degrees exceed the stamp-count "
+                               "bounds: not the hybrid solve of this "
+                               "system/keep")
+            raw[(part,) + ex] = c
+    if not raw:
+        raise MnaError("expr has no terms")
+    cmax = abs(max(raw.values(), key=lambda c: abs(c)))
+    exact = {k: float(c / cmax) for k, c in raw.items()}
+
+    # ---- descriptors: float coefficients of every entry and pattern ----
+    with gmpy2.context(precision=238):
+        def desc(matrix):
+            o = []
+            for i in range(n):
+                for j in range(n):
+                    e = matrix[i, j]
+                    if e == 0:
+                        continue
+                    e1 = e.coeff(S)
+                    e0 = sp.expand(e - S * e1)
+                    t0 = [(float(c), x) for c, x in _g_terms(e0, ksyms)]
+                    t1 = [(float(c), x) for c, x in _g_terms(e1, ksyms)]
+                    if t0 or t1:
+                        o.append((i, j, t0, t1))
+            return o
+
+        adesc = desc(A)
+        kdesc = desc(Ak)
+        patterns: dict[str, list] = {}
+        for i in range(system.A.rows):
+            for j in range(system.A.cols):
+                e = system.A[i, j]
+                if e == 0 or getattr(e, "is_Number", False):
+                    continue
+                for sym in e.free_symbols - {S}:
+                    name = by_name.get(sym)
+                    if (name is None or name in kept_set
+                            or name not in system.values):
+                        continue
+                    d = sp.diff(e, sym).xreplace(subs)
+                    d1 = d.coeff(S)
+                    d0 = sp.expand(d - S * d1)
+                    patterns.setdefault(name, []).append(
+                        (i, j,
+                         [(float(c), x) for c, x in _g_terms(d0, ksyms)],
+                         [(float(c), x) for c, x in _g_terms(d1, ksyms)]))
+    pnames = list(patterns)
+
+    # ---- the kernel -----------------------------------------------------
+    # each kept axis samples at the symbol's PHYSICAL value times the
+    # small integers: the recovered products c_m * v^m are the
+    # physically balanced quantities (they sum to the same det), so the
+    # tensor's dynamic range collapses to the physical spread instead
+    # of the raw coefficients' -- measured on fc: integer grids left
+    # only the top ~13 decades of slots inside float64. The exact v^m
+    # is divided back out after reconstruction, losing nothing.
+    vscale = np.array([float(system.values.get(nm, 1.0)) or 1.0
+                       for nm in kept])
+    axes_pts = [np.arange(1, d + 2, dtype=float) for d in degs]
+    shape_k = tuple(d + 1 for d in degs)
+    grid_idx = np.array(list(itertools.product(
+        *[range(d + 1) for d in degs])), dtype=int)
+    G = len(grid_idx)
+    KV = np.stack([axes_pts[a][grid_idx[:, a]] * vscale[a]
+                   for a in range(len(degs))], axis=1)
+
+    def ev_chunk(terms, kvc):
+        acc = np.zeros(len(kvc))
+        for c, exps in terms:
+            t = np.full(len(kvc), c)
+            for a, e in enumerate(exps):
+                if e:
+                    t *= kvc[:, a] ** e
+            acc += t
+        return acc
+
+    a0m = sum(abs(v) for (_, _, t0, _) in adesc for v, _ in t0)
+    a1m = sum(abs(v) for (_, _, _, t1) in adesc for v, _ in t1)
+    base_s0 = a0m / a1m if a1m else 1.0
+
+    def eq_det_inv(M):
+        # row/column equilibration: MNA entries span ~10 decades and a
+        # raw float64 LU loses the small pivots outright
+        r = np.abs(M).max(axis=2)
+        r[r == 0.0] = 1.0
+        M1 = M / r[:, :, None]
+        c = np.abs(M1).max(axis=1)
+        c[c == 0.0] = 1.0
+        sg, ld = np.linalg.slogdet(M1 / c[:, None, :])
+        ld = ld + np.log(r).sum(axis=1) + np.log(c).sum(axis=1)
+        inv = np.linalg.inv(M1 / c[:, None, :]) / c[:, :, None] \
+            / r[:, None, :]
+        return sg, ld, inv
+
+    CH = 64
+    rows = [np.array([[float(q.numerator) / float(q.denominator)
+                       for q in row]
+                      for row in _vinv_rows(
+                          [sp.Rational(int(v)) for v in pts])])
+            for pts in axes_pts]
+
+    def sweep(radius, pass_ix, n_pass):
+        """One full grid sweep at one circle radius. Returns (C, DC) or
+        None when a sample circle hits a singularity."""
+        s_pts = radius * np.exp(2j * np.pi * np.arange(L) / L)
+        SGv = {p: np.empty((G, L), dtype=complex) for p in ("num", "den")}
+        LDv = {p: np.empty((G, L)) for p in ("num", "den")}
+        TR = {part: {p: np.empty((G, L), dtype=complex) for p in pnames}
+              for part in ("num", "den")}
+        for lo in range(0, G, CH):
+            hi = min(lo + CH, G)
+            kvc = KV[lo:hi]
+            m = hi - lo
+
+            def build(dsc):
+                M0 = np.zeros((m, n, n))
+                M1 = np.zeros((m, n, n))
+                for (i, j, t0, t1) in dsc:
+                    if t0:
+                        M0[:, i, j] = ev_chunk(t0, kvc)
+                    if t1:
+                        M1[:, i, j] = ev_chunk(t1, kvc)
+                return M0, M1
+
+            A0c, A1c = build(adesc)
+            K0c, K1c = build(kdesc)
+            MA = (A0c[:, None] + s_pts[None, :, None, None]
+                  * A1c[:, None]).reshape(m * L, n, n)
+            MK = (K0c[:, None] + s_pts[None, :, None, None]
+                  * K1c[:, None]).reshape(m * L, n, n)
+            sgA, ldA, Ainv = eq_det_inv(MA)
+            sgK, ldK, Kinv = eq_det_inv(MK)
+            if not (np.isfinite(ldA).all() and np.isfinite(ldK).all()):
+                return None
+            SGv["den"][lo:hi] = sgA.reshape(m, L)
+            LDv["den"][lo:hi] = ldA.reshape(m, L)
+            SGv["num"][lo:hi] = sgK.reshape(m, L)
+            LDv["num"][lo:hi] = ldK.reshape(m, L)
+            Ainv = Ainv.reshape(m, L, n, n)
+            Kinv = Kinv.reshape(m, L, n, n)
+            for p in pnames:
+                trA = np.zeros((m, L), dtype=complex)
+                trK = np.zeros((m, L), dtype=complex)
+                for (i, j, t0, t1) in patterns[p]:
+                    dv = (ev_chunk(t0, kvc)[:, None]
+                          + s_pts[None, :] * ev_chunk(t1, kvc)[:, None])
+                    trA += dv * Ainv[:, :, j, i]
+                    if j != col:
+                        trK += dv * Kinv[:, :, j, i]
+                TR["den"][p][lo:hi] = trA
+                TR["num"][p][lo:hi] = trK
+            if progress is not None:
+                progress(pass_ix * G + hi, n_pass * G)
+
+        s0_pow = radius ** np.arange(L)
+
+        def recon(t):
+            # samples sit at r*w^j with w = exp(+2j*pi/L): the coeff of
+            # s^k is the FORWARD DFT bin over L (ifft returns the bins
+            # index-reversed -- measured: every non-symmetric slot wrong)
+            cur = (np.fft.fft(t.reshape(shape_k + (L,)), axis=-1)
+                   / (L * s0_pow))
+            for ax, R in enumerate(rows):
+                cur = np.moveaxis(np.tensordot(R, cur, axes=([1], [ax])),
+                                  0, ax)
+                # undo the physical axis scaling: recovered c_m * v^m
+                sh = [1] * cur.ndim
+                sh[ax] = -1
+                cur = cur / (vscale[ax]
+                             ** np.arange(shape_k[ax])).reshape(sh)
+            return cur
+
+        C = {}
+        DC = {}
+        for part in ("num", "den"):
+            c0 = LDv[part].mean()
+            det = SGv[part] * np.exp(LDv[part] - c0)
+            C[part] = recon(det)
+            DC[part] = {p: recon(det * TR[part][p]) for p in pnames}
+        return C, DC
+
+    # one radius balances only a band of s-orders: on fc the pole spread
+    # is ~6 decades, so a single circle confirmed k<=2 and lost the rest.
+    # Three radii two decades apart cover the spread; a slot is trusted
+    # when ANY radius reproduces its exact coefficient.
+    radii = [base_s0, base_s0 * 1e-2, base_s0 * 1e2]
+    passes = []
+    for ix, base_r in enumerate(radii):
+        for r_ in (base_r, base_r * 1.37):    # dodge singular circles
+            got = sweep(r_, ix, len(radii))
+            if got is not None:
+                passes.append(got)
+                break
+    if not passes:
+        raise MnaError("explain_per_numeral_fast: singular samples at "
+                       "every radius")
+
+    # ---- stories: exact slots, kernel shares, per-slot cross-check -----
+    anchor = {}
+    for key, v in exact.items():
+        part = key[0]
+        if part not in anchor or abs(v) > abs(exact[anchor[part]]):
+            anchor[part] = key
+    aligned = []
+    for C, DC in passes:
+        sigma = {part: C[part][anchor[part][1:]] / exact[anchor[part]]
+                 for part in anchor}
+        aligned.append((C, DC, sigma))
+
+    stories = []
+    for key, v_ex in sorted(exact.items(),
+                            key=lambda kv: (kv[0][0], kv[0][-1])):
+        part, idx = key[0], key[1:]
+        pick = None
+        for C, DC, sigma in aligned:
+            c_k = C[part][idx]
+            if (sigma[part] != 0
+                    and abs(c_k / sigma[part] - v_ex)
+                    <= rel_tol * abs(v_ex)):
+                pick = (C, DC, True)
+                break
+        if pick is None:
+            pick = aligned[0][:2] + (False,)
+        C, DC, trusted = pick
+        c_k = C[part][idx]
+        contr = []
+        if c_k != 0:
+            for p in pnames:
+                share = (system.values[p] * DC[part][p][idx] / c_k).real
+                if abs(share) >= min_share:
+                    contr.append((p, float(share)))
+            contr.sort(key=lambda t2: -abs(t2[1]))
+        stories.append(NumeralStory(
+            part=part, k=int(idx[-1]),
+            mono=mono_key({kept[i]: idx[i] for i in range(len(kept))}),
+            value=float(v_ex), contributors=contr[:top],
+            approx=not trusted))
     return stories

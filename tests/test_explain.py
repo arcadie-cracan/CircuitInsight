@@ -166,3 +166,68 @@ def test_session_surface_is_cached_and_excludes_the_keep():
                                progress=lambda a, b: seen.append((a, b)))
     assert seen and seen[-1][1] == seen[0][1]        # (done, total) shape
     assert c.cached_per_numeral("VIND", "vout", keep=keep2) is d2
+
+
+def test_fast_pass_matches_exact_on_the_synthetic_circuit():
+    """The float64 circle kernel against the exact mpfr sweep on the
+    hand-calculable circuit: same slots (they come from the solved
+    expression), same values, rankings and shares to well inside the
+    ranking tolerance, nothing flagged approx."""
+    from circuitinsight.analysis.explain import (explain_per_numeral,
+                                                 explain_per_numeral_fast)
+    from circuitinsight.engine.mna import solve_tf
+
+    system = build_mna(_cs_prims(), ("0",), "V1")
+    tf = solve_tf(system, "out", keep=["RB", "CL"])
+    exact = explain_per_numeral(system, "out", ["RB", "CL"])
+    fast = explain_per_numeral_fast(system, "out", ["RB", "CL"], tf.expr)
+
+    ex = {(st.part, st.k, st.mono): st for st in exact}
+    fa = {(st.part, st.k, st.mono): st for st in fast}
+    assert set(ex) == set(fa)
+    for key, st in fa.items():
+        assert not st.approx, f"{key} unconfirmed on a trivial circuit"
+        es, fs = dict(ex[key].contributors), dict(st.contributors)
+        for p in set(es) | set(fs):
+            assert fs.get(p, 0.0) == pytest.approx(
+                es.get(p, 0.0), abs=5e-3), (key, p)
+
+
+def test_fast_pass_matches_exact_on_the_ota():
+    """On ota5t with two kept letters: every trusted story's top-3
+    contributor ranking equals the exact pass's, and shares agree to
+    the display tolerance. Trusted must be the common case, not the
+    exception."""
+    import warnings
+
+    from circuitinsight.session import SessionController
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        c = SessionController.open(FIX / "ota5t" / "tb_ota5t.cin.json",
+                                   FIX / "ota5t" / "psf")
+    keep = ["gm_I0.MN1", "cdb_MN2"]
+    exact = c.explain_per_numeral("VIND", "vout", keep=keep)
+    fast = c.explain_per_numeral("VIND", "vout", keep=keep, fast=True)
+
+    ex = {(st.part, st.k, st.mono): st for st in exact}
+    fa = {(st.part, st.k, st.mono): st for st in fast}
+    # the expression keeps every true coefficient; the exact pass floors
+    # numerals below 1e-18 of scale — so fast covers exact, not equals
+    assert set(ex) <= set(fa), sorted(set(ex) - set(fa))
+    trusted = [k for k in ex if not fa[k].approx]
+    assert len(trusted) >= len(ex) * 2 // 3, (
+        f"only {len(trusted)}/{len(ex)} exact slots confirmed")
+    for key in trusted:
+        e3 = [p for p, _ in ex[key].contributors[:3]]
+        f3 = [p for p, _ in fa[key].contributors[:3]]
+        assert f3 == e3, (key, e3, f3)
+        es, fs = dict(ex[key].contributors), dict(fa[key].contributors)
+        # the value cross-check bounds C, not the derivative tensors:
+        # shares on trusted slots are ranking-grade (a few percent),
+        # not display-grade
+        for p in set(es) & set(fs):
+            assert fs[p] == pytest.approx(es[p], abs=1e-1), (key, p)
+
+    # the session caches fast and exact separately; hovers prefer exact
+    assert c.cached_per_numeral("VIND", "vout", keep=keep) is exact

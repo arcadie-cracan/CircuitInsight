@@ -15,6 +15,7 @@ ngspice/LTspice/offline paths stay first-class.
 from __future__ import annotations
 
 import math
+import types
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -172,6 +173,10 @@ class SessionController:
         # entry is impossible, since the fingerprint IS the
         # identity of the circuit half it describes.
         self._tear_cache: dict = {}
+        self._has_stb: bool | None = None    # lazily probed, cached
+        #: net whose AC response the user DECLARED to be the return
+        #: ratio; None = no declaration (see declare_ac_loop_gain)
+        self.ac_loop_gain: str | None = None
         self.cin_path: Path | None = None
         self.op_path: Path | None = None
         self.simulator: str | None = None
@@ -751,6 +756,15 @@ class SessionController:
         return tagged + rest
 
     @property
+    def tagged_probes(self) -> list[str]:
+        """iprobe-tagged vsources only — declared stb intent. The Tool
+        dropdown filters the loop-analysis family on this, while `probes`
+        keeps offering every vsource as a Tian candidate."""
+        return [d.name for d in self._run.flat.devices
+                if d.device_type == "vsource"
+                and getattr(d, "meta", {}).get("cell") == "iprobe"]
+
+    @property
     def ports(self) -> list[str]:
         """Impedance-port candidates: isources first (a 0 A isource is the
         parallel Thevenin port marker), then vsources (series ports --
@@ -806,16 +820,52 @@ class SessionController:
         except Exception:
             return None
 
+    @property
+    def has_stb(self) -> bool:
+        """Whether the run carries Spectre stb results — the simulator
+        ground truth the loop-analysis benches are gated on."""
+        if self._has_stb is None:
+            try:
+                self._run.stb()
+                self._has_stb = True
+            except Exception:
+                self._has_stb = False
+        return self._has_stb
+
+    def declare_ac_loop_gain(self, out_net: str | None):
+        """The user's EXPLICIT statement that the run's AC data is a
+        return-ratio capture: v(out_net)/v(input) is then the loop-gain
+        reference, margins in the stb convention computed from it. None
+        withdraws the declaration. This is the only way the loop benches
+        open without stb results — a reconstructed loop gain is never
+        shown without simulator ground truth to check it against."""
+        self.ac_loop_gain = out_net
+
     def _stb_reference(self, points_freqs):
         """(freqs, loopGain, margins, label) from the run's stb results,
-        or (None,)*4 when the run has none."""
+        else from the DECLARED return-ratio AC data, else (None,)*4."""
         try:
             stb = self._run.stb()
             return (np.asarray(stb.freq, dtype=float),
                     np.asarray(stb.loop_gain),
                     stb, "Spectre stb loopGain")
         except Exception:
-            return None, None, None, None
+            pass
+        if self.ac_loop_gain:
+            try:
+                fr, packed = self._reference(self.suggested_input(),
+                                             self.ac_loop_gain)
+                if packed is not None:
+                    h = np.asarray(packed[0])
+                    fr = np.asarray(fr, dtype=float)
+                    pm, _f1, gm, _f2 = _loop_margins(fr, h)
+                    obj = types.SimpleNamespace(phase_margin_deg=pm,
+                                                gain_margin_db=gm)
+                    return (fr, h, obj,
+                            f"AC declared as T  v({self.ac_loop_gain})")
+            except Exception:
+                pass
+        return None, None, None, None
 
     def loop_gain(self, probe: str, keep=(), *, reference: bool = True,
                   fmin: float = 1.0, fmax: float = 1e10,
@@ -1152,31 +1202,49 @@ class SessionController:
         return stories
 
     def explain_per_numeral(self, inp: str, out: str, keep=(), *,
-                            progress=None, **kw):
+                            progress=None, fast: bool = False, **kw):
         """Per-numeral attribution: every collapsed numeral of the hybrid
         expression (coefficient of s^k · kept-monomial) with its
         contributors, from a derivative sweep over the hybrid grid
         (analysis/explain.py). On demand, cached; `progress` reports
         (grid point, total) and is deliberately outside the cache-bypass
-        kwargs — a progress bar must not disable caching."""
-        key = ("pernumeral", inp, out, tuple(sorted(keep)),
+        kwargs — a progress bar must not disable caching.
+
+        fast=True runs the float64 circle kernel instead of the exact
+        mpfr sweep (~20x, measured): the numeral slots and values come
+        from the cached solve's exact expression, shares from the
+        kernel, and any slot the kernel cannot confirm arrives with
+        approx=True. It solves first if no solve is cached."""
+        key = ("pernumeral", fast, inp, out, tuple(sorted(keep)),
                tuple(self._matches), self.circuit_state, self._match_policy)
         if not kw and key in self._cache:
             return self._cache[key]
-        from .analysis.explain import explain_per_numeral as _deep
-
         sysm = self._analyzer_ready().system(inp)
-        stories = _deep(sysm, out, keep, progress=progress, **kw)
+        if fast:
+            from .analysis.explain import explain_per_numeral_fast as _f
+
+            r = self.solve(inp, out, keep=list(keep))
+            stories = _f(sysm, out, keep, r.tf.expr,
+                         progress=progress, **kw)
+        else:
+            from .analysis.explain import explain_per_numeral as _deep
+
+            stories = _deep(sysm, out, keep, progress=progress, **kw)
         if not kw:
             self._cache[key] = stories
         return stories
 
     def cached_per_numeral(self, inp: str, out: str, keep=()):
         """The explain_per_numeral stories if already computed, else
-        None — never computes."""
-        key = ("pernumeral", inp, out, tuple(sorted(keep)),
-               tuple(self._matches), self.circuit_state, self._match_policy)
-        return self._cache.get(key)
+        None — never computes. Exact stories win over fast ones when
+        both exist."""
+        tail = (inp, out, tuple(sorted(keep)),
+                tuple(self._matches), self.circuit_state,
+                self._match_policy)
+        exact = self._cache.get(("pernumeral", False) + tail)
+        if exact is not None:
+            return exact
+        return self._cache.get(("pernumeral", True) + tail)
 
     def cached_numerals(self, inp: str, out: str, keep=()):
         """The explain_numerals stories if already computed for this

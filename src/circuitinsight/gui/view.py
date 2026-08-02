@@ -1025,10 +1025,14 @@ def numeral_tips(stories, deep=None, top: int = 5) -> dict:
                                      + fmt(st.contributors))
     for st in deep or []:
         m = "" if st.mono == "1" else f" · {st.mono}"
+        approx = getattr(st, "approx", False)
+        tail = ("<br>per-numeral, fast pass — unconfirmed (≈)"
+                if approx else "<br>per-numeral (exact for linear stamps)")
         tips[f"{st.part}:{st.k}:{st.mono}"] = (
             f"<b>{st.part} s^{st.k}{m}</b> — "
+            + ("≈ " if approx else "")
             + (fmt(st.contributors) or "no collapsed contributor")
-            + "<br>per-numeral (exact for linear stamps)")
+            + tail)
     ks = {p: sorted(st.k for st in stories if st.part == p)
           for p in ("num", "den")}
     for tag, label, a, b in (
