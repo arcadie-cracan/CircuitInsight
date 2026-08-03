@@ -20,7 +20,7 @@ exact symbolic machinery; the solves it suggests remain exact.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import sympy as sp
@@ -382,6 +382,9 @@ class ReactanceReduction:
     sig_hi: float = 0.0          # stays within floor_db of its peak
     eps: float | None = None     # anchored mode: |dH| <= eps*(|H|+anchor)
     anchor: float | None = None  # min |H| at the band edges
+    strategy: str | None = None  # 'plain' | 'stability' | 'rejection'
+    met: bool = True             # tolerance reached within the order cap
+    metrics: dict = field(default_factory=dict)   # strategy readouts
 
     def report(self) -> str:
         if self.eps is not None:
@@ -412,6 +415,31 @@ class ReactanceReduction:
         return "\n".join(lines)
 
 
+def loop_margins(freqs, h):
+    """(pm_deg, pm_freq, gm_db, gm_freq) from a gain sweep in the stb
+    convention (phase +180 deg at DC). Entries are None when the
+    respective crossing is not in the band. Shared by the session's
+    loop-gain reporting and the Stability reduction strategy."""
+    f = np.asarray(freqs, dtype=float)
+    m = 20 * np.log10(np.abs(h))
+    ph = np.degrees(np.unwrap(np.angle(h)))
+    x = np.log10(f)
+    pm = fpm = gm = fgm = None
+    k = np.where(np.diff(np.sign(m)))[0]
+    if k.size:
+        k = k[0]
+        xu = np.interp(0, [m[k + 1], m[k]], [x[k + 1], x[k]])
+        pm = float(np.interp(xu, [x[k], x[k + 1]], [ph[k], ph[k + 1]]))
+        fpm = float(10 ** xu)
+    j = np.where(np.diff(np.sign(ph)))[0]
+    if j.size:
+        j = j[0]
+        xj = np.interp(0, [ph[j + 1], ph[j]], [x[j + 1], x[j]])
+        gm = float(-np.interp(xj, [x[j], x[j + 1]], [m[j], m[j + 1]]))
+        fgm = float(10 ** xj)
+    return pm, fpm, gm, fgm
+
+
 def _reactive_symbols(analyzer) -> set[str]:
     from ..engine.mna import symbol_name
     return {symbol_name(p, analyzer._alias)
@@ -427,7 +455,12 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
                         floor_abs_db: float | None = None,
                         phase_tol_deg: float | None = None,
                         eps: float | None = None,
-                        progress=None) -> ReactanceReduction:
+                        strategy: str | None = None,
+                        gain_db: float = 1.0, phase_deg: float = 5.0,
+                        pm_deg: float = 5.0, gm_db: float = 2.0,
+                        rej_db: float = 3.0, fc_rel: float = 0.10,
+                        cap: int = 6,
+                        progress=None, note=None) -> ReactanceReduction:
     """The minimal set of reactive elements that reproduces H(f) over the
     band: start with every reactance removed and greedily add the one whose
     inclusion most reduces the Bode-magnitude band error, stopping within
@@ -451,7 +484,24 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
     bounds magnitude (~8.7*eps dB) and phase (~57*eps deg) jointly above
     the anchor and forgives the response below it -- the band placement
     IS the statement of where fidelity matters. floor/phase/metric are
-    ignored in this mode."""
+    ignored in this mode.
+
+    strategy (the TOLERANCE STRATEGIES; each gates on the quantity its
+    designer actually reads, and every one is CAPPED at `cap` elements
+    -- an unreadable model is a failed answer, reported with met=False
+    and the achieved numbers, never dumped):
+      'plain'      -- gain_db and phase_deg, each on its own axis at
+                      every band point. Spec-sheet contract; trusts the
+                      cursor literally (dB error is scale-free).
+      'stability'  -- the reduced model must reproduce the full model's
+                      margins: PM within pm_deg, GM within gm_db, the
+                      unity crossing within fc_rel. The band's only job
+                      is to contain the crossover. metrics records
+                      full/reduced PM, GM, fc.
+      'rejection'  -- the dB curve tracks within rej_db at every band
+                      point, phase unconstrained: for CMRR/PSRR the
+                      curve IS the deliverable and dB error is relative
+                      error of the small quantity."""
     if fmin is not None and fmax is not None:
         lo, hi = fmin, fmax
     else:
@@ -498,7 +548,9 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
     # band the user asked for (that silence once certified a 1-pole
     # model at 0.6 dB over a band it visibly left by 25 dB)
     anchor = None
-    if eps is not None:
+    if strategy is not None:
+        sig = m                       # strategies enforce over the band
+    elif eps is not None:
         # anchored mode: the band mask is the whole selected band; the
         # anchor level comes from the band EDGES -- dragging the cursor
         # to a level is how the user declares the depth of interest
@@ -540,7 +592,44 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
     if not sig.any():
         sig = m
 
+    full_margins = None
+    if strategy == "stability":
+        full_margins = loop_margins(freqs[sig], H_full[sig])
+
     def err(Hr: np.ndarray) -> float:
+        if strategy == "stability":
+            # gate on the numbers a stability designer reads: PM, GM and
+            # the unity-crossing frequency of the reduced model vs the
+            # full one. Normalized so <= 1 means "all within tolerance".
+            ok = sig & np.isfinite(Hr)
+            if not ok.any():
+                return float("inf")
+            pm_f, fpm_f, gm_f, _ = full_margins
+            pm, fpm, gm, _ = loop_margins(freqs[ok], Hr[ok])
+            e = 0.0
+            if pm_f is not None:
+                if pm is None or fpm is None or fpm <= 0:
+                    return float("inf")
+                e = max(abs(pm - pm_f) / pm_deg,
+                        abs(math.log(fpm / fpm_f)) / fc_rel)
+            if gm_f is not None:
+                e = max(e, float("inf") if gm is None
+                        else abs(gm - gm_f) / gm_db)
+            return e
+        if strategy == "plain":
+            ok = sig & np.isfinite(Hr) & (np.abs(Hr) > 0)
+            if not ok.any():
+                return float("inf")
+            dmag = np.abs(20 * np.log10(np.abs(Hr[ok]) / mag_full[ok]))
+            dph = np.abs(np.angle(Hr[ok]) - np.angle(H_full[ok]))
+            dph = np.degrees(np.minimum(dph, 2 * np.pi - dph))
+            return float(max(dmag.max() / gain_db, dph.max() / phase_deg))
+        if strategy == "rejection":
+            ok = sig & np.isfinite(Hr) & (np.abs(Hr) > 0)
+            if not ok.any():
+                return float("inf")
+            dmag = np.abs(20 * np.log10(np.abs(Hr[ok]) / mag_full[ok]))
+            return float(dmag.max() / rej_db)
         if eps is not None:
             ok = sig & np.isfinite(Hr)
             if not ok.any():
@@ -557,11 +646,20 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
         dph = np.degrees(np.minimum(dph, 2 * np.pi - dph))
         return float(np.maximum(dmag, dph / 10.0).max())
 
-    tol = eps if eps is not None else tol_db
+    if strategy is not None:
+        tol = 1.0                     # criteria are normalized to <= 1
+        if max_elements is None:
+            max_elements = cap        # an unreadable model is a failure
+    else:
+        tol = eps if eps is not None else tol_db
 
     Qsel = Q_base.copy()
     Hr = response(Qsel)
     baseline = err(Hr)
+    unit = "" if (eps is not None or strategy is not None) else " dB"
+    if note is not None:
+        note(f"baseline error {baseline:.3g}{unit} with no reactances; "
+             f"tolerance {tol:g}{unit}, {len(react)} candidates")
     selected: list[str] = []
     errors: list[float] = []
     remaining = set(react)
@@ -594,8 +692,27 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
         Qsel = Qsel + contrib[best]
         Hr = response(Qsel)
         errors.append(best_err)
+        if note is not None:
+            fate = ("tolerance met, stopping" if best_err <= tol else
+                    f"still above tolerance, re-trying "
+                    f"{len(remaining)} candidates")
+            note(f"round {len(selected)}: + {best} -> error "
+                 f"{best_err:.3g}{unit} ({fate})")
         if best_err <= tol:
             break
+    final = errors[-1] if errors else baseline
+    metrics: dict = {}
+    if strategy == "stability":
+        pm_f, fpm_f, gm_f, fgm_f = full_margins
+        pm_r, fpm_r, gm_r, _ = loop_margins(freqs[sig], Hr[sig])
+        metrics = {"pm_full": pm_f, "pm_red": pm_r,
+                   "fc_full": fpm_f, "fc_red": fpm_r,
+                   "gm_full": gm_f, "gm_red": gm_r}
+    met = bool(final <= tol + 1e-12)
+    if note is not None and strategy is not None and not met:
+        note(f"order cap {max_elements} reached at score {final:.3g} "
+             f"(> 1 = tolerance missed): the response needs more order "
+             f"in this band — narrow the band or relax the tolerance")
     return ReactanceReduction(selected=selected, errors_db=errors,
                               baseline_db=baseline, tol_db=tol_db,
                               freqs=freqs, metric=metric,
@@ -606,4 +723,5 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
                               floor_is_abs=floor_abs_db is not None,
                               sig_lo=float(freqs[sig].min()),
                               sig_hi=float(freqs[sig].max()),
-                              eps=eps, anchor=anchor)
+                              eps=eps, anchor=anchor,
+                              strategy=strategy, met=met, metrics=metrics)

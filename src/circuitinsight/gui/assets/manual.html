@@ -119,33 +119,45 @@ cascode at a 1 dB tolerance: full order returned the same degree
 <p><b>What appears when.</b> Each control exists exactly when it means
 something. Exact shows neither tolerance nor band. Full order shows
 the dB/degree collapse budgets and a fixed tolerance tube. Lowest
-order shows <b>one knob and one slider</b>: a single <b>model
-tolerance</b> in percent, and the band slider.</p>
+order shows the <b>tolerance strategy</b> dropdown, its strategy's
+own spins, and the band slider.</p>
 
-<p><b>The band states where; the tolerance states how much.</b> A
-lowest-order result is certified only over a frequency band &ndash;
+<p><b>The strategy states what is judged; the band states where.</b>
+A lowest-order result is certified only over a frequency band &ndash;
 outside it, it is not slightly off but structurally wrong: everything
-past the last kept pole is fiction. Drag the two cursors to the
-frequencies your question lives in: past crossover for stability
-work, the passband only for gain accuracy, the whole sweep for
-documentation. The band edges do double duty: the smaller edge level
-of |H| becomes the <b>anchor</b>, and the criterion enforced at every
-band point is |&Delta;H| &le; &epsilon;&middot;(|H| + anchor). Far
-above the anchor that is pure relative error &ndash; &epsilon; = 10%
-means the model's gain is right to &plusmn;0.8 dB and its phase to
-&plusmn;5.7&deg; (the label beside the knob translates live). Near
-the anchor the allowance doubles, and below it the criterion lets go
-&ndash; you told the tool where you stopped caring by where you put
-the cursor. A phase margin trustworthy to &plusmn;5&deg; wants
-&epsilon; &asymp; 5% with the band ending just past crossover.</p>
+past the last kept pole is fiction. Each strategy gates the reduction
+on the quantity its designer actually reads:</p>
+<table border="1" cellpadding="4" cellspacing="0">
+<tr><td><b>Gain &amp; phase</b></td>
+<td>the spec-sheet contract: |H| within the dB budget AND phase
+within the degree budget at every band point. Trusts the cursor
+literally &ndash; a band dragged deep into the rolloff demands
+fidelity there too.</td></tr>
+<tr><td><b>Stability (margins)</b></td>
+<td>the reduced model must reproduce the full model's <b>phase
+margin</b> (within the &deg; budget), <b>gain margin</b> (within the
+dB budget) and unity-crossing frequency. The band's only job is to
+contain the crossover; everything else is forgiven. The result
+reports the margins themselves: "PM 85.2&deg;&rarr;85.0&deg;
+(&Delta;4.9&deg;), fc 12.7 MHz". With no unity crossing in the band
+it says so instead of inventing margins to preserve.</td></tr>
+<tr><td><b>Rejection (dB)</b></td>
+<td>for CMRR/PSRR studies: the dB curve tracks the full model within
+the budget at every band point, phase unconstrained &ndash; dB error
+is relative error of the small quantity, so no anchor or floor is
+needed.</td></tr>
+</table>
 
-<p>The <b>tolerance tube</b> renders that criterion exactly: a thin
-ribbon hugging the model where |H| is far above the anchor, flaring
-open as the response approaches the band-edge level (drawn as a
-dotted line), fully open below it. Where the tube is wide, the tool
-has stopped demanding fidelity &ndash; the forgiveness is visible on
-the plot instead of encoded in a spinner. The reported error is
-always measured against the full model, never assumed.</p>
+<p>Every strategy is <b>capped at a readable order</b>: if the
+tolerance is not reachable with six reactances, the tool does not
+dump a 26-element model &ndash; it returns the best readable one with
+its achieved numbers and the remedy (narrow the band or relax the
+tolerance). An unreadable model is a failed answer, not a result.
+The <b>tolerance tube</b> shades each strategy's own promise: both
+budgets across the band for Gain &amp; phase, the phase around the
+crossover for Stability, the magnitude alone for Rejection. The
+reported error is always measured against the full model, never
+assumed.</p>
 
 <p><b>The order certificate.</b> While you drag the band, a label
 beside the slider reports what the band <i>demands</i>: "lowpass band

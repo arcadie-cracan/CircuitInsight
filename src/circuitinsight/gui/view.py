@@ -553,6 +553,12 @@ def summary_text(result) -> str:
                      "bench), and this result is exact for that circuit")
     for w in result.warnings:
         lines.append(f"⚠ {w}")
+    det = getattr(result, "details", None)
+    if det:
+        lines.append("")
+        lines.append("reduction detail")
+        for d in det:
+            lines.append(f"  · {d}")
     return "\n".join(lines)
 
 
@@ -662,14 +668,61 @@ def round_expr(expr, sig: int = SIG, factored: bool = False):
             # anyway (that is the un-simplified case); only factor tidy ones.
             nterms = len(sp.Add.make_args(num)) + len(sp.Add.make_args(den))
             if nterms <= 40:
-                e = sp.factor(num) / sp.factor(den)
+                # fold factor's monic 1.0*(...) wrapper FIRST, or the
+                # grouping sees a Mul where the Add hides
+                e = (_best_grouping(_fold_unit_floats(sp.factor(num)))
+                     / _best_grouping(_fold_unit_floats(sp.factor(den))))
         except (sp.PolynomialError, sp.GeneratorsNeeded):
             pass
 
     e = _drop_common_scale(e, sig)
+    return _fold_unit_floats(e)
 
-    ones = {a: sp.Integer(1) for a in e.atoms(sp.Float) if float(a) == 1.0}
-    return e.xreplace(ones) if ones else e
+
+def _best_grouping(side):
+    """Partial structure sp.factor cannot see: when a side stays a raw
+    Add (irreducible as a whole), collect() by the symbol shared by
+    most terms exposes the near-common factor — the gm carried by four
+    of five denominator terms in a cascode A0. Tries the few most-shared
+    symbols and keeps the most compact form by count_ops; exact
+    rearrangement, no value change."""
+    from collections import Counter
+
+    import sympy as sp
+
+    terms = sp.Add.make_args(side)
+    if len(terms) < 4:
+        return side
+    best, score = side, sp.count_ops(side)
+    cnt = Counter(s for t in terms for s in t.free_symbols)
+    for sym, n in cnt.most_common(6):
+        if n < 2:
+            break
+        try:
+            c = sp.collect(side, sym)
+        except Exception:
+            continue
+        sc = sp.count_ops(c)
+        if sc < score:
+            best, score = c, sc
+    return best
+
+
+def _fold_unit_floats(e):
+    """Float(±1.0) coefficients become Integers so sympy drops them as
+    factors. Two producers: N() leaves unit coefficients as 1.0, and
+    sp.factor over float coefficients is monic-with-a-Float — its RR
+    content extraction wraps the result in an explicit 1.0*(...). Both
+    rendered as a noise '1 ·' in the expression view."""
+    import sympy as sp
+
+    m = {}
+    for a in e.atoms(sp.Float):
+        if float(a) == 1.0:
+            m[a] = sp.Integer(1)
+        elif float(a) == -1.0:
+            m[a] = sp.Integer(-1)
+    return e.xreplace(m) if m else e
 
 
 def _rgcd(a, b):
@@ -850,10 +903,12 @@ def _raw_tf_lines(result, max_terms: int = 14, base: bool = True,
 
     def _per_coeff_factored(poly, part):
         # factor each s-power coefficient separately so a conductance sum groups
-        # into a product (G_o1 G_o2) instead of expanding across the polynomial
+        # into a product (G_o1 G_o2) instead of expanding across the polynomial;
+        # factor over floats is monic-with-a-Float, so fold its 1.0's out
         expr = sp.Integer(0)
         for powers, coeff in poly.as_dict().items():
-            expr += sp.factor(round_expr(coeff)) * s ** powers[0]
+            expr += (_fold_unit_floats(sp.factor(round_expr(coeff)))
+                     * s ** powers[0])
         return latex_eng(expr, base, wrap, aliases,
                          num_tags=_term_tags(poly, part))
 

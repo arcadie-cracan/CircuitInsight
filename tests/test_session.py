@@ -302,12 +302,59 @@ def test_reduce_solve_anchored_contract():
         r = c.reduce_solve("VIND", "vout", [], eps=0.10,
                            fmin=1e3, fmax=3e8)
     assert r.eps == 0.10 and r.anchor > 0
+    # the strip line stays SHORT and actionable; the criterion, element
+    # names, certificate verdict and doublet caveat live in r.details
     head = r.warnings[0]
-    assert "anchor" in head and "dB" in head and "°" in head
+    assert "reduced to" in head and len(head) < 160
     assert r.enforced_fmin == 1e3 and r.enforced_fmax == 3e8
     assert hasattr(r, "certificate")
-    assert any("order" in w for w in r.warnings)
+    det = r.details
+    assert any("criterion" in d and "anchor" in d for d in det)
+    assert any("kept reactances" in d for d in det)
+    assert any("order" in d for d in det)
 
     cert = c.order_certificate("VIND", "vout", 1e3, 3e8)
     assert cert.order_at(0.10) >= 1
     assert cert.shape in ("lowpass", "bandpass", "highpass", "flat")
+
+
+def test_reduce_strategies_speak_the_designer_language():
+    """fc, the user's own gesture (band a bit past crossover): stability
+    yields ONE reactance with PM preserved within the budget; rejection
+    tracks the dB curve; plain enforces both axes. Every strategy caps
+    the order and never dumps an unreadable model."""
+    import warnings
+
+    from circuitinsight.session import SessionController
+
+    fcdir = FIX / "fc"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        c = SessionController.open(fcdir / "tb_fc.cin.json",
+                                   fcdir / "psf", cap_model="matrix")
+        c.set_matches(*c.suggest_matches())
+
+        r = c.reduce_solve("VIND", "vout", [], strategy="stability",
+                           strategy_opts={"pm_deg": 5.0, "gm_db": 2.0},
+                           fmin=151.0, fmax=76.8e6)
+    assert r.strategy == "stability" and r.warnings[0].startswith("reduced")
+    assert "PM" in r.warnings[0] and "Δ" in r.warnings[0]
+    assert len(r.warnings[0]) < 220              # a strip line, not a dump
+    mt = {d for d in r.details if "margins:" in d}
+    assert mt, "the Summary carries the margin readouts"
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        rj = c.reduce_solve("VIND", "vout", [], strategy="rejection",
+                            strategy_opts={"rej_db": 3.0},
+                            fmin=151.0, fmax=76.8e6)
+        pl = c.reduce_solve("VIND", "vout", [], strategy="plain",
+                            strategy_opts={"gain_db": 3.0,
+                                           "phase_deg": 20.0},
+                            fmin=151.0, fmax=76.8e6)
+    assert "tracks within" in rj.warnings[0]
+    assert "dB" in pl.warnings[0] and "°" in pl.warnings[0]
+    # the readability cap: no strategy ever exceeds it
+    for res in (r, rj, pl):
+        n = int(res.warnings[0].split(" reactance")[0].split()[-1])
+        assert n <= 6

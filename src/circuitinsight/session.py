@@ -108,28 +108,9 @@ def _n_terms(tf) -> int:
                for poly in (num, den) for _, c in poly.terms())
 
 
-def _loop_margins(freqs, h):
-    """(pm_deg, pm_freq, gm_db, gm_freq) from a loop-gain sweep in the stb
-    convention (phase +180 deg at DC). Entries are None when the respective
-    crossing is not in the band."""
-    f = np.asarray(freqs, dtype=float)
-    m = 20 * np.log10(np.abs(h))
-    ph = np.degrees(np.unwrap(np.angle(h)))
-    x = np.log10(f)
-    pm = fpm = gm = fgm = None
-    k = np.where(np.diff(np.sign(m)))[0]
-    if k.size:
-        k = k[0]
-        xu = np.interp(0, [m[k + 1], m[k]], [x[k + 1], x[k]])
-        pm = float(np.interp(xu, [x[k], x[k + 1]], [ph[k], ph[k + 1]]))
-        fpm = float(10 ** xu)
-    j = np.where(np.diff(np.sign(ph)))[0]
-    if j.size:
-        j = j[0]
-        xj = np.interp(0, [ph[j + 1], ph[j]], [x[j + 1], x[j]])
-        gm = float(-np.interp(xj, [x[j], x[j + 1]], [m[j], m[j + 1]]))
-        fgm = float(10 ** xj)
-    return pm, fpm, gm, fgm
+# the margins helper lives with the pursuit now (the Stability strategy
+# gates on it); this alias keeps every existing import working
+from .analysis.sensitivity import loop_margins as _loop_margins  # noqa: E402
 
 
 def _numeric_dc(tf) -> complex:
@@ -1433,7 +1414,10 @@ class SessionController:
                      floor_db: float = 60.0,
                      floor_abs_db: float | None = None,
                      eps: float | None = None,
-                     points: int = 400, progress=None) -> Result:
+                     strategy: str | None = None,
+                     strategy_opts: dict | None = None,
+                     points: int = 400, progress=None,
+                     note=None) -> Result:
         """Reduced-ORDER symbolic solve: keep only the reactances that shape H(s)
         over [fmin, fmax] (within tol_db), drop the rest, then collapse the
         coefficients with simplify. This lowers the pole count -- which Simplify
@@ -1443,8 +1427,10 @@ class SessionController:
         vs the FULL model in mag_err_db, and lists them in warnings. That error is
         the real cost of the lower order -- report it, do not hide it.
         """
+        opts = dict(strategy_opts or {})
         key = ("reduce", inp, out, norm_keep(keep), tol_db, max_elements,
                mag_db, phase_deg, fmin, fmax, floor_db, floor_abs_db, eps,
+               strategy, tuple(sorted(opts.items())),
                tuple(self._matches))
         if key not in self._cache:
             an = self._analyzer_ready()
@@ -1453,14 +1439,22 @@ class SessionController:
                 # derive from the SAME eps (dB/deg are its projections)
                 mag_db = 20.0 * math.log10(1.0 + eps)
                 phase_deg = math.degrees(eps)
+            elif strategy == "plain":
+                mag_db = opts.get("gain_db", 1.0)
+                phase_deg = opts.get("phase_deg", 5.0)
+            elif strategy == "stability":
+                mag_db, phase_deg = 1.0, opts.get("pm_deg", 5.0)
+            elif strategy == "rejection":
+                mag_db, phase_deg = opts.get("rej_db", 3.0), 30.0
             H, red = an.reduced_tf(inp, out, keep, tol_db=tol_db,
                                    fmin=fmin, fmax=fmax,
                                    max_elements=max_elements,
                                    floor_db=floor_db,
                                    floor_abs_db=floor_abs_db,
                                    phase_tol_deg=phase_deg,
-                                   eps=eps,
-                                   progress=progress)
+                                   eps=eps, strategy=strategy,
+                                   strategy_opts=opts,
+                                   progress=progress, note=note)
             Hs = H.simplify(mag_tol_db=mag_db, phase_tol_deg=phase_deg,
                             fmin=fmin, fmax=fmax)
             r = self._assemble(Hs, inp, out, keep, reference=reference,
@@ -1473,48 +1467,158 @@ class SessionController:
             r.phase_err_deg = float(Hs.achieved_phase_err_deg)
             r.n_terms_full = _n_terms(H)
             r.band_fmin, r.band_fmax = float(fmin), float(fmax)
-            if eps is not None:
-                # anchored contract: enforcement IS the band; the note
-                # translates eps into its dB/deg projections and carries
-                # the certificate's doublet caveat
-                r.eps = float(eps)
-                r.anchor = float(red.anchor)
+            if strategy is not None:
+                r.strategy = strategy
                 r.enforced_fmin, r.enforced_fmax = float(fmin), float(fmax)
-                a_db = 20.0 * math.log10(red.anchor) if red.anchor > 0 \
-                    else float("-inf")
-                head = (f"reduced to {len(red.selected)} reactance(s) "
-                        f"[{', '.join(red.selected)}] — within "
-                        f"{band_err:.1%} of the full response "
-                        f"(≈ ±{20 * math.log10(1 + band_err):.2g} dB, "
-                        f"±{math.degrees(band_err):.2g}° above the anchor) "
-                        f"over {eng(fmin, 'Hz')}–{eng(fmax, 'Hz')}, "
-                        f"anchor {a_db:.0f} dB (from the band edge)")
-                if band_err > eps:
-                    head += (f" — BUDGET NOT MET (asked {eps:.0%}): the "
-                             f"band edge demands fidelity at {a_db:.0f} dB;"
-                             f" narrow the band or raise the tolerance")
+                n_sel = len(red.selected)
+                names = (f" [{', '.join(red.selected)}]"
+                         if 0 < n_sel <= 3 else "")
+                det = [f"kept reactances: "
+                       f"{', '.join(red.selected) or '(none needed)'}"]
+                if strategy == "stability":
+                    mt = red.metrics
+                    pf, pr = mt.get("pm_full"), mt.get("pm_red")
+                    ff, fr_ = mt.get("fc_full"), mt.get("fc_red")
+                    gf, gr = mt.get("gm_full"), mt.get("gm_red")
+                    bits = []
+                    if pf is None:
+                        bits.append("no unity crossing in band — margins "
+                                    "undefined here, nothing to gate; "
+                                    "widen the band to the crossover")
+                    if pf is not None and pr is not None:
+                        bits.append(f"PM {pf:.1f}°→{pr:.1f}° "
+                                    f"(Δ{abs(pr - pf):.1f}°)")
+                    if ff and fr_:
+                        bits.append(f"fc {eng(ff, 'Hz')} "
+                                    f"(Δ{abs(fr_ / ff - 1):.1%})")
+                    if gf is not None and gr is not None:
+                        bits.append(f"GM {gf:.1f}→{gr:.1f} dB")
+                    elif gf is None:
+                        bits.append("GM: no ±180° crossing in band")
+                    head = (f"reduced to {n_sel} reactance(s){names} — "
+                            + ", ".join(bits))
+                    det.append("criterion: the reduced model reproduces "
+                               "the full model's margins (strategy: "
+                               "stability)")
+                    det += [f"margins: {b}" for b in bits]
+                elif strategy == "rejection":
+                    rej = opts.get("rej_db", 3.0)
+                    got = band_err * rej
+                    head = (f"reduced to {n_sel} reactance(s){names} — "
+                            f"tracks within {got:.2g} dB over "
+                            f"{eng(fmin, 'Hz')}–{eng(fmax, 'Hz')}")
+                    det.append(f"criterion: |Δ|H|| ≤ {rej:g} dB at every "
+                               f"band point, phase unconstrained "
+                               f"(strategy: rejection)")
+                else:
+                    gdb = opts.get("gain_db", 1.0)
+                    pdeg = opts.get("phase_deg", 5.0)
+                    head = (f"reduced to {n_sel} reactance(s){names} — "
+                            f"within ±{band_err * gdb:.2g} dB / "
+                            f"±{band_err * pdeg:.2g}° over "
+                            f"{eng(fmin, 'Hz')}–{eng(fmax, 'Hz')}")
+                    det.append(f"criterion: |Δ|H|| ≤ {gdb:g} dB and "
+                               f"|Δphase| ≤ {pdeg:g}° at every band "
+                               f"point (strategy: gain & phase)")
+                if not red.met:
+                    head += (f" — TOLERANCE NOT MET at the order cap: "
+                             f"best score {band_err:.2g}× the budget; "
+                             f"narrow the band or relax the tolerance "
+                             f"(details in Summary)")
+                    det.append(f"the order cap ({max_elements or 6}) "
+                               f"keeps the model readable — the response "
+                               f"genuinely carries more structure in "
+                               f"this band than the cap admits")
+                else:
+                    head += " (details in Summary)"
                 r.warnings.insert(0, head)
                 try:
+                    eps_eq = {"stability": 0.05,
+                              "rejection":
+                                  10 ** (opts.get("rej_db", 3.0) / 20) - 1,
+                              "plain":
+                                  10 ** (opts.get("gain_db", 1.0) / 20) - 1
+                              }[strategy]
                     cert = self.order_certificate(inp, out, fmin, fmax)
                     r.certificate = cert
-                    k = cert.order_at(eps)
-                    if len(red.selected) > k:
-                        r.warnings.append(
-                            f"an abstract order-{k} fit exists for this "
-                            f"band at {eps:.0%}; physical elements need "
-                            f"{len(red.selected)} — the cost of named "
-                            f"components")
-                    elif len(red.selected) <= k:
-                        r.warnings.append(
-                            f"order-optimal for this band ({eps:.0%})")
+                    k = cert.order_at(eps_eq)
+                    det.append(
+                        f"order-optimal for this band" if n_sel <= k else
+                        f"an abstract order-{k} fit exists at comparable "
+                        f"tolerance; physical elements need {n_sel} — "
+                        f"the cost of named components")
                     if cert.doublets:
                         d = cert.doublets[0]
-                        r.warnings.append(
+                        det.append(
                             f"pole/zero doublet near {eng(d[0], 'Hz')} "
                             f"(separation {d[2]:.1%}) — doublets affect "
                             f"settling, not this frequency response")
                 except Exception:
                     pass
+                r.details = det
+                self._cache[key] = r
+                return r
+            if eps is not None:
+                # anchored contract: enforcement IS the band. The strip
+                # gets ONE actionable line; everything else — element
+                # names, criterion, certificate verdict, doublet caveat
+                # — lands in r.details, which only the Summary renders.
+                r.eps = float(eps)
+                r.anchor = float(red.anchor)
+                r.enforced_fmin, r.enforced_fmax = float(fmin), float(fmax)
+                a_db = 20.0 * math.log10(red.anchor) if red.anchor > 0 \
+                    else float("-inf")
+                names = (f" [{', '.join(red.selected)}]"
+                         if 0 < len(red.selected) <= 3 else "")
+                head = (f"reduced to {len(red.selected)} reactance(s)"
+                        f"{names} — within {band_err:.1%} over "
+                        f"{eng(fmin, 'Hz')}–{eng(fmax, 'Hz')}")
+                if band_err > eps:
+                    head += (f" — BUDGET NOT MET (asked {eps:.0%}): "
+                             f"narrow the band or raise the tolerance"
+                             f" (details in Summary)")
+                else:
+                    head += " (details in Summary)"
+                r.warnings.insert(0, head)
+                det = [
+                    f"kept reactances: "
+                    f"{', '.join(red.selected) or '(none needed)'}",
+                    f"criterion: |ΔH| ≤ ε·(|H| + anchor) at every band "
+                    f"point; ε = {eps:.0%} "
+                    f"(≈ ±{20 * math.log10(1 + eps):.2g} dB, "
+                    f"±{math.degrees(eps):.2g}°), anchor {a_db:.0f} dB — "
+                    f"the smaller band-edge |H|",
+                    f"achieved: {band_err:.1%} "
+                    f"(≈ ±{20 * math.log10(1 + band_err):.2g} dB, "
+                    f"±{math.degrees(band_err):.2g}° above the anchor)",
+                ]
+                if band_err > eps:
+                    det.append(f"the band edge demands fidelity at "
+                               f"{a_db:.0f} dB — every decade of cursor "
+                               f"past the level you care about costs "
+                               f"reactances")
+                try:
+                    cert = self.order_certificate(inp, out, fmin, fmax)
+                    r.certificate = cert
+                    k = cert.order_at(eps)
+                    if len(red.selected) > k:
+                        det.append(
+                            f"an abstract order-{k} fit exists for this "
+                            f"band at {eps:.0%}; physical elements need "
+                            f"{len(red.selected)} — the cost of named "
+                            f"components")
+                    else:
+                        det.append(
+                            f"order-optimal for this band ({eps:.0%})")
+                    if cert.doublets:
+                        d = cert.doublets[0]
+                        det.append(
+                            f"pole/zero doublet near {eng(d[0], 'Hz')} "
+                            f"(separation {d[2]:.1%}) — doublets affect "
+                            f"settling, not this frequency response")
+                except Exception:
+                    pass
+                r.details = det
                 self._cache[key] = r
                 return r
             # the claim must name the band actually ENFORCED: the budget

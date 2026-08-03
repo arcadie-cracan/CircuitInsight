@@ -56,6 +56,7 @@ class _Worker(QThread):
     failed = Signal(str)
     cancelled = Signal()
     progress = Signal(int, int)          # (done, total) grid points
+    note = Signal(str)                   # worker-side narration -> Log
 
     def __init__(self, fn):
         super().__init__()
@@ -145,11 +146,8 @@ class MainWindow(QMainWindow):
 
     # --------------------------------------------------------------- layout
     def _build(self):
-        openb = QPushButton("Open CIN + psf…")
-        openb.clicked.connect(self.open_dialog)
-        self.exportb = QPushButton("Export…")
-        self.exportb.setEnabled(False)
-        self.exportb.clicked.connect(self.export)
+        # Open/Export live in the File menu only: the toolbar buttons
+        # duplicated them and cost row width the in/out combos need.
         self.in_combo = QComboBox()
         self.out_combo = QComboBox()
         self.solve_btn = QPushButton("Solve")
@@ -200,9 +198,6 @@ class MainWindow(QMainWindow):
         tb = QToolBar("main")
         tb.setObjectName("main_toolbar")
         tb.setMovable(False)
-        for wdg in (openb, self.exportb):
-            tb.addWidget(wdg)
-        tb.addSeparator()
         # the mode combo is the STATE object -- every internal path and test
         # drives it -- but it is no longer shown: the Tool dropdown is its
         # face (the bench list it replaces cost a whole side column).
@@ -240,30 +235,53 @@ class MainWindow(QMainWindow):
         self._budget_lbl_act = tb.addWidget(self._budget_lbl)
         self._mag_act = tb.addWidget(self.mag_spin)
         self._phase_act = tb.addWidget(self.phase_spin)
-        # the LOWEST-ORDER form's single knob: one complex tolerance,
-        # |dH| <= eps*(|H| + anchor) over the band slider's span; the
-        # anchor is the smaller band-edge |H|, so the cursor placement
-        # states WHERE fidelity matters and this states HOW MUCH
-        self.eps_spin = self._spin(10.0, 0.1, 50.0, 1.0, " % tolerance")
-        self.eps_spin.setDecimals(1)
-        self.eps_spin.setToolTip(
-            "The model tolerance: the reduced model stays within this "
-            "fraction of the full response over the selected band — "
-            "magnitude AND phase jointly (the label shows the dB/deg "
-            "equivalents). The band edges set the anchor level: drag "
-            "the cursors to where your question lives (past crossover "
-            "for stability; the whole band for documentation). "
-            "PM trustworthy to ±5° ≈ 5%.")
-        self._eps_act = tb.addWidget(self.eps_spin)
-        self._eps_lbl = QLabel("")
-        self._eps_lbl_act = tb.addWidget(self._eps_lbl)
-        self.eps_spin.valueChanged.connect(self._on_eps_changed)
+        # the LOWEST-ORDER form's contract: a TOLERANCE STRATEGY, each
+        # gating the pursuit on the quantity its designer actually reads
+        # (field lesson: a band-wide criterion turned a generous cursor
+        # drag into a useless 26-element model). Every strategy is
+        # capped at a readable order and diagnoses instead of dumping.
+        self.strategy_combo = QComboBox()
+        for label, tip in (
+            ("Gain & phase", "Spec-sheet contract: |H| within the dB "
+             "budget AND phase within the degree budget at every band "
+             "point. Trusts the cursor literally — a band deep into the "
+             "rolloff demands fidelity there too."),
+            ("Stability (margins)", "The reduced model must reproduce "
+             "the full model's PHASE MARGIN (within the ° budget), GAIN "
+             "MARGIN (within the dB budget) and unity-crossing "
+             "frequency. The band's only job is to contain the "
+             "crossover; everything else is forgiven."),
+            ("Rejection (dB)", "For CMRR/PSRR studies: the dB curve "
+             "tracks the full model within the budget at every band "
+             "point, phase unconstrained — dB error IS relative error "
+             "of the small quantity."),
+        ):
+            self.strategy_combo.addItem(label)
+            self.strategy_combo.setItemData(
+                self.strategy_combo.count() - 1, tip, Qt.ToolTipRole)
+        self.strategy_combo.setToolTip("How the reduction tolerance is "
+                                       "judged")
+        self.strategy_combo.currentTextChanged.connect(
+            lambda _t: self._on_strategy_changed())
+        self._strategy_act = tb.addWidget(self.strategy_combo)
+        self.pm_spin = self._spin(5.0, 0.5, 45.0, 1.0, " ° PM")
+        self.pm_spin.setToolTip("Phase margin reproduced within this")
+        self.gm_spin = self._spin(2.0, 0.5, 20.0, 0.5, " dB GM")
+        self.gm_spin.setToolTip("Gain margin reproduced within this")
+        self.rej_spin = self._spin(3.0, 0.1, 40.0, 0.5, " dB track")
+        self.rej_spin.setToolTip("|H| tracked within this many dB")
+        self._pm_act = tb.addWidget(self.pm_spin)
+        self._gm_act = tb.addWidget(self.gm_spin)
+        self._rej_act = tb.addWidget(self.rej_spin)
+        for s in (self.pm_spin, self.gm_spin, self.rej_spin):
+            s.valueChanged.connect(lambda _v: self._on_strategy_changed())
         # budget spins only exist for the budgeted forms
         self._budget_lbl_act.setVisible(False)
         self._mag_act.setVisible(False)
         self._phase_act.setVisible(False)
-        self._eps_act.setVisible(False)
-        self._eps_lbl_act.setVisible(False)
+        for a in (self._strategy_act, self._pm_act, self._gm_act,
+                  self._rej_act):
+            a.setVisible(False)
         self.toolbar = tb
 
         left = QSplitter(Qt.Vertical)
@@ -365,13 +383,19 @@ class MainWindow(QMainWindow):
         # slider; its margins are re-synced to the Bode's axis extent on
         # every draw (_sync_band_row) so groove and frequency axis align
         band_row = QWidget()
-        bl = QHBoxLayout(band_row)
+        bl = QVBoxLayout(band_row)
         bl.setContentsMargins(6, 2, 6, 0)
-        bl.addWidget(self.band_slider, 1)
+        bl.setSpacing(0)
+        # the slider gets the full row: its groove must align with the
+        # Bode's frequency axis (_sync_band_row), so nothing shares its
+        # line -- the certificate hint sits UNDER it
+        bl.addWidget(self.band_slider)
         # the live order certificate: what the band DEMANDS at the set
         # tolerance, before any solve (Loewner rank, ~50 ms, debounced)
         self.cert_lbl = QLabel("")
         self.cert_lbl.setStyleSheet("color: #555; font-size: 8pt;")
+        self.cert_lbl.setAlignment(Qt.AlignHCenter)
+        self.cert_lbl.setVisible(False)
         bl.addWidget(self.cert_lbl)
         self._cert_timer = QTimer(self)
         self._cert_timer.setSingleShot(True)
@@ -2608,10 +2632,10 @@ class MainWindow(QMainWindow):
         self._refresh_matches_label()
         self._ensure_calibration()   # measure this machine once
         for b in (self.solve_btn,
-                  self.exportb, self.a_solve, self.a_simplify,
+                  self.a_solve, self.a_simplify,
                   self.a_reduce, self.a_export):
             b.setEnabled(True)
-        for b in (self.exportb, self.a_export):           # nothing solved yet
+        for b in (self.a_export,):                        # nothing solved yet
             b.setEnabled(False)
         self._auto_setup()
 
@@ -3010,13 +3034,15 @@ class MainWindow(QMainWindow):
     #: value or None for jobs the keep-set estimator does not describe
     _KEEP_EST = object()
 
-    def _launch(self, fn, label, on_done=None, est_s=_KEEP_EST):
+    def _launch(self, fn, label, on_done=None, est_s=_KEEP_EST,
+                growth_reason=None):
         for b in (self.solve_btn,
                   self.a_solve, self.a_simplify, self.a_reduce):
             b.setEnabled(False)
         self.statusBar().showMessage(label)
         self.progress.setRange(0, 0)      # busy until an estimate exists
         self._live_est = None             # fresh launch, fresh refinement
+        self._growth_reason = growth_reason
         self._t0 = time.monotonic()
         # an advisory pass is NOT priced by the keep-set estimator; it
         # used to inherit the solve's number and log a promise that
@@ -3037,6 +3063,10 @@ class MainWindow(QMainWindow):
         self._thread.done.connect(on_done or self._on_done)
         self._thread.failed.connect(self._on_failed)
         self._thread.cancelled.connect(self._on_cancelled)
+        # worker-side narration (pursuit rounds and the like) lands in
+        # the Log through the queued signal -- never touch widgets there
+        self._thread.note.connect(lambda m: self.log(f"  {m}"))
+        self.worker_note = self._thread.note.emit
         self._thread.start()
 
     def solve(self):
@@ -3105,27 +3135,50 @@ class MainWindow(QMainWindow):
         form = self.form_combo.currentText()
         budgeted = transfer and form.startswith("Simplified")
         lowest = budgeted and "lowest" in form
-        # full order: separate dB/deg collapse budgets. Lowest order: ONE
-        # anchored tolerance — the band slider is the only "where".
-        self._budget_lbl_act.setVisible(budgeted and not lowest)
-        self._mag_act.setVisible(budgeted and not lowest)
-        self._phase_act.setVisible(budgeted and not lowest)
-        self._eps_act.setVisible(lowest)
-        self._eps_lbl_act.setVisible(lowest)
+        strat = self._strategy()
+        # full order: dB/deg collapse budgets. Lowest order: the strategy
+        # dropdown plus ITS spins — plain reuses the dB/deg pair.
+        self._budget_lbl_act.setVisible(budgeted
+                                        and (not lowest
+                                             or strat == "plain"))
+        self._mag_act.setVisible(budgeted and (not lowest
+                                               or strat == "plain"))
+        self._phase_act.setVisible(budgeted and (not lowest
+                                                 or strat == "plain"))
+        self._strategy_act.setVisible(lowest)
+        self._pm_act.setVisible(lowest and strat == "stability")
+        self._gm_act.setVisible(lowest and strat == "stability")
+        self._rej_act.setVisible(lowest and strat == "rejection")
         self.band_row.setVisible(lowest)
-        if lowest:
-            self._on_eps_changed(self.eps_spin.value())
         self._on_band_changed(*self.band_slider.values())
 
-    def _on_eps_changed(self, _v=None):
-        """The single knob's live translation: what eps means in dB and
-        degrees above the anchor. The tube and the certificate follow."""
-        import math
+    def _strategy(self) -> str:
+        return {"Gain & phase": "plain",
+                "Stability (margins)": "stability",
+                "Rejection (dB)": "rejection"}.get(
+            self.strategy_combo.currentText(), "plain")
 
-        eps = self.eps_spin.value() / 100.0
-        self._eps_lbl.setText(f" ≈ ±{20 * math.log10(1 + eps):.2g} dB, "
-                              f"±{math.degrees(eps):.2g}° ")
-        self._update_tol_bands()
+    def _strategy_opts(self) -> dict:
+        s = self._strategy()
+        if s == "stability":
+            return {"pm_deg": self.pm_spin.value(),
+                    "gm_db": self.gm_spin.value()}
+        if s == "rejection":
+            return {"rej_db": self.rej_spin.value()}
+        return {"gain_db": self.mag_spin.value(),
+                "phase_deg": self.phase_spin.value()}
+
+    def _strategy_eps_eq(self) -> float:
+        """The strategy budget as a comparable relative tolerance, for
+        the order-certificate label."""
+        s, o = self._strategy(), self._strategy_opts()
+        if s == "stability":
+            return 0.05
+        db = o.get("rej_db", o.get("gain_db", 1.0))
+        return 10.0 ** (db / 20.0) - 1.0
+
+    def _on_strategy_changed(self):
+        self._refresh_form_ui()
         self._cert_timer.start()
 
     def _refresh_certificate(self):
@@ -3136,15 +3189,18 @@ class MainWindow(QMainWindow):
         if (self.controller is None
                 or not self.band_row.isVisibleTo(self)):
             self.cert_lbl.setText("")
+            self.cert_lbl.setVisible(False)
             return
         try:
             inp, out = self._io()
             fmin, fmax = self.band_slider.values()
             cert = self.controller.order_certificate(inp, out, fmin, fmax)
             self.cert_lbl.setText(
-                " " + cert.describe(self.eps_spin.value() / 100.0))
+                cert.describe(self._strategy_eps_eq()))
+            self.cert_lbl.setVisible(True)
         except Exception:
             self.cert_lbl.setText("")
+            self.cert_lbl.setVisible(False)
 
     def _update_tol_bands(self):
         """The tolerance made visible. Full order: a fixed tube of ±mag
@@ -3174,37 +3230,47 @@ class MainWindow(QMainWindow):
             mag = 20 * np.log10(np.abs(h))
             ph = np.degrees(np.unwrap(np.angle(h)))
         if "lowest" in form:
-            eps = self.eps_spin.value() / 100.0
+            # the tube renders THE STRATEGY'S OWN promise: plain shades
+            # both budgets over the band; stability shades only the
+            # phase around the unity crossing (that is all it checks);
+            # rejection shades the magnitude alone.
+            strat = self._strategy()
             fmin, fmax = self.band_slider.values()
             mask = (f >= fmin) & (f <= fmax)
             if not mask.any():
                 self.canvas.draw_idle()
                 return
-            anchor = getattr(r, "anchor", None)
-            if not anchor:
-                edge = np.abs(h[mask])
-                anchor = float(min(edge[0], edge[-1]))
-            absh = np.abs(h)
-            A = eps * (absh + anchor)
-            with np.errstate(divide="ignore", invalid="ignore"):
-                up = 20 * np.log10(absh + A)
-                lo_lin = absh - A
-                lo = np.where(lo_lin > 0,
-                              20 * np.log10(np.maximum(lo_lin, 1e-300)),
-                              mag - 80.0)      # visually "open", bounded
-            self._tol_bands.append(axes[0].fill_between(
-                f[mask], lo[mask], up[mask],
-                color="#c9962a", alpha=0.18, zorder=0))
-            a_db = 20 * np.log10(anchor)
-            self._tol_bands.append(axes[0].plot(
-                [fmin, fmax], [a_db, a_db], color="0.35", lw=0.8,
-                ls=":", zorder=1)[0])
-            if len(axes) > 1:
-                half = np.degrees(np.arcsin(np.minimum(1.0, A / absh)))
-                half = np.where(A >= absh, 180.0, half)
-                self._tol_bands.append(axes[1].fill_between(
-                    f[mask], (ph - half)[mask], (ph + half)[mask],
+            if strat == "plain":
+                gdb = self.mag_spin.value()
+                pdeg = self.phase_spin.value()
+                self._tol_bands.append(axes[0].fill_between(
+                    f[mask], (mag - gdb)[mask], (mag + gdb)[mask],
                     color="#c9962a", alpha=0.18, zorder=0))
+                if len(axes) > 1:
+                    self._tol_bands.append(axes[1].fill_between(
+                        f[mask], (ph - pdeg)[mask], (ph + pdeg)[mask],
+                        color="#c9962a", alpha=0.18, zorder=0))
+            elif strat == "rejection":
+                rej = self.rej_spin.value()
+                self._tol_bands.append(axes[0].fill_between(
+                    f[mask], (mag - rej)[mask], (mag + rej)[mask],
+                    color="#c9962a", alpha=0.18, zorder=0))
+            else:                                # stability
+                absh = np.abs(h)
+                cross = np.where(np.diff(np.sign(
+                    20 * np.log10(np.maximum(absh, 1e-300))))
+                    != 0)[0]
+                if cross.size:
+                    fc0 = float(f[cross[0]])
+                    near = mask & (f >= fc0 / 2.5) & (f <= fc0 * 2.5)
+                    pmd = self.pm_spin.value()
+                    self._tol_bands.append(axes[0].plot(
+                        [fc0, fc0], [mag[mask].min(), mag[mask].max()],
+                        color="0.35", lw=0.8, ls=":", zorder=1)[0])
+                    if len(axes) > 1 and near.any():
+                        self._tol_bands.append(axes[1].fill_between(
+                            f[near], (ph - pmd)[near], (ph + pmd)[near],
+                            color="#c9962a", alpha=0.18, zorder=0))
             self.canvas.draw_idle()
             return
         m = self.mag_spin.value()
@@ -3325,17 +3391,21 @@ class MainWindow(QMainWindow):
         if self.controller is None:
             return
         inp, out, keep = *self._io(), self.checked_keep()
-        eps = self.eps_spin.value() / 100.0
+        strat, opts = self._strategy(), self._strategy_opts()
         fmin, fmax = self.band_slider.values()
+        knobs = ", ".join(f"{k.split('_')[0]} {v:g}"
+                          for k, v in opts.items())
         self._launch(
             lambda cb: self.controller.attach_template(
                 self.controller.reduce_solve(
-                    inp, out, keep, eps=eps,
+                    inp, out, keep, strategy=strat, strategy_opts=opts,
                     fmin=fmin, fmax=fmax,
-                    progress=cb)),
-            f"reducing {inp} → {out} within {eps:.0%} over "
-            f"{view.eng(fmin, 'Hz')}–{view.eng(fmax, 'Hz')} "
-            f"(anchor from the band edge) …")
+                    progress=cb, note=lambda m: self.worker_note(m))),
+            f"reducing {inp} → {out} ({strat}: {knobs}) over "
+            f"{view.eng(fmin, 'Hz')}–{view.eng(fmax, 'Hz')} …",
+            growth_reason=("the pursuit accepted a reactance and re-tries "
+                           "the remaining candidates — see the round "
+                           "notes above"))
 
     def solve_sync(self):
         inp, out = self._io()
@@ -3367,8 +3437,8 @@ class MainWindow(QMainWindow):
         inp, out = self._io()
         fmin, fmax = self.band_slider.values()
         self._show(self.controller.attach_template(self.controller.reduce_solve(
-            inp, out, self.checked_keep(),
-            eps=self.eps_spin.value() / 100.0, fmin=fmin, fmax=fmax)))
+            inp, out, self.checked_keep(), strategy=self._strategy(),
+            strategy_opts=self._strategy_opts(), fmin=fmin, fmax=fmax)))
         return self.result
 
     #: keep the log bounded -- it is a session record, not a data store
@@ -3426,6 +3496,15 @@ class MainWindow(QMainWindow):
                 # projection instead of a bar creeping on elapsed.
                 self._project_from_recon_ratio(dur)
         else:
+            # same phase, more work: a growing total is a real event (a
+            # pursuit round ended, a prime batch was queued) and used to
+            # pass silently -- the 70/74 mystery. Name it in the Log.
+            old = self._phase_units[1] if self._phase_units else None
+            if total and old and total > old:
+                why = getattr(self, "_growth_reason", None) or (
+                    "the stop test has not passed, so the phase queued "
+                    "more work (another pursuit round or prime batch)")
+                self.log(f"  {phase} total {old} -> {total}: {why}")
             self._phase = phase
             self._phase_units = (done, total)
         self._refresh_progress()
@@ -3744,7 +3823,7 @@ class MainWindow(QMainWindow):
             self.err_canvas.draw_idle()
         self._render_expr()
         self._rebuild_whatif(result)
-        for b in (self.exportb, self.a_export, self.a_copy_tex,
+        for b in (self.a_export, self.a_copy_tex,
                   self.a_add_report, self.a_export_csv):
             b.setEnabled(True)
 

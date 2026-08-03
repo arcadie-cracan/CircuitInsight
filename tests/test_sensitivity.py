@@ -124,3 +124,23 @@ def test_anchored_criterion_reads_the_band_edges():
     old = an.dominant_reactances("VIND", "vout", fmin=1e3, fmax=3e8,
                                  tol_db=1.0, floor_abs_db=0.0)
     assert old.eps is None and old.floor_is_abs
+
+
+def test_pursuit_narrates_its_rounds():
+    """The note channel: baseline, then one line per accepted reactance
+    naming the element, the new error, and whether the pursuit stops or
+    re-tries — the Log's answer to 'why did 70/74 grow'."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        run = SpectreRun(FIX / "ota5t" / "tb_ota5t.cin.json",
+                         FIX / "ota5t" / "psf")
+        an = run.analyzer(cap_model="matrix")
+
+    notes = []
+    red = an.dominant_reactances("VIND", "vout", fmin=1e3, fmax=3e8,
+                                 eps=0.10, note=notes.append)
+    assert notes and "baseline" in notes[0] and "candidates" in notes[0]
+    rounds = [n for n in notes if n.startswith("round ")]
+    assert len(rounds) == len(red.selected)
+    assert red.selected[0] in rounds[0]
+    assert "stopping" in rounds[-1] or "re-trying" in rounds[-1]

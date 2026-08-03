@@ -206,6 +206,11 @@ def test_reduced_solve_shows_symbolic_eq4_and_signs(miller_reduced):
     assert "N(s) =" in labels and "D(s) =" in labels
     assert r"\mathrm{Cc}" in labels["N(s) ="] and "g_{m," in labels["N(s) ="]
     assert "s^{2}" in labels["D(s) ="] and "g_{ds," in labels["D(s) ="]
+    # no noise unit coefficients: sp.factor over floats is monic-with-a-
+    # Float and used to leave '1 \cdot (...)' wrappers in every D(s) line
+    for lbl in ("N(s) =", "D(s) ="):
+        assert r"1 \cdot" not in labels[lbl], labels[lbl][:80]
+        assert not labels[lbl].startswith("1.0"), labels[lbl][:80]
     assert any("exact\\ symbolic" in tex for _, tex in lines)   # not the corner note
 
     # eq (6) signs mirror the numeric s-plane roots
@@ -375,3 +380,35 @@ def test_whatif_survives_overflowing_coefficients():
     got = evaluate(f, {"gm": 2.0})
     ref = 2e-3 / (1e12 * (1 + 2j * np.pi * f / 1e3))
     assert np.allclose(got, ref, rtol=1e-9)
+
+
+def test_factored_display_groups_the_near_common_factor():
+    """The cascode A0 denominator: five terms of which four carry
+    gm_PM11 — irreducible as a whole, so sp.factor leaves the raw Add.
+    collect() by the most-shared symbol exposes the structure; the
+    display picks whichever form is more compact, exactly."""
+    import sympy as sp
+
+    g1, g2, g3, g4, g5, g6, G = sp.symbols(
+        "g1 g2 g3 g4 g5 g6 G", positive=True)
+    # the cascode shape: FOUR of five distinct monomials carry G (the
+    # gm_PM11 of the field report); the fifth does not, so sp.factor
+    # leaves the whole Add irreducible
+    den = (sp.Float("1.023e-4") * g1 * g2 * G
+           + sp.Float("7.19e-5") * g3 * g4 * G
+           + sp.Float("4.13e-5") * g1 * g2 * g5
+           + g1 * g2 * g5 * G + g3 * g6 * G)
+    e = view.round_expr(sp.Integer(1) / den, factored=True)
+    _, dshown = sp.fraction(sp.together(e))
+    # round_expr rescales and rounds for display; the grouping claim is
+    # about STRUCTURE: the shown form is more compact than its own
+    # expansion, and the ratio's value survives to display tolerance
+    assert sp.count_ops(dshown) < sp.count_ops(sp.expand(dshown)), \
+        "the grouped form must be more compact than the raw Add"
+    pt = {s: v for s, v in zip((g1, g2, g3, g4, g5, g6, G),
+                               (1e-5, 2e-5, 3e-5, 4e-5, 5e-5, 6e-5,
+                                7e-5))}
+    got = complex(e.xreplace({k: sp.Float(v) for k, v in pt.items()}))
+    ref = 1.0 / complex(den.xreplace(
+        {k: sp.Float(v) for k, v in pt.items()}))
+    assert abs(got / ref - 1) < 1e-3

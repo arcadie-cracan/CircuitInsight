@@ -1398,12 +1398,12 @@ def test_error_plots_align_with_the_bode(qapp, tmp_path):
         win.close()
 
 
-def test_anchored_tube_flares_below_the_band_edge_anchor(qapp, tmp_path):
-    """The lowest-order tube renders the criterion |dH| <= eps*(|H| +
-    anchor) exactly: a thin relative ribbon where |H| is far above the
-    anchor, flaring open as |H| falls toward the band-edge level — the
-    forgiveness is VISIBLE, not encoded in a floor spinner. The single
-    knob scales the whole tube."""
+def test_strategy_dropdown_gates_the_reduction(qapp, tmp_path):
+    """The lowest-order contract is a TOLERANCE STRATEGY: per-strategy
+    spins appear with their strategy, the tube renders each strategy's
+    own promise (plain: both budgets over the band; stability: phase
+    around the crossover only; rejection: magnitude only), and the
+    stability solve reports margins in the strip."""
     import numpy as np
 
     from circuitinsight.gui.app import MainWindow
@@ -1421,47 +1421,45 @@ def test_anchored_tube_flares_below_the_band_edge_anchor(qapp, tmp_path):
     try:
         win.mode_combo.setCurrentText("Transfer")
         win.form_combo.setCurrentText("Simplified · lowest order")
-        win.band_slider.setValues(1e4, 1e9)      # deep into the rolloff
-        win.eps_spin.setValue(10.0)
+        assert win._strategy_act.isVisible()
+
+        # plain: the dB/deg pair serves as the criterion spins
+        win.strategy_combo.setCurrentText("Gain & phase")
+        assert win._mag_act.isVisible() and win._phase_act.isVisible()
+        assert not win._pm_act.isVisible() and not win._rej_act.isVisible()
+        win.band_slider.setValues(1e4, 1e8)
         win._update_tol_bands()
-        assert win._tol_bands, "the anchored tube must render"
+        assert len(win._tol_bands) >= 2          # mag AND phase tubes
 
-        verts = win._tol_bands[0].get_paths()[0].vertices
-        f = np.asarray(win.result.freqs, dtype=float)
-        h = np.abs(np.asarray(win.result.h))
-        mask = (f >= 1e4) & (f <= 1e9)
-        anchor = min(h[mask][0], h[mask][-1])
-        # tube width at the passband edge vs near the anchor: the flare
-        xs, ys = verts[:, 0], verts[:, 1]
-
-        def width_at(freq):
-            near = np.abs(np.log10(xs / freq)) < 0.1
-            return ys[near].max() - ys[near].min()
-
-        w_pass = width_at(2e4)                    # |H| >> anchor here
-        w_edge = width_at(9e8)                    # |H| ~ anchor here
-        assert w_pass < 2.5, f"passband ribbon must be thin ({w_pass:.2f})"
-        assert w_edge > 2 * w_pass, (
-            f"the tube must flare near the anchor ({w_edge:.2f} vs "
-            f"{w_pass:.2f})")
-
-        # the knob scales it: half the tolerance, thinner ribbon
-        win.eps_spin.setValue(5.0)
+        # rejection: one dB knob, magnitude tube only
+        win.strategy_combo.setCurrentText("Rejection (dB)")
+        assert win._rej_act.isVisible() and not win._mag_act.isVisible()
         win._update_tol_bands()
-        verts2 = win._tol_bands[0].get_paths()[0].vertices
-        xs, ys = verts2[:, 0], verts2[:, 1]
-        assert width_at(2e4) < w_pass
+        fills = [a for a in win._tol_bands if hasattr(a, "get_paths")]
+        assert len(fills) == 1
 
-        # the live translation label states what eps means
-        assert "dB" in win._eps_lbl.text() and "°" in win._eps_lbl.text()
+        # stability: PM/GM knobs; the tube lives around the crossover
+        win.strategy_combo.setCurrentText("Stability (margins)")
+        assert win._pm_act.isVisible() and win._gm_act.isVisible()
+        win.band_slider.setValues(1e3, 1e9)
+        win._update_tol_bands()
+        fills = [a for a in win._tol_bands if hasattr(a, "get_paths")]
+        if fills:                                # crossover in band
+            verts = fills[0].get_paths()[0].vertices
+            f = np.asarray(win.result.freqs, dtype=float)
+            span = verts[:, 0].max() / max(verts[:, 0].min(), 1e-30)
+            assert span < 10.0, "stability tube hugs the crossover"
 
-        # and an anchor line is drawn at the band-edge level
-        import math
-
-        a_db = 20 * math.log10(anchor)
-        lines = [a for a in win._tol_bands if hasattr(a, "get_ydata")]
-        assert lines and lines[0].get_ydata()[0] == pytest.approx(
-            a_db, abs=1.0)
+        # the solve carries the strategy end to end. ota5t's |H| plateaus
+        # ABOVE unity (feedthrough), so there is no crossover in band —
+        # and the honest stability verdict says exactly that instead of
+        # inventing margins to preserve.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            r = win.reduce_sync()
+        assert getattr(r, "strategy", None) == "stability"
+        assert "PM" in r.warnings[0] or "unity crossing" in r.warnings[0]
+        assert any("margins" in d or "criterion" in d for d in r.details)
     finally:
         win.close()
 
@@ -1504,4 +1502,32 @@ def test_advisory_passes_do_not_inherit_the_solve_estimate(qapp, tmp_path):
         assert win._run_est == 537.0
     finally:
         win.controller = None
+        win.close()
+
+
+def test_log_names_the_reason_when_a_phase_total_grows(qapp, tmp_path):
+    """70/74 was a mystery: the total grew silently when the pursuit
+    queued another round. The Log now prints old -> new with the
+    launcher's reason."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "gui.ini")
+    try:
+        win = MainWindow()
+    finally:
+        MainWindow.settings_path = None
+    try:
+        import time as _t
+
+        win._t0 = _t.monotonic()
+        win._phase_totals, win._phase_runs = {}, {}
+        win._phase, win._phase_t0 = None, None
+        win._growth_reason = "the pursuit accepted a reactance"
+        win._set_phase("evaluating", 5, 70)
+        win._set_phase("evaluating", 6, 74)
+        text = win.logview.toPlainText()
+        assert "70 -> 74" in text
+        assert "accepted a reactance" in text
+    finally:
+        win._t0 = None
         win.close()
