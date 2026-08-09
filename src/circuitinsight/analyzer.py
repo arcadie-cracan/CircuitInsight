@@ -18,7 +18,7 @@ import sympy as sp
 
 from .adapters.cin import CinDoc, FlatCircuit, flatten, load_cin, parse_cin
 from .engine.mna import MnaError, MnaSystem, TransferFunction, build_mna, solve_tf
-from .keep import ALL, is_all, norm_keep       # noqa: F401  (re-exported)
+from .keep import ALL, is_all, norm_keep, norm_keep_list  # noqa: F401
 from .models import expand_circuit
 
 
@@ -126,7 +126,7 @@ class Analyzer:
         method: 'auto' (multilinear interpolation for hybrid solves),
         'interp', or 'direct'.
         """
-        keep = ALL if is_all(keep) else list(() if keep is None else keep)
+        keep = norm_keep_list(keep)
         return solve_tf(self.system(inp), out, keep, method=method,
                         progress=progress)
 
@@ -143,7 +143,7 @@ class Analyzer:
         directly on T."""
         from .analysis.loopgain import loop_gain as _loop_gain
 
-        keep = ALL if is_all(keep) else list(() if keep is None else keep)
+        keep = norm_keep_list(keep)
         return _loop_gain(self.system(probe), probe, keep, progress=progress)
 
     def gft(self, probe: str, inp: str, out: str, error_ref: str, keep=()):
@@ -255,7 +255,7 @@ class Analyzer:
         the loop signal flows through the source. See analysis/loopgain.py."""
         from .analysis.loopgain import return_ratio as _return_ratio
 
-        keep = ALL if is_all(keep) else list(() if keep is None else keep)
+        keep = norm_keep_list(keep)
         return _return_ratio(self.system(None), source, keep)
 
     def reduced_tf(self, inp: str, out: str, keep=ALL, *, tol_db: float = 0.5,
@@ -292,7 +292,7 @@ class Analyzer:
                                        strategy=strategy,
                                        strategy_opts=strategy_opts,
                                        progress=progress, note=note)
-        keep = ALL if is_all(keep) else list(() if keep is None else keep)
+        keep = norm_keep_list(keep)
         keep_set = set(() if is_all(keep) else keep)
         reactive = _reactive_symbols(self)
         sysm = self.system(inp)
@@ -474,10 +474,10 @@ class Analyzer:
                             strategy_opts: dict | None = None,
                             progress=None, note=None):
         """The minimal set of capacitors/inductors that reproduces the
-        transfer function over the band, by frequency-domain matching
-        pursuit: remove every reactance, then add back the one whose
-        first-order sensitivity best cancels the current residual (verified
-        by an exact solve), until the band error is within tol_db. Answers
+        transfer function over the band, by EXACT greedy selection:
+        remove every reactance, then add back the one whose restoration
+        most reduces the band error -- every candidate re-solved
+        numerically each round -- until the criterion is met. Answers
         'which caps actually shape this response?'. `exclude` names
         reactances kept always-on (e.g. a measurement rig). Returns a
         ReactanceReduction (.selected, .errors_db, .report())."""

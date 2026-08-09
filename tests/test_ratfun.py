@@ -23,7 +23,7 @@ def test_lagrange_interpolates():
     coeffs = [rng.randrange(P) for _ in range(6)]
     ts = [rng.randrange(1, P) for _ in range(6)]
     gs = [ratfun._poly_eval(coeffs, t, P) for t in ts]
-    got = ratfun._lagrange(ts, gs, P)
+    got = ratfun._lagrange_modp(ts, gs, P)
     assert [c % P for c in got] == coeffs
 
 

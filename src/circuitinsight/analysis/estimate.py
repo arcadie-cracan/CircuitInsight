@@ -33,8 +33,8 @@ from pathlib import Path
 
 import sympy as sp
 
-from ..engine.interp import _MAX_WORKERS, _PARALLEL_MIN_DETS, resolve_backend
-from ..engine.mna import S, MnaError, _det, hybrid_split
+from ..engine.interp import _MAX_WORKERS, _PARALLEL_MIN_DETS, resolve_backend, default_workers
+from ..engine.mna import S, MnaError, hybrid_split
 
 # lower bound on the spread-extrapolated alpha (best-case parallel amortization
 # still can't beat ~1/cores of the serial determinant work)
@@ -50,6 +50,22 @@ _BOT_PRIMES = 35
 _BOT_ALPHA = 0.03
 
 
+
+def _numeric_s_over() -> float:
+    """Self-calibrating overhead ratio for the all-numeric path: every
+    completed numeric-s solve records (wall, det work) and the median
+    observed ratio replaces the frozen constant -- "re-check the
+    constants if the reconstruction changes" services itself
+    in-process. Both all-numeric estimate branches read THIS, so the
+    probe-cached branch can no longer quietly keep the factory
+    number."""
+    from ..engine.interp import NUMERIC_S_HISTORY
+
+    obs = sorted((h["wall_s"] - _NUMERIC_S_FLOOR_S) / h["det_s"]
+                 for h in NUMERIC_S_HISTORY if h["det_s"] > 0)
+    if obs:
+        return min(10.0, max(1.0, obs[len(obs) // 2]))
+    return _NUMERIC_S_OVER
 def _bot_work(grid: int, s_deg: int, t_det: float) -> tuple[float, int]:
     T_hat = min(grid, _BOT_T_COEF * math.sqrt(grid))
     n = int(_BOT_PRIMES * T_hat * (s_deg + 2) * 2)
@@ -374,15 +390,7 @@ def estimate_solve(analyzer, inp: str, out: str, keep,
         L = _s_degree_bound(A_num) + 1
         vals, t_det = s_sweep_det(A_num, L)
         n_dets = 2 * L
-        # self-calibrating overhead: every completed all-numeric solve
-        # records (wall, det work); the median observed ratio replaces the
-        # frozen constant, so "re-check the constants if the reconstruction
-        # changes" services itself in-process
-        over = _NUMERIC_S_OVER
-        obs = sorted((h["wall_s"] - _NUMERIC_S_FLOOR_S) / h["det_s"]
-                     for h in NUMERIC_S_HISTORY if h["det_s"] > 0)
-        if obs:
-            over = min(10.0, max(1.0, obs[len(obs) // 2]))
+        over = _numeric_s_over()
         return SolveEstimate(
             keep=[], kept_names=[], grid_size=1,
             s_degree=_degree_from_samples(vals, L - 1), n_dets=n_dets,
@@ -411,16 +419,14 @@ def estimate_solve(analyzer, inp: str, out: str, keep,
             keep=[], kept_names=[], grid_size=1, s_degree=s_deg,
             n_dets=n_dets, matrix_dim=dim, coeff_spread=spread,
             parallel=False, path="numeric-s",
-            seconds=_NUMERIC_S_FLOOR_S + _NUMERIC_S_OVER * t_det * n_dets,
+            seconds=_NUMERIC_S_FLOOR_S + _numeric_s_over() * t_det * n_dets,
             backend="qq-s")
 
     raw, n_dets, parallel = _raw_work(grid, s_deg, t_det)
     # mirror the solver's own auto selector (engine.interp.resolve_backend):
     # above the crossover the sparse bot backend runs instead of the dense
     # QQ grid, with support-scaled (not grid-scaled) work
-    # the selector also weighs the coefficient spread: a wide one puts
-    # exact reconstruction beyond the sparse path's prime budget
-    backend = resolve_backend(n_dets, spread)
+    backend = resolve_backend(n_dets)
     if backend == "bot":
         seconds, n_dets = _bot_work(grid, s_deg, t_det)
         seconds *= _CAL.k_bot            # the sparse path learns too
@@ -450,7 +456,7 @@ def _raw_work(grid: int, s_deg: int, t_det: float) -> tuple[float, int, bool]:
     parallel speedup is captured by the calibration's parallel alpha, not
     assumed here."""
     n_dets = 2 * (s_deg + 2) * grid
-    workers = min(_MAX_WORKERS, max(1, (os.cpu_count() or 2) - 1))
+    workers = default_workers()
     parallel = n_dets >= _PARALLEL_MIN_DETS and workers > 1
     return t_det * n_dets, n_dets, parallel
 

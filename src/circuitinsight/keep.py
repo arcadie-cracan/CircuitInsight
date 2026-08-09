@@ -46,6 +46,13 @@ def is_all(keep) -> bool:
     return keep is ALL
 
 
+def norm_keep_list(keep):
+    """The list-typed twin of norm_keep: ALL stays ALL, anything else
+    becomes a plain list (Result.keep wants a list). One home for an
+    idiom that was copy-pasted six times."""
+    return ALL if is_all(keep) else list(() if keep is None else keep)
+
+
 def norm_keep(keep):
     """Normalize to ALL or a tuple of names — a hashable, unambiguous key.
     None normalizes to () -- the numeric solve."""

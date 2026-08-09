@@ -671,22 +671,12 @@ def _dominant_pair(poles: np.ndarray):
 
 def _margins_of(freqs, T):
     """(pm_deg, f_unity, gm_db) in the stb convention; None where the
-    crossing is absent."""
-    m = 20 * np.log10(np.abs(T))
-    ph = np.degrees(np.unwrap(np.angle(T)))
-    x = np.log10(np.asarray(freqs, dtype=float))
-    pm = fu = gm = None
-    k = np.where(np.diff(np.sign(m)))[0]
-    if k.size:
-        k = k[0]
-        xu = np.interp(0, [m[k + 1], m[k]], [x[k + 1], x[k]])
-        pm = float(np.interp(xu, [x[k], x[k + 1]], [ph[k], ph[k + 1]]))
-        fu = float(10 ** xu)
-    j = np.where(np.diff(np.sign(ph)))[0]
-    if j.size:
-        j = j[0]
-        xj = np.interp(0, [ph[j + 1], ph[j]], [x[j + 1], x[j]])
-        gm = float(-np.interp(xj, [x[j], x[j + 1]], [m[j], m[j + 1]]))
+    crossing is absent. Thin wrapper over sensitivity.loop_margins --
+    ONE margin-extraction algorithm, this signature kept for the
+    compensate/modes/probeadequacy callers."""
+    from .sensitivity import loop_margins
+
+    pm, fu, gm, _ = loop_margins(freqs, T)
     return pm, fu, gm
 
 

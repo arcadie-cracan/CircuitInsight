@@ -63,8 +63,9 @@ class RatFunError(RuntimeError):
     pass
 
 
-_PAD = 8
-_SEED = 20260727
+# shared with the sparse backend: same confirmation pad, same
+# reproducibility seed
+from .botsparse import _PAD, _SEED
 
 
 # ------------------------------------------------- univariate mod-p helpers
@@ -82,7 +83,7 @@ def _poly_deg(c: list[int]) -> int:
     return d if any(c) else -1
 
 
-def _lagrange(ts: list[int], gs: list[int], p: int) -> list[int]:
+def _lagrange_modp(ts: list[int], gs: list[int], p: int) -> list[int]:
     """Dense interpolating polynomial through (ts, gs), degree < len(ts)."""
     n = len(ts)
     P = [0] * n
@@ -108,7 +109,7 @@ def _cauchy_minimal(ts: list[int], gs: list[int], p: int):
     for t in ts:
         M = [(-t * a + (M[m - 1] if m else 0)) % p
              for m, a in enumerate(M)] + [M[-1]]
-    P = _lagrange(ts, gs, p)
+    P = _lagrange_modp(ts, gs, p)
     r0, r1 = M, P
     v0, v1 = [0], [1]
     best = None
@@ -355,16 +356,9 @@ def _flat_coeffs(slots, coeffs) -> np.ndarray:
             else np.empty(0, dtype=np.int64))
 
 
-#: Rational reconstruction needs modulus proportional to the SIZE of the
-#: exact coefficients -- sums of products of ~n matrix entries -- which a
-#: 30x30 hybrid grid drives far past what a few dozen 62-bit primes span.
-#: A real fc keep set failed at 64 ("no stable rational reconstruction
-#: after 64 primes"), did all its probing for nothing, and re-ran the
-#: whole grid densely; at 256 it CONVERGES and the solve is faster than
-#: the fallback route (184 s vs 232 s, measured). Raising the ceiling is
-#: free for easy cases -- the loop stops as soon as two lifts agree, so
-#: nobody pays for primes they do not need.
-_MAX_PRIMES = 256
+#: the prime ceiling and its justification live in zpbatch -- one
+#: number, one story; a re-tune must not apply to one backend only
+from .zpbatch import _MAX_PRIMES
 
 
 # ------------------------------------------------------------- entry point
@@ -400,7 +394,7 @@ def solve_tensors_ratfun(pay_den: dict, pay_num: dict, grids_pairs: list,
 
     # ---- prescan on a random shifted line: reduced total degrees ---------
     p1 = _primes(1)[-1]
-    for attempt in range(6):
+    for _attempt in range(6):
         M0 = 2 * raw_tot + 2
         gam = rng.randrange(2, p1)
         ts = [pow(gam, i + 1, p1) for i in range(M0)]

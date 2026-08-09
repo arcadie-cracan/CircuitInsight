@@ -23,7 +23,6 @@ that caveat with the order, or the certificate misleads.
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 
 import numpy as np

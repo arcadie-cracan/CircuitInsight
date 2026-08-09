@@ -170,7 +170,7 @@ def _dominant_poles(A_v: sp.Matrix, f_lo=1.0, f_hi=1e11, n=12):
 def _gft_check(system, A_v, probe, gft, freqs) -> "GftCheck":
     """Numeric quartet on the band + exact identity at rational points
     (nested_gft machinery)."""
-    from .nested_gft import (_exact_A, _node, _num_quartet, _point_quartet,
+    from .nested_gft import (_node, _num_quartet, _point_quartet,
                              _residual_of)
 
     inp_z, out, error = gft["z_in"], gft["out"], gft["error"]

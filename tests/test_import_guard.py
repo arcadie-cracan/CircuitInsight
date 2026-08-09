@@ -1,7 +1,9 @@
 """Independence contract, fixture-free — runs in every checkout including the
 public snapshot (which withholds the PDK-derived fixtures and their tests)."""
+import os
 import subprocess
 import sys
+from pathlib import Path
 
 
 def test_core_imports_no_gui_or_cadence():
@@ -14,8 +16,14 @@ def test_core_imports_no_gui_or_cadence():
         "print(bad)\n"
         "sys.exit(1 if bad else 0)\n"
     )
+    # the subprocess does not inherit conftest's sys.path insert, so on
+    # a checkout without a pip install the import fails before the
+    # contract is even tested — hand it the same src/ the suite uses
+    env = dict(os.environ)
+    src = str(Path(__file__).resolve().parents[1] / "src")
+    env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
     r = subprocess.run([sys.executable, "-c", code],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, env=env)
     assert r.returncode == 0, (
         f"core/session imported GUI/Cadence modules: {r.stdout.strip()} "
         f"{r.stderr.strip()}")

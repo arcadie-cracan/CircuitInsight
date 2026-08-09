@@ -43,8 +43,9 @@ from collections import defaultdict
 
 import sympy as sp
 
+from ..engine.interp import _CANCEL_OPS_LIMIT
 from ..engine.mna import (MnaError, S, TransferFunction, build_mna,
-                          sanitize, solve_tf, solve_tf_batch)
+                          sanitize, solve_tf_batch)
 from ..engine.primitives import Primitive
 
 __all__ = ["ComposedTF", "TearingError", "SplitAdvice", "ac_ground",
@@ -865,7 +866,7 @@ def _split_loop_gain_tian(primitives, ground, probe, cut, keep=(),
     Ai, Ci = -sol2[iv_b], sol2[iv_n]
     expr = -(2 * (Ai * Dv - Bv * Ci) - Ai + Dv) / \
         (2 * (Bv * Ci - Ai * Dv) + Ai - Dv + 1)
-    if sp.count_ops(expr) <= 20000:
+    if sp.count_ops(expr) <= _CANCEL_OPS_LIMIT:
         expr = sp.cancel(sp.together(expr))
 
     values: dict = {}

@@ -4,12 +4,21 @@ Locks the M9 packaging contract: `pip install circuitinsight` (even directly
 from GitHub) must deliver cin_export.il / cin_launch.il so the Virtuoso side of
 the flow needs no separate clone.
 """
+import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from circuitinsight import skill
+
+# the subprocess does not inherit conftest's sys.path insert, so on a
+# checkout without a pip install the import fails before the packaging
+# contract is even tested -- hand it the same src/ the suite uses
+_ENV = dict(os.environ)
+_ENV["PYTHONPATH"] = (str(Path(__file__).resolve().parents[1] / "src")
+                      + os.pathsep + _ENV.get("PYTHONPATH", ""))
 
 
 @pytest.mark.parametrize("name", ["cin_export.il", "cin_launch.il",
@@ -30,7 +39,7 @@ def test_missing_file_errors_clearly():
 def test_module_prints_dir():
     out = subprocess.run(
         [sys.executable, "-m", "circuitinsight.skill"],
-        capture_output=True, text=True, check=True).stdout.strip()
+        capture_output=True, text=True, check=True, env=_ENV).stdout.strip()
     assert out == str(skill.skill_dir())
 
 
@@ -40,7 +49,7 @@ def test_skill_import_pulls_no_heavy_gui_deps():
         "import sys, circuitinsight.skill as s; s.skill_dir(); "
         "assert 'PySide6' not in sys.modules and 'PyQt5' not in sys.modules"
     )
-    subprocess.run([sys.executable, "-c", code], check=True)
+    subprocess.run([sys.executable, "-c", code], check=True, env=_ENV)
 
 
 def test_bootstrap_loads_every_other_il_file():

@@ -43,9 +43,11 @@ from .mna import MnaError, MnaSystem, S, TransferFunction, _det, hybrid_split
 # (validation, simplification, num_den) is correct on the uncancelled ratio
 _CANCEL_OPS_LIMIT = 20000
 
-# probe backend: "auto" (currently the exact-QQ grid: the zp-batch dense
-# grid was MEASURED SLOWER at every k -- ~930-bit tensor coefficients need
-# 31+ CRT primes, and 31 x 47 us/det loses to one 0.5 ms gmpy2 det; see
+# probe backend: "auto" (the S-D selector, see resolve_backend: the
+# exact-QQ grid below the det-count crossover, the S-B sparse backend
+# at or above it; the zp-batch DENSE grid stays out of auto -- it was
+# MEASURED SLOWER at every k, ~930-bit tensor coefficients need 31+
+# CRT primes and 31 x 47 us/det loses to one 0.5 ms gmpy2 det; see
 # docs/interp-speedup-plan.md S-A results), "zp" (force the zp-batch dense
 # mod-p backend), "bot" (force the S-B Ben-Or/Tiwari + Kronecker SPARSE
 # backend: probes scale with the true support T instead of the grid size),
@@ -72,18 +74,25 @@ def _probe_backend() -> str:
 _AUTO_BOT_MIN_DETS = 50_000
 
 
-def resolve_backend(n_dense_dets: int, spread: float | None = None) -> str:
+def default_workers() -> int:
+    """Pool size for the dense-grid paths: all cores but one, capped.
+    (The numeric-s path's _worker_cap reserves TWO cores for the GUI;
+    these grid pools measured best leaving one.)"""
+    return min(_MAX_WORKERS, max(1, (os.cpu_count() or 2) - 1))
+
+
+def resolve_backend(n_dense_dets: int) -> str:
     """The S-D auto selector, THE single source of truth also mirrored by
     analysis.estimate: explicit setting wins; 'auto' picks the exact-QQ
     grid below the crossover and the S-B sparse backend above it.
 
-    `spread` is accepted and currently unused: a coefficient-spread gate
-    was tried against a real fallback ("no stable rational
-    reconstruction after 64 primes") and MEASURED WRONG -- the failing
-    call's spread was 11.0, below the 16.1 of a bench that reconstructs
-    fine. Reconstruction size tracks the determinant's coefficients
-    (products of ~n entries), not the entries' dynamic range, so the
-    predictor has to come from somewhere else."""
+    Deliberately NOT an input: coefficient spread. A spread gate was
+    tried against a real fallback ("no stable rational reconstruction
+    after 64 primes") and MEASURED WRONG -- the failing call's spread
+    was 11.0, below the 16.1 of a bench that reconstructs fine.
+    Reconstruction size tracks the determinant's coefficients (products
+    of ~n entries), not the entries' dynamic range, so the predictor
+    has to come from somewhere else."""
     b = _probe_backend()
     if b != "auto":
         return b
@@ -521,7 +530,7 @@ def _solve_numeric_s(tasks, cols, A, progress=None) -> list:
 
     key = sp.ImmutableMatrix(A)
     cached = _S_CACHE.get(key)
-    workers = min(_MAX_WORKERS, max(1, (os.cpu_count() or 2) - 1))
+    workers = default_workers()
     if (total >= _S_SWEEP_PARALLEL_MIN and workers > 1
             and not _spawn_would_deadlock()
             and (cached is None or len(cached[0]) < L)):
@@ -692,7 +701,7 @@ def solve_tf_interp_batch(tasks, keep: list[str],
     def gather() -> list:
         gtasks = [(idx, point_pairs(idx)) for idx in all_idx]
         n_dets = len(gtasks) * len(s_pts) * (1 + len(tasks))
-        workers = min(_MAX_WORKERS, max(1, (os.cpu_count() or 2) - 1))
+        workers = default_workers()
         # A ProcessPoolExecutor started from a process that has already imported
         # a Qt binding deadlocks under the 'spawn' start method (the GUI/tests
         # path): the worker re-import hangs, and pool.map() blocks forever rather
@@ -781,7 +790,7 @@ def solve_tf_interp_batch(tasks, keep: list[str],
         try:
             grid_pairs = [[(int(v.p), int(v.q)) for v in g] for g in grids]
             vinvs = [svinv] + [_vinv_rows(g) for g in grids]
-            workers = min(_MAX_WORKERS, max(1, (os.cpu_count() or 2) - 1))
+            workers = default_workers()
             zmap = None
             if workers > 1 and not _spawn_would_deadlock():
                 zmap = _get_pool(workers).map
@@ -808,7 +817,7 @@ def solve_tf_interp_batch(tasks, keep: list[str],
                     info=binfo)
             num_ts = [num_t]
         except Exception as exc:
-            warnings.warn(f"zp-batch backend unavailable ({exc}); "
+            warnings.warn(f"{backend} backend unavailable ({exc}); "
                           f"using the exact-QQ grid")
             den_t = None
             num_ts = [None]
@@ -821,8 +830,8 @@ def solve_tf_interp_batch(tasks, keep: list[str],
                             d_probe, L):
                 reduced_ok = True
             else:
-                warnings.warn("zp-batch reduced result failed the ratio "
-                              "check; using the exact-QQ grid")
+                warnings.warn(f"{backend} reduced result failed the ratio "
+                              f"check; using the exact-QQ grid")
                 den_t = None
                 num_ts = [None]
                 fell_back = True
@@ -830,8 +839,8 @@ def solve_tf_interp_batch(tasks, keep: list[str],
         elif den_t is not None and not (
                 _tensor_check(den_t, probe_qq, d_probe, L)
                 and _tensor_check(num_ts[0], probe_qq, n_probes[0], L)):
-            warnings.warn("zp-batch result failed the exact probe "
-                          "self-check; using the exact-QQ grid")
+            warnings.warn(f"{backend} result failed the exact probe "
+                          f"self-check; using the exact-QQ grid")
             den_t = None
             num_ts = [None]
             fell_back = True

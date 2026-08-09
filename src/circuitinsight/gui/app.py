@@ -26,58 +26,10 @@ from matplotlib.figure import Figure
 
 from ..session import SessionController
 from . import devtree, exprweb, summaryweb, theme, view
+from .jobs import JobRunnerMixin, _Cancelled, _Worker
+from .persistence import PersistenceMixin
+from .report import ReportMixin
 from .rangeslider import RangeSlider
-
-
-class _Cancelled(BaseException):
-    """Raised inside the worker's progress callback to abandon a solve.
-
-    A BaseException on purpose, like KeyboardInterrupt: the engine's
-    backend machinery wraps its fast paths in `except Exception` to fall
-    back to slower ones, and a cancel that subclasses Exception was
-    CAUGHT there -- the user's cancel turned into a silent serial re-run
-    of the very solve they abandoned."""
-
-
-class _Worker(QThread):
-    """Run any Result-returning callable off the UI thread.
-
-    `fn` is handed a progress callback; it is invoked in THIS thread, so it only
-    emits a signal -- Qt queues it to the GUI thread. Touching widgets from here
-    would be a crash waiting for a slow solve.
-
-    cancel() cooperates through that same callback: the flag is checked on
-    every grid-point report, so cancellation lands within one grid point on
-    the interpolation path. A direct-determinant solve reports no progress
-    and therefore cannot be interrupted -- the button stays honest by
-    switching to "cancelling..." until the solver next yields.
-    """
-    done = Signal(object)
-    failed = Signal(str)
-    cancelled = Signal()
-    progress = Signal(int, int)          # (done, total) grid points
-    note = Signal(str)                   # worker-side narration -> Log
-
-    def __init__(self, fn):
-        super().__init__()
-        self._fn = fn
-        self._cancel = False
-
-    def cancel(self):
-        self._cancel = True
-
-    def run(self):
-        def cb(done, total):
-            if self._cancel:
-                raise _Cancelled
-            self.progress.emit(done, total)
-
-        try:
-            self.done.emit(self._fn(cb))
-        except _Cancelled:
-            self.cancelled.emit()
-        except Exception as exc:
-            self.failed.emit(f"{type(exc).__name__}: {exc}")
 
 
 #: (name, tooltip, requirement) — one row per tool. The Tool dropdown
@@ -102,7 +54,8 @@ _TOOLS = (
 )
 
 
-class MainWindow(QMainWindow):
+class MainWindow(JobRunnerMixin, PersistenceMixin,
+                 ReportMixin, QMainWindow):
     #: tests point this at a temp .ini so they never touch the registry
     settings_path: str | None = None
 
@@ -138,11 +91,6 @@ class MainWindow(QMainWindow):
         self.cap_model = str(self._settings().value("cap_model", "matrix"))
         self._build()
         self._restore_settings()
-
-    def _settings(self) -> QSettings:
-        if self.settings_path:
-            return QSettings(self.settings_path, QSettings.IniFormat)
-        return QSettings("CircuitInsight", "desktop")
 
     # --------------------------------------------------------------- layout
     def _build(self):
@@ -531,113 +479,6 @@ class MainWindow(QMainWindow):
                 w = max(self.width(), 900)
                 self.h_split.setSizes([340, w - 360])
 
-    def _restore_settings(self):
-        s = self._settings()
-        geo = s.value("geometry")
-        if geo is not None:
-            self.restoreGeometry(geo)
-        for key, spin in (("budget/mag", self.mag_spin),
-                          ("budget/phase", self.phase_spin),
-                          ("budget/solve_s", self.budget_spin),
-                          ("budget/pm", self.strat_pm_spin),
-                          ("budget/gm", self.strat_gm_spin),
-                          ("budget/rej", self.strat_rej_spin)):
-            v = s.value(key)
-            if v is not None:
-                try:
-                    spin.setValue(float(v))
-                except (TypeError, ValueError):
-                    pass
-        lo, hi = s.value("budget/band_lo"), s.value("budget/band_hi")
-        if lo is not None and hi is not None:
-            try:
-                self.band_slider.setValues(float(lo), float(hi))
-            except (TypeError, ValueError):
-                pass
-        mode = s.value("ui/mode")
-        if mode and self.mode_combo.findText(str(mode)) >= 0:
-            self.mode_combo.setCurrentText(str(mode))
-        # the newer toolbar controls were NOT persisted while the older
-        # mag/phase pair was -- the two persistence layers had drifted
-        for key, combo in (("ui/form", self.form_combo),
-                           ("ui/strategy", self.strategy_combo)):
-            v = s.value(key)
-            if v and combo.findText(str(v)) >= 0:
-                combo.setCurrentText(str(v))
-        # cross-probe: restoring "on" re-attempts the connection, and the
-        # toggle handler already un-checks itself with a reason when Virtuoso
-        # is not there -- so a remembered "on" is safe with no session running
-        if str(s.value("ui/xprobe", "false")).lower() in ("true", "1"):
-            self.a_xprobe.setChecked(True)
-        self._rebuild_recents()
-
-    def closeEvent(self, event):
-        self._autosave_state()          # the last-state survives the close
-        s = self._settings()
-        s.setValue("geometry", self.saveGeometry())
-        for name, sp in (("h_split", self.h_split),
-                         ("left_split", self.left_split),
-                         ("right_split", self.right_split)):
-            s.setValue("splitters/" + name, sp.saveState())
-        s.setValue("budget/mag", self.mag_spin.value())
-        s.setValue("budget/phase", self.phase_spin.value())
-        s.setValue("budget/solve_s", self.budget_spin.value())
-        s.setValue("budget/pm", self.strat_pm_spin.value())
-        s.setValue("budget/gm", self.strat_gm_spin.value())
-        s.setValue("budget/rej", self.strat_rej_spin.value())
-        s.setValue("ui/form", self.form_combo.currentText())
-        s.setValue("ui/strategy", self.strategy_combo.currentText())
-        s.setValue("budget/band_lo", self.band_slider.values()[0])
-        s.setValue("budget/band_hi", self.band_slider.values()[1])
-        s.setValue("ui/mode", self.mode_combo.currentText())
-        s.setValue("ui/xprobe", self.a_xprobe.isChecked())
-        s.sync()
-        super().closeEvent(event)
-
-    def recents(self) -> list[tuple[str, str]]:
-        s = self._settings()
-        raw = s.value("recent", []) or []
-        if isinstance(raw, str):          # QSettings: 1-element list -> str
-            raw = [raw]
-        out = []
-        for entry in raw:
-            parts = str(entry).split("|")
-            if len(parts) == 2:
-                out.append((parts[0], parts[1]))
-        return out
-
-    def _push_recent(self, cin: str, psf: str):
-        pairs = [(str(cin), str(psf))]
-        pairs += [p for p in self.recents() if p != pairs[0]]
-        s = self._settings()
-        s.setValue("recent", ["|".join(p) for p in pairs[:6]])
-        s.sync()
-        self._rebuild_recents()
-
-    def _rebuild_recents(self):
-        self.m_recent.clear()
-        pairs = self.recents()
-        if not pairs:
-            self.m_recent.addAction("(empty)").setEnabled(False)
-            return
-        for cin, psf in pairs:
-            act = self.m_recent.addAction(Path(cin).name + "  —  " + cin)
-            act.triggered.connect(
-                lambda _=False, c=cin, p=psf: self._open_recent(c, p))
-
-    def _open_recent(self, cin, psf):
-        try:
-            self.open_session(cin, psf)
-        except Exception as exc:
-            QMessageBox.critical(self, "Open failed",
-                                 f"{type(exc).__name__}: {exc}")
-
-    def _cancel_solve(self):
-        if self._thread is not None:
-            self._thread.cancel()
-            self.cancel_btn.setEnabled(False)
-            self.progress.setFormat("cancelling…")
-
     def eventFilter(self, obj, event):
         """Forward wheel scrolls on the (event-swallowing) expression canvas to
         its scroll area, so the tab scrolls like any other.
@@ -876,7 +717,8 @@ class MainWindow(QMainWindow):
         # sentence in the tooltip.
         box = QGroupBox("Keep symbolic")
         box.setToolTip("Which parameters stay as letters — exact either "
-                       "way; use Simplify to trade accuracy for size")
+                       "way; pick a Simplified form in the toolbar to "
+                       "trade accuracy for size")
         self.keep_tbl = QTableWidget(0, 5)
         self.keep_tbl.setHorizontalHeaderLabels(
             ["symbol", "dcOp", "score", "peaks", "LaTeX"])
@@ -1448,8 +1290,8 @@ class MainWindow(QMainWindow):
         theme.style_figure(self.canvas.figure)
         self.canvas.draw_idle()
         if self.result.out.startswith("T@"):
-            from ..session import _loop_margins
-            pm, fpm, gm, _ = _loop_margins(f, h)
+            from ..analysis.sensitivity import loop_margins
+            pm, fpm, gm, _ = loop_margins(f, h)
             self._wf_pm.setText(
                 f"what-if margins:  PM {pm:.1f}°"
                 f" @ {view.eng(fpm, 'Hz')}" +
@@ -2225,8 +2067,8 @@ class MainWindow(QMainWindow):
         ax1.legend(fontsize=8, frameon=False, loc="lower left")
         theme.style_figure(self.canvas.figure)
         self.canvas.draw_idle()
-        from ..session import _loop_margins
-        pm, fpm, gm, _ = _loop_margins(f, T)
+        from ..analysis.sensitivity import loop_margins
+        pm, fpm, gm, _ = loop_margins(f, T)
         note = (f"preview PM {pm:.1f}° @ {view.eng(fpm, 'Hz')}"
                 if pm is not None else "preview: no crossing")
         if gm is not None:
@@ -2550,168 +2392,6 @@ class MainWindow(QMainWindow):
                 f"uses the previous model; press Solve to recompute "
                 f"with your keep set", "warn")
 
-    # ------------------------------------------------------------ states
-    def _state_manifest(self) -> dict:
-        from . import state as st
-
-        c = self.controller
-        return {
-            "cin": self._cin, "psf": self._psf,
-            "cap_model": self.cap_model,
-            "matches": [list(g) for g in self._match_groups],
-            "circuit_state": getattr(c, "circuit_state", "as imported"),
-            "in": self.in_combo.currentText(),
-            "out": self.out_combo.currentText(),
-            "mode": self.mode_combo.currentText(),
-            "probe": self.probe_combo.currentText(),
-            "form": self.form_combo.currentText(),
-            "strategy": self.strategy_combo.currentText(),
-            "mag_db": self.mag_spin.value(),
-            "phase_deg": self.phase_spin.value(),
-            "pm_deg": self.strat_pm_spin.value(),
-            "gm_db": self.strat_gm_spin.value(),
-            "rej_db": self.strat_rej_spin.value(),
-            "band": list(self.band_slider.values()),
-            "keep": self.checked_keep(),
-            "aliases": dict(getattr(c, "sym_aliases", {}) or {}),
-            "fingerprint": st.fingerprint(
-                self._cin, self._psf, self.cap_model,
-                self._match_groups,
-                getattr(c, "circuit_state", "as imported")),
-        }
-
-    def _autosave_state(self):
-        """The rolling last-state, beside the CIN. Fired after every
-        shown result and on close — losing a carefully built keep set
-        to a crash or an absent-minded close is the failure this
-        prevents. Must never break the session itself."""
-        if self.controller is None or not getattr(self, "_cin", None):
-            return
-        try:
-            from . import state as st
-
-            st.save_state(st.state_path(self._cin),
-                          self._state_manifest(), self.result)
-            self._autosave_warned = False
-        except Exception as exc:
-            # the whole point of this path is "never lose the user's
-            # work" -- a silent permanent failure is the one outcome
-            # worse than no autosave at all. Say it once, keep working.
-            if not getattr(self, "_autosave_warned", False):
-                self._autosave_warned = True
-                self.log(f"autosave FAILED: {type(exc).__name__}: {exc}")
-                self._set_strip("state autosave failed — File → Save "
-                                "state as… still works; see the Log",
-                                "warn")
-
-    def save_state_dialog(self):
-        if self.controller is None:
-            return
-        from . import state as st
-
-        start = str(st.state_path(self._cin, "checkpoint"))
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save session state", start,
-            "CircuitInsight state (*.cistate)")
-        if not path:
-            return
-        st.save_state(path, self._state_manifest(), self.result)
-        self._set_strip(f"state saved: {Path(path).name}", "info")
-
-    def load_state_dialog(self):
-        if self.controller is None:
-            return
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Load session state",
-            str(Path(self._cin).parent),
-            "CircuitInsight state (*.cistate)")
-        if path:
-            self._load_state_file(path)
-
-    def _load_state_file(self, path=None):
-        """Restore a state: the selections always; the stored solution
-        only when its fingerprint matches the run now open — a stale
-        solution is declared stale, never displayed as current."""
-        if self.controller is None:
-            return
-        from . import state as st
-
-        if path is None:
-            path = st.state_path(self._cin)
-        try:
-            fp = st.fingerprint(
-                self._cin, self._psf, self.cap_model,
-                self._match_groups,
-                getattr(self.controller, "circuit_state", "as imported"))
-            manifest, result, stale = st.load_state(path, fp)
-        except Exception as exc:
-            self._set_strip(f"state load failed: {exc}", "error")
-            return
-        # selections, in dependency order: matches change the symbol
-        # set, mode/form refill tables, ticks land last
-        groups = [tuple(g) for g in manifest.get("matches", [])]
-        if groups:
-            self._match_groups = groups
-            self._apply_matches()
-        for combo, key in ((self.in_combo, "in"),
-                           (self.out_combo, "out")):
-            v = manifest.get(key)
-            if v:
-                combo.setCurrentText(v)
-        self.mode_combo.setCurrentText(manifest.get("mode", "Transfer"))
-        pv = manifest.get("probe")
-        if pv and self.probe_combo.findText(pv) >= 0:
-            self.probe_combo.setCurrentText(pv)
-        self.form_combo.setCurrentText(manifest.get("form", "Exact"))
-        sv = manifest.get("strategy")
-        if sv and self.strategy_combo.findText(sv) >= 0:
-            self.strategy_combo.setCurrentText(sv)
-        for spin, key in ((self.mag_spin, "mag_db"),
-                          (self.phase_spin, "phase_deg"),
-                          (self.strat_pm_spin, "pm_deg"),
-                          (self.strat_gm_spin, "gm_db"),
-                          (self.strat_rej_spin, "rej_db")):
-            if key in manifest:
-                spin.setValue(float(manifest[key]))
-        band = manifest.get("band")
-        if band and len(band) == 2:
-            self.band_slider.setValues(float(band[0]), float(band[1]))
-        aliases = manifest.get("aliases") or {}
-        if aliases and hasattr(self.controller, "sym_aliases"):
-            self.controller.sym_aliases.update(aliases)
-        checked = list(manifest.get("keep", []))
-        keep_ok = True
-        if checked:
-            try:
-                ranking = self.controller.rank_symbols(*self._io())
-                self._fill_keep_table(ranking, checked=checked)
-            except Exception as exc:
-                keep_ok = False
-                self.log(f"state restore: keep table failed "
-                         f"({type(exc).__name__}: {exc})")
-        name = Path(path).name
-        if result is not None:
-            self._show(result)
-            partial = ("" if keep_ok else
-                       " — KEEP TICKS NOT RESTORED (see the Log)")
-            self._set_strip(f"state restored from {name} — selections "
-                            f"AND the computed solution (fingerprint "
-                            f"matched){partial}",
-                            "info" if keep_ok else "warn")
-            self.log(f"state restored: {name} (with solution)")
-        else:
-            why = ("solution stale — the run, cap model, matches or "
-                   "version changed" if stale else "no solution stored")
-            self._set_strip(f"state restored from {name} — selections "
-                            f"only ({why}); press Solve", "warn")
-            self.log(f"state restored: {name} (selections only)")
-            self._refresh_solve_hint()
-
-    def _save_cap_model(self):
-        s = self._settings()
-        s.setValue("cap_model", self.cap_model)
-        s.sync()
-
     def open_session(self, cin, psf, probe=None):
         # cap model chosen in the Model menu; matrix is the accurate one on
         # non-reciprocal processes (SKY130 CM loops shift ~6 deg vs lumped),
@@ -2833,7 +2513,6 @@ class MainWindow(QMainWindow):
             self.backend_combo.setCurrentIndex(0)
         finally:
             self._filling = was
-        self.estimate_lbl.setText("estimate: —")
         self.estimate_lbl.setText(
             "Rank scores each parameter's effect on the band — start there")
         inv = {v: k for k, v in self._POLICY_MAP.items()}
@@ -2852,10 +2531,8 @@ class MainWindow(QMainWindow):
         self._ensure_calibration()   # measure this machine once
         for b in (self.solve_btn,
                   self.a_solve, self.a_simplify,
-                  self.a_reduce, self.a_export):
+                  self.a_reduce):
             b.setEnabled(True)
-        for b in (self.a_export,):                        # nothing solved yet
-            b.setEnabled(False)
         self._auto_setup()
 
     def _auto_setup(self):
@@ -3142,28 +2819,6 @@ class MainWindow(QMainWindow):
         self._save_aliases()
         self._render_expr()
 
-    def _alias_key(self) -> str:
-        stem = Path(str(self.controller.cin_path)).name if self.controller \
-            else "?"
-        return "aliases/" + stem
-
-    def _save_aliases(self):
-        import json
-
-        s = self._settings()
-        s.setValue(self._alias_key(), json.dumps(self.controller.sym_aliases))
-        s.sync()
-
-    def _load_aliases(self):
-        import json
-
-        raw = self._settings().value(self._alias_key())
-        if raw:
-            try:
-                self.controller.sym_aliases = dict(json.loads(raw))
-            except Exception:
-                pass
-
     def _on_group_toggled(self, _on):
         if getattr(self, "_last_ranking", None):
             self._fill_keep_table(self._last_ranking,
@@ -3328,88 +2983,6 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------------- solve
     #: sentinel: "use the keep-set estimate" (a solve), vs an explicit
     #: value or None for jobs the keep-set estimator does not describe
-    _KEEP_EST = object()
-
-    def _launch(self, fn, label, on_done=None, est_s=_KEEP_EST,
-                growth_reason=None):
-        for b in (self.solve_btn,
-                  self.a_solve, self.a_simplify, self.a_reduce):
-            b.setEnabled(False)
-        self.statusBar().showMessage(label)
-        self.progress.setRange(0, 0)      # busy until an estimate exists
-        self._live_est = None             # fresh launch, fresh refinement
-        self._growth_reason = growth_reason
-        self._t0 = time.monotonic()
-        # an advisory pass is NOT priced by the keep-set estimator; it
-        # used to inherit the solve's number and log a promise that
-        # belonged to a different analysis entirely
-        self._run_est = (self._est_s if est_s is self._KEEP_EST else est_s)
-        est = (f"  [estimate ~{self._run_est:.0f}s]" if self._run_est
-               else "  [no estimate for this pass]")
-        self.log(f"START {label.rstrip(' …')}{est}")
-        self._phase_totals, self._phase_runs = {}, {}
-        self._phase, self._phase_t0 = None, None
-        self._set_phase("preparing")
-        self._tick.start()
-        self.progress.show()
-        self.cancel_btn.setEnabled(True)
-        self.cancel_btn.show()
-        # warm the display transforms IN THE WORKER: rendering the
-        # expression lines runs cancel/nsimplify over the whole result
-        # (measured 3 s at 1040 terms, tens of seconds on big hybrids)
-        # and used to freeze the GUI the moment the solve delivered
-        base = not self.fullnames_chk.isChecked()
-        wrap = bool(getattr(exprweb, "WEBENGINE", False))
-        aliases = dict(getattr(self.controller, "sym_aliases", {}) or {})
-
-        def _prepped(cb, _fn=fn):
-            res = _fn(cb)
-            view.prepare_display(res, base=base, wrap=wrap,
-                                 aliases=aliases)
-            return res
-
-        self._thread = _Worker(_prepped)
-        self._thread.progress.connect(self._on_progress)
-        self._thread.done.connect(on_done or self._on_done)
-        self._thread.failed.connect(self._on_failed)
-        self._thread.cancelled.connect(self._on_cancelled)
-        # worker-side narration (pursuit rounds and the like) lands in
-        # the Log through the queued signal -- never touch widgets there
-        self._thread.note.connect(lambda m: self.log(f"  {m}"))
-        self.worker_note = self._thread.note.emit
-        self._thread.start()
-
-    #: every launch disables these; every completion path re-enables ALL
-    #: of them. Four handlers each re-enabled their own subset, so a
-    #: Modes/Compensate/GFT run left Simplify and Reduce greyed until an
-    #: unrelated mode change happened to fix them.
-    def _job_finished(self, *extra):
-        for b in (self.solve_btn, self.a_solve, self.a_simplify,
-                  self.a_reduce, *extra):
-            b.setEnabled(True)
-
-    def _run_bg(self, fn, on_done):
-        """Advisor-pattern short worker: controller math off the GUI
-        thread (estimates, rank, the certificate — each measured
-        0.3–1 s of main-thread stall per interaction), result delivered
-        queued. Failures are dropped: advisories never break a session."""
-        w = _Worker(lambda _cb: fn())
-        if not hasattr(self, "_bg_workers"):
-            self._bg_workers = []
-        self._bg_workers.append(w)
-
-        def _done(res, _w=w):
-            try:
-                on_done(res)
-            finally:
-                if _w in self._bg_workers:
-                    self._bg_workers.remove(_w)
-
-        w.done.connect(_done)
-        w.failed.connect(lambda _m, _w=w: (
-            self._bg_workers.remove(_w)
-            if _w in self._bg_workers else None))
-        w.start()
 
     def solve(self):
         if self.controller is None:
@@ -3512,12 +3085,13 @@ class MainWindow(QMainWindow):
 
     def _strategy_eps_eq(self) -> float:
         """The strategy budget as a comparable relative tolerance, for
-        the order-certificate label."""
-        s, o = self._strategy(), self._strategy_opts()
-        if s == "stability":
-            return 0.05
-        db = o.get("rej_db", o.get("gain_db", 1.0))
-        return 10.0 ** (db / 20.0) - 1.0
+        the order-certificate label — the criterion's own mapping, not
+        a GUI-side copy of it."""
+        from ..analysis.criteria import make_criterion
+
+        return make_criterion(strategy=self._strategy(),
+                              strategy_opts=self._strategy_opts()
+                              ).eps_equivalent()
 
     def _on_strategy_changed(self):
         self._refresh_form_ui()
@@ -3554,11 +3128,11 @@ class MainWindow(QMainWindow):
                      done)
 
     def _update_tol_bands(self):
-        """The tolerance made visible. Full order: a fixed tube of ±mag
-        dB / ±phase° around the model traces. Lowest order: the ANCHORED
-        tube — |dH| <= eps*(|H| + anchor) rendered exactly, thin and
-        relative above the anchor, flaring open below it (where the
-        criterion stops caring), with the anchor level drawn dotted."""
+        """The tolerance made visible, per strategy. Gain & phase: a
+        ±gain-dB tube on the magnitude axis and a ±phase-deg tube on the
+        phase axis, over the whole band. Rejection: the magnitude tube
+        only. Stability: a ±PM-deg phase tube hugging the unity
+        crossover — the only place the criterion looks."""
         for artist in self._tol_bands:
             try:
                 artist.remove()
@@ -3794,280 +3368,6 @@ class MainWindow(QMainWindow):
 
     #: keep the log bounded -- it is a session record, not a data store
     _LOG_MAX_LINES = 2000
-
-    def log(self, text: str) -> None:
-        """Append one timestamped line to the Log tab. Session-relative
-        seconds, not wall-clock: what a reader compares is durations
-        between events, and a relative clock survives being pasted into
-        a report from another timezone."""
-        t = time.monotonic() - self._log_t0
-        self.logview.append(f"[{t:8.1f}s] {text}")
-        doc = self.logview.document()
-        if doc.blockCount() > self._LOG_MAX_LINES:
-            cur = self.logview.textCursor()
-            cur.movePosition(cur.MoveOperation.Start)
-            for _ in range(doc.blockCount() - self._LOG_MAX_LINES):
-                cur.select(cur.SelectionType.BlockUnderCursor)
-                cur.removeSelectedText()
-                cur.deleteChar()
-        sb = self.logview.verticalScrollBar()
-        sb.setValue(sb.maximum())               # follow the tail
-
-    def _close_phase(self) -> float:
-        """End the current phase, banking its DURATION. Entry timestamps
-        alone made the reader subtract; durations are what a report is
-        actually about, and a phase entered twice (a backend fallback
-        re-running the grid) accumulates rather than overwrites."""
-        now = time.monotonic()
-        prev = getattr(self, "_phase", None)
-        t0 = getattr(self, "_phase_t0", None)
-        dur = 0.0
-        if prev and t0 is not None:
-            dur = now - t0
-            self._phase_totals[prev] = self._phase_totals.get(prev, 0.0) + dur
-            self._phase_runs[prev] = self._phase_runs.get(prev, 0) + 1
-        self._phase_t0 = now
-        return dur
-
-    def _set_phase(self, phase, done=None, total=None):
-        prev = getattr(self, "_phase", None)
-        if phase != prev:                       # phase transitions only
-            dur = self._close_phase()
-            self._phase = phase
-            self._phase_units = (done, total)
-            el = (time.monotonic() - self._t0) if self._t0 else 0.0
-            est = self._live_est or self._est_s
-            tail = f", est ~{est:.0f}s" if est else ""
-            took = f" [{prev} took {dur:.1f}s]" if prev and dur else ""
-            self.log(f"  phase: {phase} (at {el:.0f}s{tail}){took}")
-            if phase == "reconstructing" and prev == "evaluating" and dur:
-                # reconstruction is the DOMINANT phase (measured 90% of a
-                # sparse solve) and no cost model prices it. The learned
-                # ratio turns the end of evaluation into a real
-                # projection instead of a bar creeping on elapsed.
-                self._project_from_recon_ratio(dur)
-        else:
-            # same phase, more work: a growing total is a real event (a
-            # pursuit round ended, a prime batch was queued) and used to
-            # pass silently -- the 70/74 mystery. Name it in the Log.
-            old = self._phase_units[1] if self._phase_units else None
-            if total and old and total > old:
-                why = getattr(self, "_growth_reason", None) or (
-                    "the stop test has not passed, so the phase queued "
-                    "more work (another pursuit round or prime batch)")
-                self.log(f"  {phase} total {old} -> {total}: {why}")
-            self._phase = phase
-            self._phase_units = (done, total)
-        self._refresh_progress()
-
-    def _phase_breakdown(self) -> str:
-        """'evaluating 256.2s (35%, x2) · reconstructing 475.9s (65%)' --
-        where the time actually went, and how often each phase ran."""
-        tot = sum(self._phase_totals.values())
-        if not tot:
-            return ""
-        parts = []
-        for name, secs in sorted(self._phase_totals.items(),
-                                 key=lambda kv: -kv[1]):
-            runs = self._phase_runs.get(name, 1)
-            again = f", x{runs}" if runs > 1 else ""
-            parts.append(f"{name} {secs:.1f}s ({secs / tot:.0%}{again})")
-        return " · ".join(parts)
-
-    def _refresh_progress(self):
-        """The bar moves with TIME against a LIVE estimate; the text keeps
-        the units and both clocks.
-
-        The bar's geometry is elapsed / estimate, refreshed every tick, so
-        it advances with the seconds even between unit reports (a chunked
-        parallel phase can be quiet for a while). The estimate itself is
-        cheaply refined as units arrive: elapsed/fraction-done projects
-        the total from observation, blended with the pre-solve estimate
-        weighted by how much has actually been observed -- so the prior
-        rules the first seconds and the measurement takes over. When the
-        estimate improves, the bar's position re-derives from it, forward
-        or back; an honest bar beats a monotone one that lies. With no
-        estimate and no units yet it stays indeterminate, and the rising
-        elapsed clock distinguishes "still working" from "hung"."""
-        if self._t0 is None:
-            return
-        el = time.monotonic() - self._t0
-        done, total = self._phase_units
-        units = f" {done}/{total}" if total else ""
-        live = self._live_est or self._run_est  # keep refinements across phases
-        if total and done:
-            frac = done / total
-            observed = el / frac                # projected total from data
-            w = frac                            # confidence grows with coverage
-            prior = self._run_est
-            live = observed if not prior else (1 - w) * prior + w * observed
-        elif live and el > live:
-            # no units to project from (reconstruction, a direct symbolic
-            # determinant): the estimate cannot be refined by observation,
-            # but elapsed OVERTAKING it proves it wrong. Grow it as a
-            # moving lower bound so the bar keeps creeping and the number
-            # stops asserting a finish time that has already passed.
-            live = el * 1.15
-        self._live_est = live
-        est = ""
-        if live:
-            est = f" / ~{live:.0f}s"
-            # "(over)" means the PROMISE was blown, not merely that the
-            # live number moved: since the estimate now self-corrects,
-            # elapsed rarely overtakes it -- what the user needs to see
-            # is the live estimate having run away from the pre-solve one
-            blown = (el > 1.2 * live
-                     or (self._run_est and live > 1.5 * self._run_est))
-            if blown:
-                est += " (over)"
-            self.progress.setRange(0, 1000)
-            self.progress.setValue(int(1000 * min(0.99, el / live)))
-        self.progress.setFormat(f"{self._phase}{units} — {el:.0f}s{est}")
-
-    def _on_progress(self, done, total):
-        """Evaluation units completed. Queued from the worker thread, so this
-        runs on the GUI thread and may touch widgets.
-
-        Units feed the LIVE estimate; the bar itself is time-driven in
-        _refresh_progress. The evaluation is not the whole solve -- setup
-        precedes it and the reconstruction follows -- so the bar names
-        the phase rather than hitting 100% and appearing to hang."""
-        if total <= 0:
-            return
-        if done >= total:                       # evaluation done; rebuild left
-            # keep the time-driven bar running against the live estimate
-            self._set_phase("reconstructing")
-            return
-        self._set_phase("evaluating", done, total)
-
-    def _on_cancelled(self):
-        self._tick.stop()
-        self._t0 = None
-        self.progress.hide()
-        self.cancel_btn.hide()
-        for b in (self.solve_btn,
-                  self.a_solve, self.a_simplify, self.a_reduce):
-            b.setEnabled(True)
-        self.statusBar().showMessage("solve cancelled")
-        self.log("CANCELLED")
-
-    def _log_finish(self, verdict: str) -> None:
-        """One closing line per run: how long it took, against what was
-        promised, and which solver actually ran — the three numbers a
-        report about a slow or surprising solve needs."""
-        el = (time.monotonic() - self._t0) if self._t0 else 0.0
-        est = self._run_est
-        acc = ""
-        if est:
-            acc = f" (estimate ~{est:.0f}s, {el / est:.1f}x)"
-        self._close_phase()                      # bank the final phase
-        self.log(f"{verdict} after {el:.1f}s{acc}"
-                 f"{self._backend_note()}")
-        bd = self._phase_breakdown()
-        if bd:
-            self.log(f"  phases: {bd}")
-
-    def _ensure_calibration(self):
-        """Measure this machine ONCE, in the background, when no
-        calibration exists. Without it every estimate comes from a
-        deliberately pessimistic built-in default (alpha 3.0) that
-        over-predicts a real gmpy2 + worker-pool machine by ~20x -- the
-        estimates are not wrong by chance, they are un-measured. Bounded
-        by calibrate()'s own max_seconds; failure is silent and simply
-        leaves the default in place."""
-        try:
-            from ..analysis import estimate as _est
-        except Exception:                        # pragma: no cover
-            return
-        if _est.get_calibration().platform != "builtin-default":
-            return
-        if _est.load_calibration() is not None:
-            _est.set_calibration(_est.load_calibration())
-            self.log("solve-time model: loaded this machine's calibration")
-            return
-        if getattr(self, "_calib_thread", None) is not None:
-            return
-        self.log("solve-time model: measuring this machine "
-                 "(first run; estimates are the conservative default "
-                 "until it finishes) …")
-
-        class _Calib(QThread):
-            done = Signal(object)
-
-            def run(self):
-                try:
-                    self.done.emit(_est.calibrate(max_seconds=2.0))
-                except Exception as exc:         # never break the GUI
-                    self.done.emit(exc)
-
-        def finished(res):
-            self._calib_thread = None
-            if isinstance(res, Exception):
-                self.log(f"solve-time model: calibration failed ({res})")
-                return
-            self.log(f"solve-time model: calibrated "
-                     f"(alpha_par {res.a_parallel:.3g}, "
-                     f"{res.n_samples} samples) — estimates now use this "
-                     f"machine's own numbers")
-            self._update_estimate()
-
-        self._calib_thread = _Calib()
-        self._calib_thread.done.connect(finished)
-        self._calib_thread.start()
-
-    def _solve_key(self) -> str:
-        try:
-            from ..engine import interp
-            tl = getattr(interp, "LAST_SOLVE", None) or {}
-        except Exception:                        # pragma: no cover
-            return "parallel"
-        if tl.get("backend") == "bot":
-            return "bot"
-        return "parallel" if tl.get("n_dense_dets", 0) else "serial"
-
-    def _project_from_recon_ratio(self, eval_s: float):
-        try:
-            from ..analysis import estimate as _est
-
-            r = getattr(_est.get_calibration(), "r_" + self._solve_key(), 1.0)
-        except Exception:                        # pragma: no cover
-            return
-        total = eval_s * (1.0 + r)
-        if total > (self._live_est or 0):
-            self._live_est = total
-            self.log(f"  projected total ~{total:.0f}s "
-                     f"(reconstruction runs ~{r:.1f}x evaluation here)")
-        self._refresh_progress()
-
-    def _learn_from_solve(self):
-        """Feed the finished solve back into this machine's persistent
-        calibration: the pre-solve estimate vs the wall clock. The model
-        is fitted on synthetic ladders and covers only the evaluation,
-        so on real circuits (reconstruction included) it runs low --
-        this is what closes that gap over sessions instead of leaving
-        every user with the factory number."""
-        if self._t0 is None or not self._run_est:
-            return
-        actual = time.monotonic() - self._t0
-        try:
-            from ..analysis import estimate as _est
-            from ..engine import interp
-
-            tl = getattr(interp, "LAST_SOLVE", None) or {}
-            bk = tl.get("backend")
-            # learn on the key that PRICED this solve: the sparse path
-            # has its own cost model, so mixing its samples into the
-            # dense correction taught both the wrong thing
-            key = "bot" if bk == "bot" else (
-                "parallel" if tl.get("n_dense_dets", 0) else "serial")
-            _est.observe(self._run_est, actual, parallel=(key != "serial"),
-                         key=key)
-            ev = self._phase_totals.get("evaluating", 0.0)
-            rc = self._phase_totals.get("reconstructing", 0.0)
-            if ev > 0 and rc > 0:
-                _est.observe_phases(ev, rc, key=key)
-        except Exception:
-            pass                                # never break a finished solve
 
     def _on_done(self, result):
         self._log_finish("DONE")
@@ -4395,96 +3695,6 @@ class MainWindow(QMainWindow):
         if self._xprobe is None:
             return
         self.xprobe_instances(self.devices.selected_names())
-
-    def add_to_report(self):
-        """Snapshot the CURRENT view (whatever bench drew it) into the
-        session report."""
-        if self.controller is None:
-            return
-        n = len(self._report_sections) + 1
-        mode = self.mode_combo.currentText()
-        label = ""
-        if self.result is not None:
-            label = f"{self.result.inp} → {self.result.out}"
-        title = f"{n}. {mode}" + (f" — {label}" if label else "")
-        text = self.summary.toPlainText()
-        strip = self.msg_strip.text()
-        if strip:
-            text += "\n\n" + strip
-        self._report_sections.append(
-            view.report_section(title, self.canvas.figure, text))
-        self.a_export_session.setEnabled(True)
-        self.statusBar().showMessage(
-            f"added section {n} to the session report")
-
-    def export_session_report(self):
-        if not self._report_sections:
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export session report", "circuitinsight_session.html",
-            "HTML (*.html)")
-        if not path:
-            return
-        name = Path(str(self.controller.cin_path)).name \
-            if self.controller else "session"
-        Path(path).write_text(
-            view.session_report(f"CircuitInsight — {name}",
-                                self._report_sections),
-            encoding="utf-8")
-        self.statusBar().showMessage(
-            f"session report: {len(self._report_sections)} section(s) "
-            f"→ {Path(path).name}")
-
-    def export_csv(self):
-        if self.result is None:
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export traces", "circuitinsight_traces.csv",
-            "CSV (*.csv)")
-        if not path:
-            return
-        Path(path).write_text(view.traces_csv(self.result),
-                              encoding="utf-8")
-        self.statusBar().showMessage(f"traces → "
-                                     f"{Path(path).name}")
-
-    def copy_latex(self):
-        """Put the normalized, rounded H(s) on the clipboard as LaTeX --
-        the paper-writing verb. (The exact 60-digit form stays on the
-        Result for provenance.)"""
-        if self.result is None:
-            return
-        QApplication.clipboard().setText("H(s) = " + view.tf_latex(self.result))
-        self.statusBar().showMessage("H(s) copied to the clipboard as LaTeX")
-
-    # --------------------------------------------------------------- export
-    def export(self):
-        if self.result is None:
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export report", "circuitinsight_report.html",
-            "HTML (*.html);;Markdown (*.md)")
-        if not path:
-            return
-        try:
-            p = self._write_report(Path(path))
-        except Exception as exc:
-            QMessageBox.warning(self, "Export failed", f"{type(exc).__name__}: {exc}")
-            return
-        extra = "" if p.suffix == ".html" else \
-            f" and {p.with_suffix('.png').name}"
-        self.statusBar().showMessage(f"exported {p.name}{extra}")
-
-    def _write_report(self, p: Path) -> Path:
-        """Write the report: single-file HTML (embedded plots), or
-        Markdown + Bode PNG."""
-        if p.suffix.lower() == ".html":
-            p.write_text(view.html_report(self.result), encoding="utf-8")
-            return p
-        p.write_text(view.markdown_report(self.result), encoding="utf-8")
-        self.canvas.figure.savefig(p.with_suffix(".png"), dpi=200,
-                                   bbox_inches="tight")
-        return p
 
 
 def build_window(cin=None, psf=None, probe=None) -> MainWindow:

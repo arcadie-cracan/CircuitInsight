@@ -22,7 +22,8 @@ from pathlib import Path
 import numpy as np
 import sympy as sp
 
-from .keep import ALL, is_all, norm_keep  # noqa: F401  (ALL re-exported)
+from .keep import (ALL, is_all, norm_keep,  # noqa: F401
+                   norm_keep_list)
 from .units import eng
 
 __all__ = ["SessionController", "Result", "DeviceInfo", "SolveTooLarge"]
@@ -85,9 +86,9 @@ class Result:
     band_fmax: float | None = None
     # the band the budget was actually ENFORCED over: inside the chosen
     # band, the part where |H| stays within the enforcement window of its
-    # peak. The tolerance tube must be drawn HERE and nowhere else -- a
-    # tube spanning frequencies the pursuit never checked draws a promise
-    # that was not made.
+    # peak. Recorded for the report and the tests; the GUI's tolerance
+    # tubes are drawn from the toolbar band, which the strategy and
+    # anchored paths enforce in full (enforced_* == band_* there).
     enforced_fmin: float | None = None
     enforced_fmax: float | None = None
     # designer-form summary (A0, GBW, per-root formulas), pre-rendered by
@@ -121,9 +122,6 @@ def _n_terms(tf) -> int:
                for poly in (num, den) for _, c in poly.terms())
 
 
-# the margins helper lives with the pursuit now (the Stability strategy
-# gates on it); this alias keeps every existing import working
-from .analysis.sensitivity import loop_margins as _loop_margins  # noqa: E402
 
 
 def _numeric_dc(tf) -> complex:
@@ -687,8 +685,7 @@ class SessionController:
             # Coercing both to [] destroyed that, so a Result could not say which
             # solve produced it, and the summary mislabelled every symbolic one.
             inp=inp, out=out,
-            keep=(ALL if is_all(keep)
-                  else list(() if keep is None else keep)),
+            keep=norm_keep_list(keep),
             dc_gain=dc, dc_gain_db=dc_db,
             poles_hz=poles, zeros_hz=zeros, n_terms=_n_terms(tf),
             tf_latex=sp.latex(tf.expr),
@@ -857,7 +854,9 @@ class SessionController:
                 if packed is not None:
                     h = np.asarray(packed[0])
                     fr = np.asarray(fr, dtype=float)
-                    pm, _f1, gm, _f2 = _loop_margins(fr, h)
+                    from .analysis.sensitivity import loop_margins
+
+                    pm, _f1, gm, _f2 = loop_margins(fr, h)
                     obj = types.SimpleNamespace(phase_margin_deg=pm,
                                                 gain_margin_db=gm)
                     return (fr, h, obj,
@@ -897,7 +896,9 @@ class SessionController:
         # overlay grid (e.g. a 20-per-decade stb sweep) is too coarse to place
         # the crossing frequencies accurately
         fd = np.logspace(math.log10(fmin), math.log10(fmax), 4001)
-        pm, fpm, gm, fgm = _loop_margins(fd, np.asarray(T.numeric(fd)))
+        from .analysis.sensitivity import loop_margins
+
+        pm, fpm, gm, fgm = loop_margins(fd, np.asarray(T.numeric(fd)))
         warns: list[str] = []
         if pm is None:
             warns.append("no unity-gain crossing of |T| in the band: "
@@ -919,8 +920,7 @@ class SessionController:
         dc_db = 20 * math.log10(abs(dc)) if dc != 0 else float("-inf")
         self._cache[key] = Result(
             inp=probe, out=f"T@{probe}",
-            keep=(ALL if is_all(keep)
-                  else list(() if keep is None else keep)),
+            keep=norm_keep_list(keep),
             dc_gain=dc, dc_gain_db=dc_db,
             poles_hz=T.poles(), zeros_hz=T.zeros(), n_terms=_n_terms(T),
             tf_latex=sp.latex(T.expr), dc_gain_latex=sp.latex(T.dc_gain()),
@@ -1430,6 +1430,34 @@ class SessionController:
         return _cert(base.freqs, base.h, fmin, fmax,
                      poles_hz=base.poles_hz, zeros_hz=base.zeros_hz)
 
+    def _certificate_details(self, r, inp, out, fmin, fmax, eps_eq,
+                             n_sel, label="") -> list[str]:
+        """The order-certificate verdict + doublet caveat, shared by the
+        anchored and strategy reduce reports. Advisory: a certificate
+        failure never breaks the solve that earned it."""
+        try:
+            cert = self.order_certificate(inp, out, fmin, fmax)
+            r.certificate = cert
+            k = cert.order_at(eps_eq)
+            if n_sel <= k:
+                det = [f"order-optimal for this band ({label})" if label
+                       else "order-optimal for this band"]
+            else:
+                at = (f" for this band at {label}" if label
+                      else " at comparable tolerance")
+                det = [f"an abstract order-{k} fit exists{at}; physical "
+                       f"elements need {n_sel} — the cost of named "
+                       f"components"]
+            if cert.doublets:
+                d = cert.doublets[0]
+                det.append(
+                    f"pole/zero doublet near {eng(d[0], 'Hz')} "
+                    f"(separation {d[2]:.1%}) — doublets affect "
+                    f"settling, not this frequency response")
+            return det
+        except Exception:
+            return []
+
     def reduce_solve(self, inp: str, out: str, keep=ALL, *,
                      tol_db: float = 0.5, max_elements: int | None = None,
                      mag_db: float = 1.0, phase_deg: float = 5.0,
@@ -1456,19 +1484,20 @@ class SessionController:
                strategy, tuple(sorted(opts.items())),
                tuple(self._matches))
         if key not in self._cache:
+            from .analysis.criteria import make_criterion
+
             an = self._analyzer_ready()
-            if eps is not None:
-                # the anchored one-knob contract: the collapse budgets
-                # derive from the SAME eps (dB/deg are its projections)
-                mag_db = 20.0 * math.log10(1.0 + eps)
-                phase_deg = math.degrees(eps)
-            elif strategy == "plain":
-                mag_db = opts.get("gain_db", 1.0)
-                phase_deg = opts.get("phase_deg", 5.0)
-            elif strategy == "stability":
-                mag_db, phase_deg = 1.0, opts.get("pm_deg", 5.0)
-            elif strategy == "rejection":
-                mag_db, phase_deg = opts.get("rej_db", 3.0), 30.0
+            # ONE criterion object carries the tolerance contract's math
+            # (used by the pursuit, see analysis/criteria.py) AND its
+            # language (the strip headline, the Summary details, the
+            # score units) -- the two halves can no longer drift.
+            crit = make_criterion(strategy=strategy, strategy_opts=opts,
+                                  eps=eps, tol_db=tol_db)
+            if max_elements is not None and crit.cap is not None:
+                crit.cap = max_elements
+            if crit.name:            # anchored or a strategy: the
+                # collapse budgets derive from the SAME contract
+                mag_db, phase_deg = crit.collapse_budgets()
             H, red = an.reduced_tf(inp, out, keep, tol_db=tol_db,
                                    fmin=fmin, fmax=fmax,
                                    max_elements=max_elements,
@@ -1486,201 +1515,43 @@ class SessionController:
                 float(red.baseline_db)
             r.simplified = True
             r.reduced_order = True
-            # band_err is dB ONLY in the legacy branch; the strategy and
-            # eps branches store their normalized score separately and
-            # keep mag_err_db a genuine dB figure
-            if strategy is not None:
-                r.band_score = float(band_err)
-                r.band_score_unit = "x budget"
-                gdb = opts.get("gain_db", opts.get("rej_db"))
-                r.mag_err_db = (band_err * gdb if gdb is not None
-                                else float(Hs.achieved_mag_err_db))
-            elif eps is not None:
-                r.band_score = float(band_err)
-                r.band_score_unit = "fraction"
-                r.mag_err_db = 20.0 * math.log10(1.0 + band_err)
-            else:
-                r.mag_err_db = band_err             # legacy: already dB
+            # the normalized score travels beside mag_err_db with its
+            # unit named; mag_err_db itself is ALWAYS a genuine dB figure
+            score, s_unit, mag_err = crit.score_fields(
+                band_err, float(Hs.achieved_mag_err_db))
+            if score is not None:
+                r.band_score, r.band_score_unit = score, s_unit
+            r.mag_err_db = float(mag_err)
             r.phase_err_deg = float(Hs.achieved_phase_err_deg)
             r.n_terms_full = _n_terms(H)
             r.band_fmin, r.band_fmax = float(fmin), float(fmax)
-            if strategy is not None:
-                r.strategy = strategy
+            if crit.name:
+                if strategy is not None:
+                    r.strategy = strategy
+                else:
+                    r.eps = float(eps)
+                    r.anchor = float(red.anchor)
                 r.enforced_fmin, r.enforced_fmax = float(fmin), float(fmax)
-                n_sel = len(red.selected)
-                names = (f" [{', '.join(red.selected)}]"
-                         if 0 < n_sel <= 3 else "")
-                det = [f"kept reactances: "
-                       f"{', '.join(red.selected) or '(none needed)'}"]
-                if strategy == "stability":
-                    mt = red.metrics
-                    pf, pr = mt.get("pm_full"), mt.get("pm_red")
-                    ff, fr_ = mt.get("fc_full"), mt.get("fc_red")
-                    gf, gr = mt.get("gm_full"), mt.get("gm_red")
-                    bits = []
-                    if pf is None:
-                        bits.append("no unity crossing in band — margins "
-                                    "undefined here, nothing to gate; "
-                                    "widen the band to the crossover")
-                    if pf is not None and pr is not None:
-                        bits.append(f"PM {pf:.1f}°→{pr:.1f}° "
-                                    f"(Δ{abs(pr - pf):.1f}°)")
-                    if ff and fr_:
-                        bits.append(f"fc {eng(ff, 'Hz')} "
-                                    f"(Δ{abs(fr_ / ff - 1):.1%})")
-                    if gf is not None and gr is not None:
-                        bits.append(f"GM {gf:.1f}→{gr:.1f} dB")
-                    elif gf is None:
-                        bits.append("GM: no ±180° crossing in band")
-                    head = (f"reduced to {n_sel} reactance(s){names} — "
-                            + ", ".join(bits))
-                    det.append("criterion: the reduced model reproduces "
-                               "the full model's margins (strategy: "
-                               "stability)")
-                    det += [f"margins: {b}" for b in bits]
-                elif strategy == "rejection":
-                    rej = opts.get("rej_db", 3.0)
-                    got = band_err * rej
-                    head = (f"reduced to {n_sel} reactance(s){names} — "
-                            f"tracks within {got:.2g} dB over "
-                            f"{eng(fmin, 'Hz')}–{eng(fmax, 'Hz')}")
-                    det.append(f"criterion: |Δ|H|| ≤ {rej:g} dB at every "
-                               f"band point, phase unconstrained "
-                               f"(strategy: rejection)")
-                else:
-                    gdb = opts.get("gain_db", 1.0)
-                    pdeg = opts.get("phase_deg", 5.0)
-                    head = (f"reduced to {n_sel} reactance(s){names} — "
-                            f"within ±{band_err * gdb:.2g} dB / "
-                            f"±{band_err * pdeg:.2g}° over "
-                            f"{eng(fmin, 'Hz')}–{eng(fmax, 'Hz')}")
-                    det.append(f"criterion: |Δ|H|| ≤ {gdb:g} dB and "
-                               f"|Δphase| ≤ {pdeg:g}° at every band "
-                               f"point (strategy: gain & phase)")
-                if not red.met:
-                    head += (f" — TOLERANCE NOT MET at the order cap: "
-                             f"best score {band_err:.2g}× the budget; "
-                             f"narrow the band or relax the tolerance "
-                             f"(details in Summary)")
-                    det.append(f"the order cap ({max_elements or 6}) "
-                               f"keeps the model readable — the response "
-                               f"genuinely carries more structure in "
-                               f"this band than the cap admits")
-                else:
-                    head += " (details in Summary)"
-                r.warnings.insert(0, head)
-                try:
-                    eps_eq = {"stability": 0.05,
-                              "rejection":
-                                  10 ** (opts.get("rej_db", 3.0) / 20) - 1,
-                              "plain":
-                                  10 ** (opts.get("gain_db", 1.0) / 20) - 1
-                              }[strategy]
-                    cert = self.order_certificate(inp, out, fmin, fmax)
-                    r.certificate = cert
-                    k = cert.order_at(eps_eq)
-                    det.append(
-                        f"order-optimal for this band" if n_sel <= k else
-                        f"an abstract order-{k} fit exists at comparable "
-                        f"tolerance; physical elements need {n_sel} — "
-                        f"the cost of named components")
-                    if cert.doublets:
-                        d = cert.doublets[0]
-                        det.append(
-                            f"pole/zero doublet near {eng(d[0], 'Hz')} "
-                            f"(separation {d[2]:.1%}) — doublets affect "
-                            f"settling, not this frequency response")
-                except Exception:
-                    pass
+                # the strip gets ONE actionable line; everything else --
+                # element names, criterion, certificate verdict, doublet
+                # caveat -- lands in r.details, which only the Summary
+                # renders
+                r.warnings.insert(
+                    0, crit.headline(red, band_err, fmin, fmax))
+                det = crit.details(red, band_err, fmin, fmax)
+                det += self._certificate_details(
+                    r, inp, out, fmin, fmax, crit.eps_equivalent(),
+                    len(red.selected),
+                    label=(f"{eps:.0%}" if crit.name == "anchored"
+                           else ""))
                 r.details = det
-                self._cache[key] = r
-                return r
-            if eps is not None:
-                # anchored contract: enforcement IS the band. The strip
-                # gets ONE actionable line; everything else — element
-                # names, criterion, certificate verdict, doublet caveat
-                # — lands in r.details, which only the Summary renders.
-                r.eps = float(eps)
-                r.anchor = float(red.anchor)
-                r.enforced_fmin, r.enforced_fmax = float(fmin), float(fmax)
-                a_db = 20.0 * math.log10(red.anchor) if red.anchor > 0 \
-                    else float("-inf")
-                names = (f" [{', '.join(red.selected)}]"
-                         if 0 < len(red.selected) <= 3 else "")
-                head = (f"reduced to {len(red.selected)} reactance(s)"
-                        f"{names} — within {band_err:.1%} over "
-                        f"{eng(fmin, 'Hz')}–{eng(fmax, 'Hz')}")
-                if band_err > eps:
-                    head += (f" — BUDGET NOT MET (asked {eps:.0%}): "
-                             f"narrow the band or raise the tolerance"
-                             f" (details in Summary)")
-                else:
-                    head += " (details in Summary)"
-                r.warnings.insert(0, head)
-                det = [
-                    f"kept reactances: "
-                    f"{', '.join(red.selected) or '(none needed)'}",
-                    f"criterion: |ΔH| ≤ ε·(|H| + anchor) at every band "
-                    f"point; ε = {eps:.0%} "
-                    f"(≈ ±{20 * math.log10(1 + eps):.2g} dB, "
-                    f"±{math.degrees(eps):.2g}°), anchor {a_db:.0f} dB — "
-                    f"the smaller band-edge |H|",
-                    f"achieved: {band_err:.1%} "
-                    f"(≈ ±{20 * math.log10(1 + band_err):.2g} dB, "
-                    f"±{math.degrees(band_err):.2g}° above the anchor)",
-                ]
-                if band_err > eps:
-                    det.append(f"the band edge demands fidelity at "
-                               f"{a_db:.0f} dB — every decade of cursor "
-                               f"past the level you care about costs "
-                               f"reactances")
-                try:
-                    cert = self.order_certificate(inp, out, fmin, fmax)
-                    r.certificate = cert
-                    k = cert.order_at(eps)
-                    if len(red.selected) > k:
-                        det.append(
-                            f"an abstract order-{k} fit exists for this "
-                            f"band at {eps:.0%}; physical elements need "
-                            f"{len(red.selected)} — the cost of named "
-                            f"components")
-                    else:
-                        det.append(
-                            f"order-optimal for this band ({eps:.0%})")
-                    if cert.doublets:
-                        d = cert.doublets[0]
-                        det.append(
-                            f"pole/zero doublet near {eng(d[0], 'Hz')} "
-                            f"(separation {d[2]:.1%}) — doublets affect "
-                            f"settling, not this frequency response")
-                except Exception:
-                    pass
-                r.details = det
-                self._cache[key] = r
-                return r
-            # the claim must name the band actually ENFORCED: the budget
-            # applies where |H| stays within floor_db of its peak, and
-            # silently claiming the full band certified a 1-pole model
-            # over decades it visibly left
-            span = f"{eng(fmin, 'Hz')}-{eng(fmax, 'Hz')}"
-            if red.sig_hi and (red.sig_hi < 0.99 * fmax
-                               or red.sig_lo > 1.01 * fmin):
-                how = (f"|H| is at least {red.floor_eff_db:g} dB "
-                       f"({red.floor_db:g} dB floor widened by the "
-                       f"{abs(tol_db):g} dB budget), plus the "
-                       f"+/-180 deg phase crossing"
-                       if red.floor_is_abs else
-                       f"|H| is within {red.floor_db:g} dB of peak")
-                span = (f"{eng(red.sig_lo, 'Hz')}-{eng(red.sig_hi, 'Hz')}"
-                        f" — the part of the band where {how}; lower the "
-                        f"enforcement floor to cover more")
-            if red.sig_hi:                     # the ENFORCED sub-band
-                r.enforced_fmin = float(red.sig_lo)
-                r.enforced_fmax = float(red.sig_hi)
-            r.warnings.insert(
-                0, f"reduced to {len(red.selected)} reactance(s) "
-                   f"[{', '.join(red.selected)}] -- {band_err:.3f} dB vs the full "
-                   f"model over {span}")
+            else:
+                if red.sig_hi:                 # the ENFORCED sub-band
+                    r.enforced_fmin = float(red.sig_lo)
+                    r.enforced_fmax = float(red.sig_hi)
+                r.warnings.insert(
+                    0, crit.headline(red, band_err, fmin, fmax,
+                                     tol_db=tol_db))
             self._cache[key] = r
         return self._cache[key]
 

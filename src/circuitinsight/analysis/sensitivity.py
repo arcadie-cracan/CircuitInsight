@@ -27,6 +27,7 @@ import sympy as sp
 
 from ..engine.mna import MnaError, S, _det
 from ..units import eng
+from .criteria import make_criterion
 
 
 def _np(mat: sp.Matrix, dtype=float) -> np.ndarray:
@@ -358,13 +359,12 @@ def band_sensitivity(analyzer, inp: str, out: str, metric: str = "complex",
                            matrix=mat)
 
 
-# ==================== matching-pursuit reactive-element selection ==========
-# "Throw away all reactances, add them back by residual-matching": greedily
-# select the minimal set of capacitors/inductors that reproduces H(f) over
-# the band, picking each candidate cheaply by the first-order sensitivity
-# atom most correlated with the current residual, then verifying the choice
-# with an exact numeric solve (the linear model is unreliable exactly for
-# pole-setting elements, so we never trust it -- only use it to rank).
+# ======================= reactive-element selection ========================
+# "Throw away all reactances, add them back": EXACT greedy -- every round
+# re-solves the response with each remaining candidate restored and keeps
+# the best. (A first-order matching pursuit was tried first and rejected:
+# the linear atom is unreliable exactly for the dominant, pole-setting
+# elements; see the dominant_reactances docstring.)
 
 @dataclass
 class ReactanceReduction:
@@ -387,9 +387,24 @@ class ReactanceReduction:
     metrics: dict = field(default_factory=dict)   # strategy readouts
 
     def report(self) -> str:
+        if self.strategy is not None:
+            final = (self.errors_db[-1] if self.errors_db
+                     else self.baseline_db)
+            lines = [f"reactance reduction (strategy: {self.strategy}): "
+                     f"score {self.baseline_db:.3g} with no reactances "
+                     f"(normalized; <= 1 is within budget)"]
+            lines.append(f"  band {eng(self.sig_lo, 'Hz')}-"
+                         f"{eng(self.sig_hi, 'Hz')}")
+            for name, e in zip(self.selected, self.errors_db):
+                lines.append(f"  + {name:22s} -> {e:.3g}")
+            if not self.selected:
+                lines.append("  (already within tolerance; no reactance "
+                             "needed)")
+            elif not self.met:
+                lines.append(f"  order cap reached at {final:.3g}x the "
+                             f"budget")
+            return '\n'.join(lines)
         if self.eps is not None:
-            import math
-
             lines = [f"reactance reduction (anchored, eps {self.eps:.1%}, "
                      f"anchor {20 * math.log10(self.anchor):.1f} dB): "
                      f"{self.baseline_db:.3g} with no reactances"]
@@ -418,8 +433,10 @@ class ReactanceReduction:
 def loop_margins(freqs, h):
     """(pm_deg, pm_freq, gm_db, gm_freq) from a gain sweep in the stb
     convention (phase +180 deg at DC). Entries are None when the
-    respective crossing is not in the band. Shared by the session's
-    loop-gain reporting and the Stability reduction strategy."""
+    respective crossing is not in the band. THE margin extraction: the
+    session's loop-gain reporting, the Stability criterion, and (via
+    compensate._margins_of) the compensation, modes and probe-adequacy
+    advisors all read margins through this function."""
     f = np.asarray(freqs, dtype=float)
     m = 20 * np.log10(np.abs(h))
     ph = np.degrees(np.unwrap(np.angle(h)))
@@ -540,123 +557,40 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
 
     m = valid & np.isfinite(H_full) & (np.abs(H_full) > 0)
     mag_full = np.abs(H_full)
-    peak = mag_full[m].max() if m.any() else 1.0
-    # the ENFORCEMENT WINDOW: relative dB error where |H| has fallen
-    # floor_db below its peak is stopband noise, so the budget applies
-    # only inside the window -- but the window is a PARAMETER and the
-    # enforced sub-band is reported, never silently narrower than the
-    # band the user asked for (that silence once certified a 1-pole
-    # model at 0.6 dB over a band it visibly left by 25 dB)
-    anchor = None
-    if strategy is not None:
-        sig = m                       # strategies enforce over the band
-    elif eps is not None:
-        # anchored mode: the band mask is the whole selected band; the
-        # anchor level comes from the band EDGES -- dragging the cursor
-        # to a level is how the user declares the depth of interest
-        sig = m
-        edges = mag_full[m]
-        anchor = float(min(edges[0], edges[-1])) if edges.size else 1.0
-    elif floor_abs_db is not None:
-        # ABSOLUTE floor: "enforce wherever |H| is at least X dB". The
-        # relative form ("within N dB of peak") hides the level that
-        # actually matters for stability -- with A0 = 56 dB a 60 dB
-        # window stops at -4 dB, barely reaching unity gain, and the
-        # crossover region a phase margin lives in goes unchecked.
-        #
-        # The floor alone is still not a guarantee: a model allowed to
-        # err by tol_db could cross the floor anywhere within tol_db of
-        # it, so enforcement must reach that far BELOW the stated level
-        # -- otherwise the very frequency the user cares about sits in
-        # the unchecked region.
-        eff = floor_abs_db - abs(tol_db)
-        sig = m & (mag_full >= 10.0 ** (eff / 20.0))
-        if phase_tol_deg:
-            # ...and the gain-margin point lives where the phase CROSSES
-            # +/-180 deg, typically well below unity. Include a bounded
-            # neighbourhood of each crossing -- not every frequency whose
-            # phase is near 180, which on a rolloff asymptoting there
-            # would sweep in the whole tail and defeat the floor.
-            ph = np.degrees(np.unwrap(np.angle(H_full)))
-            d = np.abs(ph) - 180.0
-            cross = np.nonzero(np.diff(np.sign(d)) != 0)[0]
-            for i in cross:
-                fc = float(freqs[i])
-                if fc <= 0:
-                    continue
-                # +/- half a decade, widened by the phase budget
-                span = 10.0 ** (0.5 + abs(phase_tol_deg) / 180.0)
-                sig = sig | (m & (freqs >= fc / span) & (freqs <= fc * span))
-    else:
-        sig = m & (mag_full > peak * 10.0 ** (-floor_db / 20.0))
+    # ONE criterion object carries the whole tolerance contract -- the
+    # enforcement window, the error score, the stopping rule and (in
+    # the session) the report language. See analysis/criteria.py.
+    crit = make_criterion(strategy=strategy,
+                          strategy_opts={"gain_db": gain_db,
+                                         "phase_deg": phase_deg,
+                                         "pm_deg": pm_deg, "gm_db": gm_db,
+                                         "rej_db": rej_db,
+                                         "fc_rel": fc_rel},
+                          eps=eps, tol_db=tol_db, metric=metric,
+                          floor_db=floor_db, floor_abs_db=floor_abs_db,
+                          phase_tol_deg=phase_tol_deg, cap=cap)
+    # the ENFORCEMENT WINDOW is the criterion's own statement of where
+    # its budget applies -- but the enforced sub-band is reported, never
+    # silently narrower than the band the user asked for (that silence
+    # once certified a 1-pole model at 0.6 dB over a band it visibly
+    # left by 25 dB)
+    sig = crit.window(freqs, mag_full, m, H_full)
     if not sig.any():
         sig = m
-
-    full_margins = None
-    if strategy == "stability":
-        full_margins = loop_margins(freqs[sig], H_full[sig])
+    anchor = getattr(crit, "anchor", None)
+    crit.prepare(freqs, H_full, sig)
 
     def err(Hr: np.ndarray) -> float:
-        if strategy == "stability":
-            # gate on the numbers a stability designer reads: PM, GM and
-            # the unity-crossing frequency of the reduced model vs the
-            # full one. Normalized so <= 1 means "all within tolerance".
-            ok = sig & np.isfinite(Hr)
-            if not ok.any():
-                return float("inf")
-            pm_f, fpm_f, gm_f, _ = full_margins
-            pm, fpm, gm, _ = loop_margins(freqs[ok], Hr[ok])
-            e = 0.0
-            if pm_f is not None:
-                if pm is None or fpm is None or fpm <= 0:
-                    return float("inf")
-                e = max(abs(pm - pm_f) / pm_deg,
-                        abs(math.log(fpm / fpm_f)) / fc_rel)
-            if gm_f is not None:
-                e = max(e, float("inf") if gm is None
-                        else abs(gm - gm_f) / gm_db)
-            return e
-        if strategy == "plain":
-            ok = sig & np.isfinite(Hr) & (np.abs(Hr) > 0)
-            if not ok.any():
-                return float("inf")
-            dmag = np.abs(20 * np.log10(np.abs(Hr[ok]) / mag_full[ok]))
-            dph = np.abs(np.angle(Hr[ok]) - np.angle(H_full[ok]))
-            dph = np.degrees(np.minimum(dph, 2 * np.pi - dph))
-            return float(max(dmag.max() / gain_db, dph.max() / phase_deg))
-        if strategy == "rejection":
-            ok = sig & np.isfinite(Hr) & (np.abs(Hr) > 0)
-            if not ok.any():
-                return float("inf")
-            dmag = np.abs(20 * np.log10(np.abs(Hr[ok]) / mag_full[ok]))
-            return float(dmag.max() / rej_db)
-        if eps is not None:
-            ok = sig & np.isfinite(Hr)
-            if not ok.any():
-                return float("inf")
-            return float((np.abs(Hr[ok] - H_full[ok])
-                          / (mag_full[ok] + anchor)).max())
-        ok = sig & np.isfinite(Hr) & (np.abs(Hr) > 0)
-        if not ok.any():
-            return float("inf")
-        dmag = np.abs(20 * np.log10(np.abs(Hr[ok]) / mag_full[ok]))
-        if metric == "magnitude":
-            return float(dmag.max())
-        dph = np.abs(np.angle(Hr[ok]) - np.angle(H_full[ok]))
-        dph = np.degrees(np.minimum(dph, 2 * np.pi - dph))
-        return float(np.maximum(dmag, dph / 10.0).max())
+        return crit.error(freqs, H_full, mag_full, Hr, sig)
 
-    if strategy is not None:
-        tol = 1.0                     # criteria are normalized to <= 1
-        if max_elements is None:
-            max_elements = cap        # an unreadable model is a failure
-    else:
-        tol = eps if eps is not None else tol_db
+    tol = crit.tol
+    if crit.cap is not None and max_elements is None:
+        max_elements = crit.cap       # an unreadable model is a failure
 
     Qsel = Q_base.copy()
     Hr = response(Qsel)
     baseline = err(Hr)
-    unit = "" if (eps is not None or strategy is not None) else " dB"
+    unit = crit.unit
     if note is not None:
         note(f"baseline error {baseline:.3g}{unit} with no reactances; "
              f"tolerance {tol:g}{unit}, {len(react)} candidates")
@@ -701,13 +635,7 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
         if best_err <= tol:
             break
     final = errors[-1] if errors else baseline
-    metrics: dict = {}
-    if strategy == "stability":
-        pm_f, fpm_f, gm_f, fgm_f = full_margins
-        pm_r, fpm_r, gm_r, _ = loop_margins(freqs[sig], Hr[sig])
-        metrics = {"pm_full": pm_f, "pm_red": pm_r,
-                   "fc_full": fpm_f, "fc_red": fpm_r,
-                   "gm_full": gm_f, "gm_red": gm_r}
+    metrics = crit.metrics(freqs, Hr, sig)
     met = bool(final <= tol + 1e-12)
     if note is not None and strategy is not None and not met:
         note(f"order cap {max_elements} reached at score {final:.3g} "

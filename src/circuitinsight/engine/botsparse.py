@@ -255,7 +255,7 @@ def _discover(pay_den, pay_num, s_pairs, svinv, lens, radK, p,
     cand = _candidate_values(lens, radK, g, p)
     Es_d = _roots_to_exponents(Cd, Ld, cand, p)
     Es_n = _roots_to_exponents(Cn, Ln, cand, p)
-    return Es_d, Es_n, vd, vn, cand
+    return Es_d, Es_n, vd, vn
 
 
 # --------------------------------------------------------- per-prime solve
@@ -304,16 +304,9 @@ def _to_dict(lift: dict, Es: np.ndarray, lens: list[int], L: int) -> dict:
     return out
 
 
-#: Rational reconstruction needs modulus proportional to the SIZE of the
-#: exact coefficients -- sums of products of ~n matrix entries -- which a
-#: 30x30 hybrid grid drives far past what a few dozen 62-bit primes span.
-#: A real fc keep set failed at 64 ("no stable rational reconstruction
-#: after 64 primes"), did all its probing for nothing, and re-ran the
-#: whole grid densely; at 256 it CONVERGES and the solve is faster than
-#: the fallback route (184 s vs 232 s, measured). Raising the ceiling is
-#: free for easy cases -- the loop stops as soon as two lifts agree, so
-#: nobody pays for primes they do not need.
-_MAX_PRIMES = 256
+#: the prime ceiling and its justification live in zpbatch -- one
+#: number, one story; a re-tune must not apply to one backend only
+from .zpbatch import _MAX_PRIMES
 
 
 # ------------------------------------------------------------- entry point
@@ -349,7 +342,7 @@ def solve_tensors_sparse(pay_den: dict, pay_num: dict, grids_pairs: list,
             raise BotError("no usable support prime in 4 attempts")
         p1 = _primes(stream)[-1]
         try:
-            Es_d, Es_n, vd, vn, _ = _discover(
+            Es_d, Es_n, vd, vn = _discover(
                 pay_den, pay_num, s_pairs, svinv, lens, radK, p1, progress)
         except ZeroDivisionError:
             continue

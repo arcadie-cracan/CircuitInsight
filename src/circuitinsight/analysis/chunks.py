@@ -35,11 +35,11 @@ docs/interp-speedup-plan.md S-E) -- deliberately not faked here.
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import sympy as sp
 
-from ..engine.mna import S, build_mna, solve_tf
+from ..engine.mna import build_mna, solve_tf
 from ..engine.primitives import Primitive
 
 __all__ = ["PassiveChunk", "passive_chunks", "chunk_admittance"]
@@ -164,8 +164,9 @@ def chunk_admittance(chunk: PassiveChunk, ground, *, keep=None):
             f"{len(chunk.terminals)}: {chunk.terminals}")
     a, b = chunk.terminals
     gnd = set(ground) | {"0"}
-    # the chunk's own ground reference is terminal b (or real ground)
-    ref = b if b in gnd else b
+    # probe from terminal b; when b is not a real ground it is grounded
+    # for the measurement via `grounds` below
+    ref = b
     probe = Primitive(inst=_PROBE, param="", kind="isrc", nodes=(ref, a))
     prims = list(chunk.members) + [probe]
     grounds = tuple(ground) if b in gnd else (b,) + tuple(ground)

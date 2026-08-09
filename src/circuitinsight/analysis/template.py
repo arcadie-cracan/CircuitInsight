@@ -39,7 +39,6 @@ import sympy as sp
 from ..engine.mna import MnaError, TransferFunction
 from .simplify import _tidy
 
-S = sp.Symbol("s")
 
 
 @dataclass

@@ -170,13 +170,18 @@ def test_spread_is_not_the_fallback_predictor():
     BELOW ota5t's 16.1, which reconstructs fine. So the selector must
     not gate on spread: reconstruction size tracks the determinant's
     coefficients (products of ~n entries), not the entries' range."""
+    import inspect
+
     from circuitinsight.engine.interp import resolve_backend
 
-    big = 200_000
-    assert resolve_backend(big, 11.0) == "bot"     # the FAILING case
-    assert resolve_backend(big, 16.1) == "bot"     # the PASSING bench
-    assert resolve_backend(big, 30.0) == "bot"     # spread is not a gate
-    assert resolve_backend(1_000, 30.0) == "qq"    # size still decides
+    # the guard is structural now: the selector does not even RECEIVE a
+    # spread, so no future tweak can quietly gate on it -- and the
+    # docstring must keep telling the measured story
+    params = inspect.signature(resolve_backend).parameters
+    assert list(params) == ["n_dense_dets"]
+    assert "spread" in (resolve_backend.__doc__ or "").lower()
+    assert resolve_backend(200_000) == "bot"
+    assert resolve_backend(1_000) == "qq"          # size still decides
 
 
 def test_prime_ceiling_is_high_enough_for_real_coefficients():

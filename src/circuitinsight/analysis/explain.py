@@ -662,7 +662,7 @@ def explain_per_numeral_fast(system: MnaSystem, out: str, keep, expr,
     A = system.A.xreplace(subs)
     free = set(A.free_symbols) - {S} - set(ksyms)
     if free:
-        raise MnaError("explain_per_numeral needs numeric values; "
+        raise MnaError("explain_per_numeral_fast needs numeric values; "
                        f"missing {sorted(map(str, free))}")
     Ak = A.copy()
     Ak[:, col] = system.z

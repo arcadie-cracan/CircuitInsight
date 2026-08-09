@@ -30,7 +30,6 @@ which rational arithmetic never can.
 from __future__ import annotations
 
 import itertools
-import warnings
 
 import numpy as np
 import sympy as sp

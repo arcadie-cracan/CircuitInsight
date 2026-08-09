@@ -47,9 +47,10 @@ from ..engine.mna import (MnaError, MnaSystem, S, TransferFunction, _det,
                           hybrid_split, solve_tf)
 from ..keep import is_all
 
-# skip the final rational cancel() when the combined expression is huge --
-# the nested rational is exact either way (same guard as loopgain.py)
-_CANCEL_OPS_LIMIT = 20000
+# the cancel-ops guard lives in engine.interp: one number for
+# every "skip the final cancel() when the expression is huge"
+# site
+from ..engine.interp import _CANCEL_OPS_LIMIT
 
 
 def _probe_indices(system: MnaSystem, probe: str):
