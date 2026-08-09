@@ -31,3 +31,6 @@ paper/*.fdb_latexmk
 paper/*.fls
 paper/circuitinsight-isetc2026.pdf
 nul
+
+# session states (autosaved beside the CIN)
+*.cistate

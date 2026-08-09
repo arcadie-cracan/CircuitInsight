@@ -330,14 +330,20 @@ def figure_legend(fig, ax1):
     The vertical anchor is MEASURED from the xlabel's laid-out extent:
     a fixed figure-fraction offset scales with window height and put
     the legend on top of the label on short canvases."""
-    for lg in list(fig.legends):
-        lg.remove()
     handles, labels = ax1.get_legend_handles_labels()
     if not handles:
-        return
+        return          # never delete a legend we cannot rebuild: a call
+    #                     at a label-less moment used to kill it for good
+    for lg in list(fig.legends):
+        lg.remove()
     axb = fig.axes[1] if len(fig.axes) > 1 else ax1
     pos = axb.get_position()
     y = _legend_anchor_y(fig, axb)
+    # the box hangs DOWNWARD from the anchor; clamp it inside the figure
+    # or a canvas that shrank (certificate hint appearing, short panel)
+    # pushes it below the edge — clipped is indistinguishable from gone
+    h_px = fig.get_size_inches()[1] * fig.dpi
+    y = max(y, 24.0 / max(h_px, 1.0))    # anchor is the box TOP; ~21 px tall
     fig._ci_legend_y = y                         # refresh_legend compares
     fig.legend(handles, labels, loc="upper center",
                bbox_to_anchor=((pos.x0 + pos.x1) / 2, y),
@@ -363,7 +369,12 @@ def refresh_legend(fig) -> None:
     so a legend placed for one size collides at another. Called from the
     canvas draw hook; rebuilds only when the anchor actually moved, so
     the draw loop converges."""
-    if not fig.legends or len(fig.axes) < 2:
+    if len(fig.axes) < 2:
+        return
+    if not fig.legends:
+        # a redraw path dropped it (or a label-less moment refused to
+        # build one): resurrect instead of only re-anchoring survivors
+        figure_legend(fig, fig.axes[0])
         return
     axb = fig.axes[1]
     y = _legend_anchor_y(fig, axb)
@@ -917,6 +928,23 @@ def _raw_tf_lines(result, max_terms: int = 14, base: bool = True,
     return [("N(s) = ", n_tex), ("D(s) = ", _per_coeff_factored(dpoly, "den"))]
 
 
+def prepare_display(result, base: bool = True, wrap: bool = False,
+                    aliases: dict | None = None) -> None:
+    """Warm the expensive display transforms OFF the GUI thread.
+
+    The expression lines run round_expr — cancel/nsimplify over the
+    full result, measured 3 s at a mere 1040 terms and tens of seconds
+    on big hybrids — and used to freeze the app the moment a solve
+    delivered. The worker calls this before emitting done; the GUI's
+    own _expr_lines call then hits the per-result cache."""
+    if getattr(result, "tf", None) is None:
+        return
+    try:
+        _expr_lines(result, base=base, wrap=wrap, aliases=aliases)
+    except Exception:
+        pass
+
+
 def _expr_lines(result, base: bool = True, wrap: bool = False,
                 aliases: dict | None = None):
     """(label, latex) pairs — the readable form, not the raw expression.
@@ -926,8 +954,28 @@ def _expr_lines(result, base: bool = True, wrap: bool = False,
     it stays readable where the expanded polynomial — a ratio of 60-digit exact
     integers — does not. A right-half-plane root shows up as (1 - s/...), so its
     excess phase lag is visible in the form itself.
+
+    Memoized per result: the transform is pure (same result, same
+    flags, same lines) and expensive, and the worker pre-warms it so
+    the GUI-thread call after a solve is a dictionary lookup.
     """
     import sympy as sp
+
+    key = (base, wrap, tuple(sorted((aliases or {}).items())))
+    cache = getattr(result, "_expr_lines_cache", None)
+    if cache is not None and key in cache:
+        return cache[key]
+
+    def _memo(lines):
+        try:
+            c = getattr(result, "_expr_lines_cache", None)
+            if c is None:
+                c = {}
+                object.__setattr__(result, "_expr_lines_cache", c)
+            c[key] = lines
+        except Exception:
+            pass
+        return lines
 
     a0 = result.dc_gain.real if hasattr(result.dc_gain, "real") else result.dc_gain
     numeric_a0 = (rf"{float(a0):.4g}\quad({result.dc_gain_db:.2f}\,"
@@ -994,7 +1042,7 @@ def _expr_lines(result, base: bool = True, wrap: bool = False,
                 r"\mathrm{N,D:\ numeric\ corners.\quad}"
                 r"p_1,z_1\mathrm{:\ symbolic,\ rad/s.}")
         lines.append(("", note))
-    return lines
+    return _memo(lines)
 
 
 def _num_den(tf):

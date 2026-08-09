@@ -412,3 +412,61 @@ def test_factored_display_groups_the_near_common_factor():
     ref = 1.0 / complex(den.xreplace(
         {k: sp.Float(v) for k, v in pt.items()}))
     assert abs(got / ref - 1) < 1e-3
+
+
+def test_legend_survives_deletion_and_short_canvases(result):
+    """Field report, twice: the legend vanished without any resize. Two
+    killers, both covered — a redraw path that drops the legend must be
+    resurrected by the draw hook, and on a shrunken canvas (the
+    certificate hint appearing changes the canvas height by itself) the
+    anchor must clamp inside the figure instead of clipping below it."""
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    fig = view.bode_figure(result)
+    FigureCanvasAgg(fig).draw()
+    assert fig.legends
+
+    # killer 1: the legend is gone; the draw hook must bring it back
+    fig.legends[0].remove()
+    assert not fig.legends
+    view.refresh_legend(fig)
+    assert fig.legends, "refresh must resurrect a missing legend"
+
+    # ...and a rebuild at a label-less moment must NOT delete it
+    keep = list(fig.legends)
+    empty_ax = fig.add_subplot(3, 1, 3)      # no labeled lines here
+    view.figure_legend(fig, empty_ax)
+    assert fig.legends == keep, "no handles -> leave the legend alone"
+    empty_ax.remove()
+
+    # killer 2: a short canvas — the whole legend box stays inside
+    small = Figure(figsize=(5.2, 1.6))
+    view.bode_figure(result, fig=small)
+    FigureCanvasAgg(small).draw()
+    assert small.legends
+    bb = small.legends[0].get_window_extent(
+        renderer=small.canvas.get_renderer())
+    assert bb.y0 >= -1.0, f"legend clipped below the figure ({bb.y0:.1f})"
+
+
+def test_prepare_display_prewarms_the_expression_lines(result):
+    """The 3-second freeze at solve completion: _expr_lines runs
+    cancel/nsimplify over the whole result and executed on the GUI
+    thread in _show. The worker now warms it via prepare_display; the
+    GUI call must be a cache lookup — verified by making the expensive
+    path impossible after the warm."""
+    view.prepare_display(result, base=True, wrap=False)
+    first = view._expr_lines(result, base=True, wrap=False)
+
+    real = view.round_expr
+    def boom(*a, **k):
+        raise AssertionError("cache miss: the GUI thread would compute")
+    view.round_expr = boom
+    try:
+        again = view._expr_lines(result, base=True, wrap=False)
+        assert again is first                    # a lookup, not a compute
+        with pytest.raises(AssertionError):
+            view._expr_lines(result, base=False, wrap=False)  # other key
+    finally:
+        view.round_expr = real

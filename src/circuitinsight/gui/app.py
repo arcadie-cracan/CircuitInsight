@@ -264,16 +264,22 @@ class MainWindow(QMainWindow):
         self.strategy_combo.currentTextChanged.connect(
             lambda _t: self._on_strategy_changed())
         self._strategy_act = tb.addWidget(self.strategy_combo)
-        self.pm_spin = self._spin(5.0, 0.5, 45.0, 1.0, " ° PM")
-        self.pm_spin.setToolTip("Phase margin reproduced within this")
-        self.gm_spin = self._spin(2.0, 0.5, 20.0, 0.5, " dB GM")
-        self.gm_spin.setToolTip("Gain margin reproduced within this")
-        self.rej_spin = self._spin(3.0, 0.1, 40.0, 0.5, " dB track")
-        self.rej_spin.setToolTip("|H| tracked within this many dB")
-        self._pm_act = tb.addWidget(self.pm_spin)
-        self._gm_act = tb.addWidget(self.gm_spin)
-        self._rej_act = tb.addWidget(self.rej_spin)
-        for s in (self.pm_spin, self.gm_spin, self.rej_spin):
+        # strat_* names, deliberately: the Compensate page also builds a
+        # PM spin, and a bare self.pm_spin was BOUND TWICE — the page,
+        # built later, silently won, so the Stability strategy ran with
+        # the compensation TARGET (60°, clamped 30–85) instead of the
+        # 5° tolerance and the visible toolbar spin changed nothing
+        self.strat_pm_spin = self._spin(5.0, 0.5, 45.0, 1.0, " ° PM")
+        self.strat_pm_spin.setToolTip("Phase margin reproduced within this")
+        self.strat_gm_spin = self._spin(2.0, 0.5, 20.0, 0.5, " dB GM")
+        self.strat_gm_spin.setToolTip("Gain margin reproduced within this")
+        self.strat_rej_spin = self._spin(3.0, 0.1, 40.0, 0.5, " dB track")
+        self.strat_rej_spin.setToolTip("|H| tracked within this many dB")
+        self._pm_act = tb.addWidget(self.strat_pm_spin)
+        self._gm_act = tb.addWidget(self.strat_gm_spin)
+        self._rej_act = tb.addWidget(self.strat_rej_spin)
+        for s in (self.strat_pm_spin, self.strat_gm_spin,
+                  self.strat_rej_spin):
             s.valueChanged.connect(lambda _v: self._on_strategy_changed())
         # budget spins only exist for the budgeted forms
         self._budget_lbl_act.setVisible(False)
@@ -532,7 +538,10 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(geo)
         for key, spin in (("budget/mag", self.mag_spin),
                           ("budget/phase", self.phase_spin),
-                          ("budget/solve_s", self.budget_spin)):
+                          ("budget/solve_s", self.budget_spin),
+                          ("budget/pm", self.strat_pm_spin),
+                          ("budget/gm", self.strat_gm_spin),
+                          ("budget/rej", self.strat_rej_spin)):
             v = s.value(key)
             if v is not None:
                 try:
@@ -548,6 +557,13 @@ class MainWindow(QMainWindow):
         mode = s.value("ui/mode")
         if mode and self.mode_combo.findText(str(mode)) >= 0:
             self.mode_combo.setCurrentText(str(mode))
+        # the newer toolbar controls were NOT persisted while the older
+        # mag/phase pair was -- the two persistence layers had drifted
+        for key, combo in (("ui/form", self.form_combo),
+                           ("ui/strategy", self.strategy_combo)):
+            v = s.value(key)
+            if v and combo.findText(str(v)) >= 0:
+                combo.setCurrentText(str(v))
         # cross-probe: restoring "on" re-attempts the connection, and the
         # toggle handler already un-checks itself with a reason when Virtuoso
         # is not there -- so a remembered "on" is safe with no session running
@@ -556,6 +572,7 @@ class MainWindow(QMainWindow):
         self._rebuild_recents()
 
     def closeEvent(self, event):
+        self._autosave_state()          # the last-state survives the close
         s = self._settings()
         s.setValue("geometry", self.saveGeometry())
         for name, sp in (("h_split", self.h_split),
@@ -565,6 +582,11 @@ class MainWindow(QMainWindow):
         s.setValue("budget/mag", self.mag_spin.value())
         s.setValue("budget/phase", self.phase_spin.value())
         s.setValue("budget/solve_s", self.budget_spin.value())
+        s.setValue("budget/pm", self.strat_pm_spin.value())
+        s.setValue("budget/gm", self.strat_gm_spin.value())
+        s.setValue("budget/rej", self.strat_rej_spin.value())
+        s.setValue("ui/form", self.form_combo.currentText())
+        s.setValue("ui/strategy", self.strategy_combo.currentText())
         s.setValue("budget/band_lo", self.band_slider.values()[0])
         s.setValue("budget/band_hi", self.band_slider.values()[1])
         s.setValue("ui/mode", self.mode_combo.currentText())
@@ -667,6 +689,21 @@ class MainWindow(QMainWindow):
         self.a_export_csv.triggered.connect(self.export_csv)
         self.a_export_csv.setEnabled(False)
         m_file.addSeparator()
+        # session states: the user's accumulated work (ticks, matches,
+        # band, strategy) as a recoverable object, with the computed
+        # solution riding along fingerprint-gated. Autosaved as
+        # <cin>.last.cistate after every shown result and on close.
+        self.a_save_state = m_file.addAction("Save s&tate as…")
+        self.a_save_state.triggered.connect(self.save_state_dialog)
+        self.a_save_state.setEnabled(False)
+        self.a_load_state = m_file.addAction("&Load state…")
+        self.a_load_state.triggered.connect(self.load_state_dialog)
+        self.a_load_state.setEnabled(False)
+        self.a_restore_last = m_file.addAction("&Restore last state")
+        self.a_restore_last.triggered.connect(
+            lambda: self._load_state_file(None))
+        self.a_restore_last.setEnabled(False)
+        m_file.addSeparator()
         m_file.addAction("&Quit").triggered.connect(self.close)
 
         m_an = mb.addMenu("&Analysis")
@@ -686,7 +723,7 @@ class MainWindow(QMainWindow):
         m_an.addSeparator()
         self.a_rank = m_an.addAction("&Rank symbols")
         self.a_rank.setShortcut("F5")
-        self.a_rank.triggered.connect(self._rank)
+        self.a_rank.triggered.connect(self._rank_async)
         self.a_suggest = m_an.addAction("Suggest keep-set ≤ &budget")
         self.a_suggest.triggered.connect(self._suggest_keep)
         m_an.addSeparator()
@@ -862,7 +899,7 @@ class MainWindow(QMainWindow):
         self.group_chk.toggled.connect(self._on_group_toggled)
 
         rankb = QPushButton("Rank")
-        rankb.clicked.connect(self._rank)
+        rankb.clicked.connect(self._rank_async)
         self.budget_spin = self._spin(5.0, 0.1, 600.0, 1.0, " s")
         self.budget_spin.setToolTip(
             "SOLVE-TIME budget in seconds — how long a symbolic solve may "
@@ -1553,9 +1590,7 @@ class MainWindow(QMainWindow):
         self._t0 = None
         self.progress.hide()
         self.cancel_btn.hide()
-        for b in (self.solve_btn, self.a_solve, self.a_simplify,
-                  self.a_reduce):
-            b.setEnabled(True)
+        self._job_finished()
         lines = []
         # the coefficient stories were computed alongside the deep pass;
         # lead with the DISPLAYED numerals before the full per-numeral list
@@ -1600,9 +1635,7 @@ class MainWindow(QMainWindow):
         self._t0 = None
         self.progress.hide()
         self.cancel_btn.hide()
-        for b in (self.solve_btn, self.a_solve, self.a_simplify,
-                  self.a_reduce):
-            b.setEnabled(True)
+        self._job_finished()
         self.acg_preview.setPlainText(rep.describe())
         if rep.recommended:
             self.statusBar().showMessage(
@@ -1628,9 +1661,7 @@ class MainWindow(QMainWindow):
         self._t0 = None
         self.progress.hide()
         self.cancel_btn.hide()
-        for b in (self.solve_btn, self.a_solve, self.a_simplify,
-                  self.a_reduce):
-            b.setEnabled(True)
+        self._job_finished()
         lines = ["pole attribution (nudge-verified):"]
         lines += ["  " + a.describe() for a in atts]
         self.summary.setPlainText(self.summary.toPlainText()
@@ -1658,9 +1689,7 @@ class MainWindow(QMainWindow):
         self._t0 = None
         self.progress.hide()
         self.cancel_btn.hide()
-        for b in (self.solve_btn, self.a_solve, self.a_simplify,
-                  self.a_reduce):
-            b.setEnabled(True)
+        self._job_finished()
         from ..analysis.explain import ratio_lines
         lines = ["the numbers, explained (kept symbols excluded):",
                  "ratio attribution — what shapes each DISPLAYED numeral "
@@ -1695,9 +1724,7 @@ class MainWindow(QMainWindow):
         self._t0 = None
         self.progress.hide()
         self.cancel_btn.hide()
-        for b in (self.solve_btn, self.a_solve, self.a_simplify,
-                  self.a_reduce):
-            b.setEnabled(True)
+        self._job_finished()
         self._acg_report = rep
         recommended = set(rep.recommended)
         self._filling = True
@@ -1869,9 +1896,7 @@ class MainWindow(QMainWindow):
         self._t0 = None
         self.progress.hide()
         self.cancel_btn.hide()
-        for b in (self.solve_btn, self.a_solve, self.a_simplify,
-                  self.a_reduce):
-            b.setEnabled(True)
+        self._job_finished()
         self._refresh_reduction_banner()
         self._refresh_net_decor()
         # the reduction REWRITES the circuit: dead sources removed,
@@ -1932,8 +1957,8 @@ class MainWindow(QMainWindow):
         row.addWidget(self.goal_combo)
         self.pm_lbl = QLabel("PM target:")
         row.addWidget(self.pm_lbl)
-        self.pm_spin = self._spin(60.0, 30.0, 85.0, 1.0, " °")
-        row.addWidget(self.pm_spin)
+        self.comp_pm_spin = self._spin(60.0, 30.0, 85.0, 1.0, " °")
+        row.addWidget(self.comp_pm_spin)
         self.ms_lbl = QLabel("Ms target:")
         row.addWidget(self.ms_lbl)
         self.ms_spin = self._spin(1.3, 1.0, 3.0, 0.05, "")
@@ -1997,7 +2022,7 @@ class MainWindow(QMainWindow):
 
     def _on_goal_changed(self, goal):
         """PM and Ms targets are alternatives; mfm needs neither."""
-        for w in (self.pm_lbl, self.pm_spin):
+        for w in (self.pm_lbl, self.comp_pm_spin):
             w.setVisible(goal == "pm")
         for w in (self.ms_lbl, self.ms_spin):
             w.setVisible(goal == "spec")
@@ -2015,7 +2040,7 @@ class MainWindow(QMainWindow):
         goal = self.goal_combo.currentText()
         kw = {"goal": goal}
         if goal == "pm":
-            kw["pm_target"] = self.pm_spin.value()
+            kw["pm_target"] = self.comp_pm_spin.value()
         elif goal == "spec":
             kw["ms_target"] = self.ms_spin.value()
         return kw
@@ -2071,8 +2096,7 @@ class MainWindow(QMainWindow):
         self._t0 = None
         self.progress.hide()
         self.cancel_btn.hide()
-        for b in (self.solve_btn, self.a_solve, self.suggest_btn):
-            b.setEnabled(True)
+        self._job_finished(self.suggest_btn)
         baseline, res = payload
         self._comp_baseline = baseline
         self._comp_upd = None                     # rebuilt lazily on select
@@ -2240,8 +2264,7 @@ class MainWindow(QMainWindow):
         self._t0 = None
         self.progress.hide()
         self.cancel_btn.hide()
-        for b in (self.solve_btn, self.a_solve):
-            b.setEnabled(True)
+        self._job_finished()
         fig = self.canvas.figure
         fig.clear()
         ax1 = fig.add_subplot(2, 1, 1)
@@ -2387,8 +2410,7 @@ class MainWindow(QMainWindow):
         self._t0 = None
         self.progress.hide()
         self.cancel_btn.hide()
-        for b in (self.solve_btn, self.a_solve, self.gft_btn):
-            b.setEnabled(True)
+        self._job_finished(self.gft_btn)
         f = payload["freqs"]
         q = payload["q"]
         T = q["T"]
@@ -2467,6 +2489,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"re-opening with {self.cap_model} caps …")
         QApplication.setOverrideCursor(Qt.WaitCursor)
+        # keep the user's result on screen through the re-open: the
+        # first-light numeric solve would contradict the keep panel
+        self._suppress_first_light = had_result
         try:
             self.open_session(self._cin, self._psf)
         except Exception as exc:
@@ -2474,6 +2499,7 @@ class MainWindow(QMainWindow):
             return
         finally:
             QApplication.restoreOverrideCursor()
+            self._suppress_first_light = False
         if inp:
             self.in_combo.setCurrentText(inp)
         if out:
@@ -2481,27 +2507,205 @@ class MainWindow(QMainWindow):
         if groups:
             self._match_groups = groups
             self._apply_matches()
+        self.mode_combo.setCurrentText(mode)
+        if with_probe and self.probe_combo.findText(with_probe) >= 0:
+            self.probe_combo.setCurrentText(with_probe)
+        # restore the ticks LAST: the mode restore refills the table with
+        # the new model's auto-plan, which used to clobber the user's
+        # carefully built set with suggested cjd_* additions. Symbols
+        # that do not exist under the new cap model (matrix k** vs
+        # lumped c**) cannot survive; everything that does, does.
         if checked:
             try:
                 ranking = self.controller.rank_symbols(*self._io())
                 self._fill_keep_table(ranking, checked=checked)
-            except Exception:
-                pass
-        self.mode_combo.setCurrentText(mode)
-        if with_probe and self.probe_combo.findText(with_probe) >= 0:
-            self.probe_combo.setCurrentText(with_probe)
+            except Exception as exc:
+                self._set_strip(f"keep ticks could not be restored after "
+                                f"the cap-model switch "
+                                f"({type(exc).__name__}) — re-Rank and "
+                                f"re-tick", "warn")
         self.statusBar().showMessage(f"cap model: {self.cap_model}")
         self.log(f"cap model: {self.cap_model} (run re-opened)")
-        # re-run the last shown analysis so the model change is visible --
-        # through the ASYNC path with progress and Cancel. The synchronous
-        # re-run froze the GUI for the whole hybrid solve when a keep set
-        # was ticked (minutes on fc): whatever Solve would launch, this
-        # must launch the same way.
+        # re-run the last shown analysis WITH THE USER'S OWN KEEP TICKS,
+        # async with progress and Cancel. The previous result stays on
+        # screen until the new one lands, so display and keep panel
+        # never disagree — and the keep set itself is never touched
+        # (it is accumulated work; losing it on a toggle is a surprise
+        # nobody asked for).
         if had_result and mode in ("Transfer", "Loop gain"):
+            self._set_strip(
+                f"cap model: {self.cap_model} — showing the previous "
+                f"model's result until the re-solve with your keep set "
+                f"lands", "info")
             try:
                 self.solve()
-            except Exception:
-                pass
+            except Exception as exc:
+                self._set_strip(f"cap model: {self.cap_model} — the "
+                                f"promised re-solve failed to launch "
+                                f"({type(exc).__name__}); press Solve",
+                                "warn")
+        elif had_result:
+            self._set_strip(
+                f"cap model: {self.cap_model} — the shown result still "
+                f"uses the previous model; press Solve to recompute "
+                f"with your keep set", "warn")
+
+    # ------------------------------------------------------------ states
+    def _state_manifest(self) -> dict:
+        from . import state as st
+
+        c = self.controller
+        return {
+            "cin": self._cin, "psf": self._psf,
+            "cap_model": self.cap_model,
+            "matches": [list(g) for g in self._match_groups],
+            "circuit_state": getattr(c, "circuit_state", "as imported"),
+            "in": self.in_combo.currentText(),
+            "out": self.out_combo.currentText(),
+            "mode": self.mode_combo.currentText(),
+            "probe": self.probe_combo.currentText(),
+            "form": self.form_combo.currentText(),
+            "strategy": self.strategy_combo.currentText(),
+            "mag_db": self.mag_spin.value(),
+            "phase_deg": self.phase_spin.value(),
+            "pm_deg": self.strat_pm_spin.value(),
+            "gm_db": self.strat_gm_spin.value(),
+            "rej_db": self.strat_rej_spin.value(),
+            "band": list(self.band_slider.values()),
+            "keep": self.checked_keep(),
+            "aliases": dict(getattr(c, "sym_aliases", {}) or {}),
+            "fingerprint": st.fingerprint(
+                self._cin, self._psf, self.cap_model,
+                self._match_groups,
+                getattr(c, "circuit_state", "as imported")),
+        }
+
+    def _autosave_state(self):
+        """The rolling last-state, beside the CIN. Fired after every
+        shown result and on close — losing a carefully built keep set
+        to a crash or an absent-minded close is the failure this
+        prevents. Must never break the session itself."""
+        if self.controller is None or not getattr(self, "_cin", None):
+            return
+        try:
+            from . import state as st
+
+            st.save_state(st.state_path(self._cin),
+                          self._state_manifest(), self.result)
+            self._autosave_warned = False
+        except Exception as exc:
+            # the whole point of this path is "never lose the user's
+            # work" -- a silent permanent failure is the one outcome
+            # worse than no autosave at all. Say it once, keep working.
+            if not getattr(self, "_autosave_warned", False):
+                self._autosave_warned = True
+                self.log(f"autosave FAILED: {type(exc).__name__}: {exc}")
+                self._set_strip("state autosave failed — File → Save "
+                                "state as… still works; see the Log",
+                                "warn")
+
+    def save_state_dialog(self):
+        if self.controller is None:
+            return
+        from . import state as st
+
+        start = str(st.state_path(self._cin, "checkpoint"))
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save session state", start,
+            "CircuitInsight state (*.cistate)")
+        if not path:
+            return
+        st.save_state(path, self._state_manifest(), self.result)
+        self._set_strip(f"state saved: {Path(path).name}", "info")
+
+    def load_state_dialog(self):
+        if self.controller is None:
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load session state",
+            str(Path(self._cin).parent),
+            "CircuitInsight state (*.cistate)")
+        if path:
+            self._load_state_file(path)
+
+    def _load_state_file(self, path=None):
+        """Restore a state: the selections always; the stored solution
+        only when its fingerprint matches the run now open — a stale
+        solution is declared stale, never displayed as current."""
+        if self.controller is None:
+            return
+        from . import state as st
+
+        if path is None:
+            path = st.state_path(self._cin)
+        try:
+            fp = st.fingerprint(
+                self._cin, self._psf, self.cap_model,
+                self._match_groups,
+                getattr(self.controller, "circuit_state", "as imported"))
+            manifest, result, stale = st.load_state(path, fp)
+        except Exception as exc:
+            self._set_strip(f"state load failed: {exc}", "error")
+            return
+        # selections, in dependency order: matches change the symbol
+        # set, mode/form refill tables, ticks land last
+        groups = [tuple(g) for g in manifest.get("matches", [])]
+        if groups:
+            self._match_groups = groups
+            self._apply_matches()
+        for combo, key in ((self.in_combo, "in"),
+                           (self.out_combo, "out")):
+            v = manifest.get(key)
+            if v:
+                combo.setCurrentText(v)
+        self.mode_combo.setCurrentText(manifest.get("mode", "Transfer"))
+        pv = manifest.get("probe")
+        if pv and self.probe_combo.findText(pv) >= 0:
+            self.probe_combo.setCurrentText(pv)
+        self.form_combo.setCurrentText(manifest.get("form", "Exact"))
+        sv = manifest.get("strategy")
+        if sv and self.strategy_combo.findText(sv) >= 0:
+            self.strategy_combo.setCurrentText(sv)
+        for spin, key in ((self.mag_spin, "mag_db"),
+                          (self.phase_spin, "phase_deg"),
+                          (self.strat_pm_spin, "pm_deg"),
+                          (self.strat_gm_spin, "gm_db"),
+                          (self.strat_rej_spin, "rej_db")):
+            if key in manifest:
+                spin.setValue(float(manifest[key]))
+        band = manifest.get("band")
+        if band and len(band) == 2:
+            self.band_slider.setValues(float(band[0]), float(band[1]))
+        aliases = manifest.get("aliases") or {}
+        if aliases and hasattr(self.controller, "sym_aliases"):
+            self.controller.sym_aliases.update(aliases)
+        checked = list(manifest.get("keep", []))
+        keep_ok = True
+        if checked:
+            try:
+                ranking = self.controller.rank_symbols(*self._io())
+                self._fill_keep_table(ranking, checked=checked)
+            except Exception as exc:
+                keep_ok = False
+                self.log(f"state restore: keep table failed "
+                         f"({type(exc).__name__}: {exc})")
+        name = Path(path).name
+        if result is not None:
+            self._show(result)
+            partial = ("" if keep_ok else
+                       " — KEEP TICKS NOT RESTORED (see the Log)")
+            self._set_strip(f"state restored from {name} — selections "
+                            f"AND the computed solution (fingerprint "
+                            f"matched){partial}",
+                            "info" if keep_ok else "warn")
+            self.log(f"state restored: {name} (with solution)")
+        else:
+            why = ("solution stale — the run, cap model, matches or "
+                   "version changed" if stale else "no solution stored")
+            self._set_strip(f"state restored from {name} — selections "
+                            f"only ({why}); press Solve", "warn")
+            self.log(f"state restored: {name} (selections only)")
+            self._refresh_solve_hint()
 
     def _save_cap_model(self):
         s = self._settings()
@@ -2566,6 +2770,21 @@ class MainWindow(QMainWindow):
         self._report_sections = []
         self.a_export_session.setEnabled(False)
         self._clear_strip()
+        # states are per-run: enable the actions, and offer the rolling
+        # last-state when one exists — the truth (first light) shows
+        # first, the restore is one deliberate click away
+        for a in (self.a_save_state, self.a_load_state):
+            a.setEnabled(True)
+        from . import state as st
+
+        has_last = st.state_path(self._cin).exists() \
+            if getattr(self, "_cin", None) else False
+        self.a_restore_last.setEnabled(has_last)
+        if has_last and not getattr(self, "_suppress_first_light", False):
+            self.statusBar().showMessage(
+                "a previous session state exists — File → Restore last "
+                "state brings back your selections (and the solution, "
+                "when still valid)")
         devs = c.devices
         try:
             opv = c.op_values()
@@ -2663,13 +2882,20 @@ class MainWindow(QMainWindow):
             # honest unmatched model against the sim reference. Auto-matches
             # apply after -- so if they move the model, the user has seen
             # the truth once, and the conflicts strip below says why.
-            self._first_light()
+            # A cap-model re-open SUPPRESSES it: replacing the user's
+            # hybrid result with a keep=[] numeric one contradicted the
+            # untouched keep panel (field report) — the previous result
+            # stays up until the re-solve with their ticks lands.
+            suppress = getattr(self, "_suppress_first_light", False)
+            if not suppress:
+                self._first_light()
             groups = [tuple(g) for g in c.suggest_matches()]
             if groups:
                 self._match_groups = groups
                 self.controller.set_matches(*groups)
                 self._refresh_matches_label()
-                self._surface_match_conflicts(baseline=self.result)
+                if not suppress:
+                    self._surface_match_conflicts(baseline=self.result)
             plan = c.suggest_keep(inp, out, self.budget_spin.value())
             ranking = c.rank_symbols(inp, out)
             self._fill_keep_table(ranking, checked=list(plan.keep))
@@ -2808,6 +3034,37 @@ class MainWindow(QMainWindow):
         # set, and the estimate then re-costed the empty one)
         self._fill_keep_table(ranking, checked=self.checked_keep())
 
+    def _rank_async(self):
+        """The Rank button's path: the band-sensitivity sweep (~0.8 s on
+        fc) runs off the GUI thread; internal callers that need the
+        table filled before their next line keep the synchronous
+        _rank."""
+        if self.controller is None:
+            return
+        inp, out = self._io()
+        c = self.controller
+        checked = self.checked_keep()
+        self.statusBar().showMessage("ranking …")
+
+        def done(ranking):
+            if self.controller is not c:
+                return
+            if isinstance(ranking, Exception):
+                QMessageBox.warning(
+                    self, "Rank failed",
+                    f"{type(ranking).__name__}: {ranking}")
+                return
+            self._fill_keep_table(ranking, checked=checked)
+            self.statusBar().showMessage("ranked", 3000)
+
+        def compute():
+            try:
+                return c.rank_symbols(inp, out)
+            except Exception as exc:
+                return exc
+
+        self._run_bg(compute, done)
+
     @staticmethod
     def _sym_device(name: str) -> str:
         """Owning-device key of a symbol name (gm_I0_MN1 -> I0_MN1)."""
@@ -2920,10 +3177,28 @@ class MainWindow(QMainWindow):
                 out.append(it.text())
         return out
 
+    def _refresh_solve_hint(self):
+        """The keep panel is the NEXT solve's input; the plot shows the
+        LAST result. When they differ — the first-light numeric against
+        pre-ticked suggestions, a cap-model re-open, or plain tick
+        editing — the Solve button says so instead of letting the
+        mismatch pass silently."""
+        r = self.result
+        stale = False
+        if r is not None and self.mode_combo.currentText() == "Transfer":
+            shown = r.keep if isinstance(r.keep, list) else None
+            if shown is not None:
+                stale = set(shown) != set(self.checked_keep())
+        self.solve_btn.setText("Solve *" if stale else "Solve")
+        self.solve_btn.setToolTip(
+            "the ticked keep set differs from the result on screen — "
+            "Solve recomputes with the ticks" if stale else "")
+
     def _on_keep_changed(self, item):
         if self._filling or self.controller is None:
             return
         self._update_crumb()
+        self._refresh_solve_hint()
         if item.column() == 4:                    # per-symbol LaTeX override
             name = self.keep_tbl.item(item.row(), 0).text()
             text = item.text().strip()
@@ -2978,8 +3253,24 @@ class MainWindow(QMainWindow):
             # "~0s"). The next launch re-estimates.
             return
         inp, out = self._io()
-        try:
-            est = self.controller.estimate(inp, out, self.checked_keep())
+        keep = self.checked_keep()
+        c = self.controller
+        seq = getattr(self, "_est_seq", 0) + 1
+        self._est_seq = seq
+        self.estimate_lbl.setText("estimate: …")
+
+        # the re-cost probes real determinants (~0.3 s on fc) and ran on
+        # the GUI thread at every tick change — a stall exactly when the
+        # user is clicking. Off-thread, sequenced, stale results dropped.
+        def done(est):
+            if (seq != self._est_seq or self.controller is not c
+                    or self._t0 is not None):
+                return
+            if isinstance(est, Exception):
+                self.estimate_lbl.setStyleSheet("")
+                self.estimate_lbl.setText(
+                    f"estimate: — ({type(est).__name__})")
+                return
             self.estimate_lbl.setText(f"estimate: {est}")
             self._show_auto_backend(getattr(est, "backend", None))
             secs = getattr(est, "seconds", None)
@@ -2993,9 +3284,14 @@ class MainWindow(QMainWindow):
             elif secs > 0.7 * budget:
                 color = "#7a5200"                    # amber: close
             self.estimate_lbl.setStyleSheet(f"color: {color};")
-        except Exception as exc:
-            self.estimate_lbl.setStyleSheet("")
-            self.estimate_lbl.setText(f"estimate: — ({type(exc).__name__})")
+
+        def compute():
+            try:
+                return c.estimate(inp, out, keep)
+            except Exception as exc:
+                return exc
+
+        self._run_bg(compute, done)
 
     def _suggest_keep(self):
         """Form-aware: for a lowest-order solve the right keeps are the
@@ -3058,7 +3354,21 @@ class MainWindow(QMainWindow):
         self.progress.show()
         self.cancel_btn.setEnabled(True)
         self.cancel_btn.show()
-        self._thread = _Worker(fn)
+        # warm the display transforms IN THE WORKER: rendering the
+        # expression lines runs cancel/nsimplify over the whole result
+        # (measured 3 s at 1040 terms, tens of seconds on big hybrids)
+        # and used to freeze the GUI the moment the solve delivered
+        base = not self.fullnames_chk.isChecked()
+        wrap = bool(getattr(exprweb, "WEBENGINE", False))
+        aliases = dict(getattr(self.controller, "sym_aliases", {}) or {})
+
+        def _prepped(cb, _fn=fn):
+            res = _fn(cb)
+            view.prepare_display(res, base=base, wrap=wrap,
+                                 aliases=aliases)
+            return res
+
+        self._thread = _Worker(_prepped)
         self._thread.progress.connect(self._on_progress)
         self._thread.done.connect(on_done or self._on_done)
         self._thread.failed.connect(self._on_failed)
@@ -3068,6 +3378,38 @@ class MainWindow(QMainWindow):
         self._thread.note.connect(lambda m: self.log(f"  {m}"))
         self.worker_note = self._thread.note.emit
         self._thread.start()
+
+    #: every launch disables these; every completion path re-enables ALL
+    #: of them. Four handlers each re-enabled their own subset, so a
+    #: Modes/Compensate/GFT run left Simplify and Reduce greyed until an
+    #: unrelated mode change happened to fix them.
+    def _job_finished(self, *extra):
+        for b in (self.solve_btn, self.a_solve, self.a_simplify,
+                  self.a_reduce, *extra):
+            b.setEnabled(True)
+
+    def _run_bg(self, fn, on_done):
+        """Advisor-pattern short worker: controller math off the GUI
+        thread (estimates, rank, the certificate — each measured
+        0.3–1 s of main-thread stall per interaction), result delivered
+        queued. Failures are dropped: advisories never break a session."""
+        w = _Worker(lambda _cb: fn())
+        if not hasattr(self, "_bg_workers"):
+            self._bg_workers = []
+        self._bg_workers.append(w)
+
+        def _done(res, _w=w):
+            try:
+                on_done(res)
+            finally:
+                if _w in self._bg_workers:
+                    self._bg_workers.remove(_w)
+
+        w.done.connect(_done)
+        w.failed.connect(lambda _m, _w=w: (
+            self._bg_workers.remove(_w)
+            if _w in self._bg_workers else None))
+        w.start()
 
     def solve(self):
         if self.controller is None:
@@ -3161,10 +3503,10 @@ class MainWindow(QMainWindow):
     def _strategy_opts(self) -> dict:
         s = self._strategy()
         if s == "stability":
-            return {"pm_deg": self.pm_spin.value(),
-                    "gm_db": self.gm_spin.value()}
+            return {"pm_deg": self.strat_pm_spin.value(),
+                    "gm_db": self.strat_gm_spin.value()}
         if s == "rejection":
-            return {"rej_db": self.rej_spin.value()}
+            return {"rej_db": self.strat_rej_spin.value()}
         return {"gain_db": self.mag_spin.value(),
                 "phase_deg": self.phase_spin.value()}
 
@@ -3184,23 +3526,32 @@ class MainWindow(QMainWindow):
     def _refresh_certificate(self):
         """The band's demand at the set tolerance, printed beside the
         slider while dragging: 'lowpass band needs order 2 at 5%', plus
-        the doublet caveat. First call may cost a numeric sweep (~1 s);
-        after that ~50 ms."""
+        the doublet caveat. Computed OFF the GUI thread — the first
+        call costs a numeric sweep (~1 s) that used to stall the drag."""
         if (self.controller is None
                 or not self.band_row.isVisibleTo(self)):
             self.cert_lbl.setText("")
             self.cert_lbl.setVisible(False)
             return
-        try:
-            inp, out = self._io()
-            fmin, fmax = self.band_slider.values()
-            cert = self.controller.order_certificate(inp, out, fmin, fmax)
-            self.cert_lbl.setText(
-                cert.describe(self._strategy_eps_eq()))
-            self.cert_lbl.setVisible(True)
-        except Exception:
-            self.cert_lbl.setText("")
-            self.cert_lbl.setVisible(False)
+        inp, out = self._io()
+        fmin, fmax = self.band_slider.values()
+        eps_eq = self._strategy_eps_eq()
+        c = self.controller
+        seq = getattr(self, "_cert_seq", 0) + 1
+        self._cert_seq = seq
+
+        def done(cert):
+            if seq != self._cert_seq or self.controller is not c:
+                return                      # superseded by a newer drag
+            try:
+                self.cert_lbl.setText(cert.describe(eps_eq))
+                self.cert_lbl.setVisible(True)
+            except Exception:
+                self.cert_lbl.setText("")
+                self.cert_lbl.setVisible(False)
+
+        self._run_bg(lambda: c.order_certificate(inp, out, fmin, fmax),
+                     done)
 
     def _update_tol_bands(self):
         """The tolerance made visible. Full order: a fixed tube of ±mag
@@ -3251,7 +3602,7 @@ class MainWindow(QMainWindow):
                         f[mask], (ph - pdeg)[mask], (ph + pdeg)[mask],
                         color="#c9962a", alpha=0.18, zorder=0))
             elif strat == "rejection":
-                rej = self.rej_spin.value()
+                rej = self.strat_rej_spin.value()
                 self._tol_bands.append(axes[0].fill_between(
                     f[mask], (mag - rej)[mask], (mag + rej)[mask],
                     color="#c9962a", alpha=0.18, zorder=0))
@@ -3263,7 +3614,7 @@ class MainWindow(QMainWindow):
                 if cross.size:
                     fc0 = float(f[cross[0]])
                     near = mask & (f >= fc0 / 2.5) & (f <= fc0 * 2.5)
-                    pmd = self.pm_spin.value()
+                    pmd = self.strat_pm_spin.value()
                     self._tol_bands.append(axes[0].plot(
                         [fc0, fc0], [mag[mask].min(), mag[mask].max()],
                         color="0.35", lw=0.8, ls=":", zorder=1)[0])
@@ -3812,6 +4163,9 @@ class MainWindow(QMainWindow):
         self._band_spans = []
         self._tol_bands = []
         self._on_band_changed(*self.band_slider.values())
+        self._refresh_solve_hint()
+        if not self._showing_from_history:
+            self._autosave_state()      # every shown result checkpoints
         self.summary.setPlainText(view.summary_text(result))
         try:
             view.error_figure(result, self.err_canvas.figure)

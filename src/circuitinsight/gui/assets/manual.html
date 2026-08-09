@@ -76,6 +76,23 @@ A<sub>0</sub>, GBW, one formula per pole and zero.</li>
 Reduce bench &ndash; each answers one kind of follow-up question.</li>
 </ol>
 
+<p><b>Session states.</b> Everything you build in that loop &ndash;
+matches, keep ticks, band, tolerance strategy and budgets &ndash; is
+autosaved beside the CIN (<code>&lt;name&gt;.last.cistate</code>)
+after every shown result and on close, with the computed solution
+riding along. Re-opening shows the truth first and offers
+<i>File &rarr; Restore last state</i>; <i>Save state as&hellip;</i>
+makes named checkpoints ("pm-study", "cmrr-band"). Selections always
+restore. The stored solution restores <b>only when its fingerprint
+matches the run now open</b> &ndash; the same data files, cap model,
+matches and tool version; anything changed and the state declares the
+solution stale and asks for one Solve instead of showing a result the
+current data cannot back. Losing a carefully built keep set to a
+crash, a close, or a cap-model toggle is the failure this removes.
+The <b>Solve&nbsp;*</b> marker is the companion rule inside a session:
+whenever the ticked keep set differs from the result on screen, the
+button says so.</p>
+
 <h2><a name="benches"></a>The benches</h2>
 
 <p>The <b>tool</b> dropdown in the toolbar selects the analysis. Each

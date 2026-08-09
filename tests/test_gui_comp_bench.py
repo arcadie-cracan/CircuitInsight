@@ -59,11 +59,11 @@ def test_target_spin_follows_the_goal(qapp, tmp_path):
         # isHidden() is the explicit hide state the goal handler sets;
         # isVisibleTo() would also depend on which tab is current
         w.goal_combo.setCurrentText("pm")
-        assert not w.pm_spin.isHidden() and w.ms_spin.isHidden()
+        assert not w.comp_pm_spin.isHidden() and w.ms_spin.isHidden()
         w.goal_combo.setCurrentText("spec")
-        assert not w.ms_spin.isHidden() and w.pm_spin.isHidden()
+        assert not w.ms_spin.isHidden() and w.comp_pm_spin.isHidden()
         w.goal_combo.setCurrentText("mfm")
-        assert w.pm_spin.isHidden() and w.ms_spin.isHidden()
+        assert w.comp_pm_spin.isHidden() and w.ms_spin.isHidden()
         # only the active target reaches the search
         w.goal_combo.setCurrentText("spec")
         w.ms_spin.setValue(1.25)

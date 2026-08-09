@@ -26,6 +26,20 @@ FIX = Path(__file__).resolve().parent / "fixtures" / "spectre" / "ota5t"
 MILLER = Path(__file__).resolve().parent / "fixtures" / "spectre" / "miller"
 
 
+def _wait_bg(qapp, cond, timeout=20.0):
+    """Process events until a background advisory lands (estimate, rank,
+    certificate all run off the GUI thread now)."""
+    import time as _t
+
+    t0 = _t.monotonic()
+    while _t.monotonic() - t0 < timeout:
+        qapp.processEvents()
+        if cond():
+            return True
+        _t.sleep(0.02)
+    return False
+
+
 @pytest.fixture(scope="module")
 def qapp():
     # QtWebEngine must be imported BEFORE the QApplication exists (it sets
@@ -114,7 +128,7 @@ def test_rank_keeps_the_ticks_and_a_running_solve_keeps_its_estimate(
         assert win._est_s == 300.0               # the running solve's own
         win._t0 = None
         win._update_estimate()                   # idle: re-costs freely
-        assert win._est_s != 300.0
+        assert _wait_bg(qapp, lambda: win._est_s != 300.0),             "the async re-cost must land"
     finally:
         win._t0 = None
         win.close()
@@ -145,11 +159,13 @@ def test_backend_selector_autoselects_and_overrides(qapp, tmp_path):
         assert interp.PROBE_BACKEND is None          # auto on open
         assert win.backend_combo.currentIndex() == 0
         assert win.backend_combo.itemText(0).startswith("auto")
-        assert "→" in win.backend_combo.itemText(0)  # names its choice
+        # the resolved name arrives with the async estimate
+        assert _wait_bg(qapp,
+                        lambda: "→" in win.backend_combo.itemText(0)),             "auto must name its resolved backend"
 
         win.backend_combo.setCurrentIndex(2)         # force bot
         assert interp.PROBE_BACKEND == "bot"
-        assert "bot" in win.estimate_lbl.text()      # estimate re-costed
+        assert _wait_bg(qapp, lambda: "bot" in win.estimate_lbl.text()),             "the async estimate must name the forced backend"
         win.backend_combo.setCurrentIndex(0)         # back to auto
         assert interp.PROBE_BACKEND is None
     finally:
@@ -1530,4 +1546,173 @@ def test_log_names_the_reason_when_a_phase_total_grows(qapp, tmp_path):
         assert "accepted a reactance" in text
     finally:
         win._t0 = None
+        win.close()
+
+
+def test_cap_toggle_keeps_the_result_and_ticks_correlated(qapp, tmp_path):
+    """Field report: toggling Charge-matrix caps replaced the hybrid
+    result with the re-open's numeric first light while the keep panel
+    kept its ticks — display and panel disagreed. The toggle must keep
+    the previous result on screen, keep the ticks untouched, re-launch
+    the solve WITH those ticks, and say what state the screen is in."""
+    from PySide6.QtCore import Qt
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "gui.ini")
+    try:
+        win = MainWindow()
+    finally:
+        MainWindow.settings_path = None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"))
+        win.in_combo.setCurrentText("VIND")
+        win.out_combo.setCurrentText("vout")
+        win._rank()
+        win.keep_tbl.item(0, 0).setCheckState(Qt.Checked)
+        ticks = win.checked_keep()
+        r_hybrid = win.solve_sync()
+    try:
+        assert r_hybrid.keep == ticks
+
+        launches = []
+        win.solve = lambda: launches.append(True)   # spy the re-launch
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win.a_matrix_caps.setChecked(False)     # matrix -> lumped
+
+        # the displayed result is NOT replaced by the numeric first
+        # light, the re-solve launched, and the strip says what state
+        # the screen is in
+        assert win.result is r_hybrid
+        assert launches, "the re-solve with the keep set must launch"
+        assert "previous" in win.msg_strip.text()
+        # ticks: every symbol that EXISTS under the new cap model stays
+        # ticked, and nothing the user did not tick gets added — the
+        # lumped model's auto-plan must not pollute a curated set
+        new_names = {n for n, _, _ in
+                     win.controller.rank_symbols("VIND", "vout")}
+        survivors = [t for t in ticks if t in new_names]
+        assert win.checked_keep() == survivors
+
+        # the Solve button marks the display/panel divergence until the
+        # re-solve lands (the same marker covers first light and plain
+        # tick edits)
+        win._refresh_solve_hint()
+        assert win.solve_btn.text() == "Solve *"
+    finally:
+        win.close()
+
+
+def test_strategy_pm_spin_is_the_strategys_own(qapp, tmp_path):
+    """Regression: self.pm_spin was bound twice — first as the stability
+    strategy's PM budget (5°), then rebound as Compensate's PM target
+    (60°, clamped 30–85). The later binding won, so the toolbar spin the
+    user turned did nothing and every GUI stability reduction silently
+    ran with a 60° budget. The two families now carry distinct names and
+    a stale bare pm_spin reference fails loudly."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "gui.ini")
+    try:
+        win = MainWindow()
+    finally:
+        MainWindow.settings_path = None
+    try:
+        assert win.strat_pm_spin is not win.comp_pm_spin
+        assert not hasattr(win, "pm_spin")
+        win.strategy_combo.setCurrentText("Stability (margins)")
+        win.strat_pm_spin.setValue(7.0)
+        win.comp_pm_spin.setValue(60.0)     # must NOT leak into the opts
+        opts = win._strategy_opts()
+        assert opts["pm_deg"] == 7.0
+        assert opts["gm_db"] == win.strat_gm_spin.value()
+    finally:
+        win.close()
+
+
+def test_job_finished_reenables_the_whole_action_family(qapp, tmp_path):
+    """Regression: four completion handlers each re-enabled their own
+    subset of the launch-disabled actions, so a Compensate/Modes/GFT run
+    left Simplify and Reduce greyed until an unrelated mode change
+    happened to fix them. One helper re-enables ALL of them plus the
+    caller's extras."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "gui.ini")
+    try:
+        win = MainWindow()
+    finally:
+        MainWindow.settings_path = None
+    try:
+        family = (win.solve_btn, win.a_solve, win.a_simplify,
+                  win.a_reduce, win.suggest_btn)
+        for b in family:
+            b.setEnabled(False)
+        win._job_finished(win.suggest_btn)
+        for b in family:
+            assert b.isEnabled()
+    finally:
+        win.close()
+
+
+def test_strategy_controls_persist_across_restarts(qapp, tmp_path):
+    """Regression: the newer toolbar controls (solve form, tolerance
+    strategy, PM/GM/rejection budgets) were never saved on close while
+    the older mag/phase pair was — half the toolbar forgot its settings
+    between runs."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "gui.ini")
+    try:
+        win = MainWindow()
+        win.form_combo.setCurrentText("Simplified · lowest order")
+        win.strategy_combo.setCurrentText("Rejection (dB)")
+        win.strat_pm_spin.setValue(11.0)
+        win.strat_gm_spin.setValue(4.0)
+        win.strat_rej_spin.setValue(2.5)
+        win.close()
+
+        win2 = MainWindow()
+        try:
+            assert (win2.form_combo.currentText()
+                    == "Simplified · lowest order")
+            assert win2.strategy_combo.currentText() == "Rejection (dB)"
+            assert win2.strat_pm_spin.value() == 11.0
+            assert win2.strat_gm_spin.value() == 4.0
+            assert win2.strat_rej_spin.value() == 2.5
+        finally:
+            win2.close()
+    finally:
+        MainWindow.settings_path = None
+
+
+def test_autosave_failure_is_reported_once(qapp, tmp_path, monkeypatch):
+    """Regression: _autosave_state swallowed every exception, so a
+    broken autosave path silently disabled crash recovery for the whole
+    session. The first failure now lands in the Log and the strip, and
+    does not repeat on every shown result."""
+    from circuitinsight.gui import state as st
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "gui.ini")
+    try:
+        win = MainWindow()
+    finally:
+        MainWindow.settings_path = None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"))
+    try:
+        def boom(*_a, **_k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(st, "save_state", boom)
+        win._autosave_state()
+        txt = win.logview.toPlainText()
+        assert "autosave FAILED" in txt and "disk full" in txt
+        assert "autosave failed" in win.msg_strip.text()
+        win._autosave_state()               # said once, not per result
+        assert win.logview.toPlainText().count("autosave FAILED") == 1
+    finally:
         win.close()

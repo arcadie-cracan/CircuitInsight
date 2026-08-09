@@ -65,6 +65,42 @@ def test_cache_returns_same_object(ota5t):
     assert a is b
 
 
+def test_solve_cache_keys_on_the_band(ota5t):
+    """Regression: the solve cache key ignored fmin/fmax/points, so the
+    certificate's wide sweep and the plot solve over the user's own band
+    returned whichever Result happened to be computed first."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        r1 = ota5t.solve("VIND", "vout", [], fmin=1e3, fmax=1e9,
+                         points=100)
+        r2 = ota5t.solve("VIND", "vout", [], fmin=1e0, fmax=1e10,
+                         points=200)
+        r1b = ota5t.solve("VIND", "vout", [], fmin=1e3, fmax=1e9,
+                          points=100)
+    # distinct Result objects per band — before the fix the second call
+    # returned the first cached object verbatim. The grid itself may
+    # coincide (the AC reference overlay pins it to the simulator's own
+    # sweep), so object identity is the contract, not grid shape.
+    assert r1 is not r2
+    assert r1b is r1                      # same band still hits the cache
+
+
+def test_declaring_the_loop_reference_invalidates_the_cache(ota5t):
+    """Regression: declare_ac_loop_gain changed what the loop family
+    computes but left previously cached results in place."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        r1 = ota5t.solve("VIND", "vout", [], fmin=1e3, fmax=1e9,
+                         points=100)
+        ota5t.declare_ac_loop_gain("vout")
+        try:
+            r2 = ota5t.solve("VIND", "vout", [], fmin=1e3, fmax=1e9,
+                             points=100)
+            assert r2 is not r1
+        finally:
+            ota5t.declare_ac_loop_gain(None)
+
+
 # --------------------------------------------------------- two-stage numbers
 def test_solve_miller_dc_and_rhp_zero(miller):
     with warnings.catch_warnings():
@@ -358,3 +394,12 @@ def test_reduce_strategies_speak_the_designer_language():
     for res in (r, rj, pl):
         n = int(res.warnings[0].split(" reactance")[0].split()[-1])
         assert n <= 6
+    # units regression: band_score is the normalized budget fraction and
+    # says so; mag_err_db is ALWAYS dB — it used to inherit whichever
+    # raw unit the branch's error carried (fraction, dB, or budget
+    # multiple), so downstream displays mixed units silently
+    for res in (r, rj, pl):
+        assert res.band_score is not None
+        assert res.band_score_unit == "x budget"
+    assert rj.mag_err_db == pytest.approx(rj.band_score * 3.0)
+    assert pl.mag_err_db == pytest.approx(pl.band_score * 3.0)

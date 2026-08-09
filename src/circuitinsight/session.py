@@ -100,6 +100,19 @@ class Result:
     # [band_fmin, band_fmax] AT THIS OPERATING POINT -- consumers that
     # move parameters (What-if) must refuse or warn
     reduced_order: bool = False
+    # lowest-order criterion record (previously attribute-injected):
+    # which strategy judged the reduction, its normalized score (<=1 met)
+    # with its unit, and the anchored-mode parameters. mag_err_db keeps
+    # ONE meaning -- an achieved error in dB -- it used to carry a dB, a
+    # fraction, or a normalized score depending on the branch, and the
+    # view printed all three as dB.
+    strategy: str | None = None
+    band_score: float | None = None
+    band_score_unit: str = ""
+    eps: float | None = None
+    anchor: float | None = None
+    details: list = field(default_factory=list)
+    certificate: object = None
 
 
 def _n_terms(tf) -> int:
@@ -154,6 +167,7 @@ class SessionController:
         # entry is impossible, since the fingerprint IS the
         # identity of the circuit half it describes.
         self._tear_cache: dict = {}
+        self._op_values = None               # op_values() lazy cache
         self._has_stb: bool | None = None    # lazily probed, cached
         #: net whose AC response the user DECLARED to be the return
         #: ratio; None = no declaration (see declare_ac_loop_gain)
@@ -710,7 +724,9 @@ class SessionController:
         """
         # norm_keep, NOT `keep or ()`: ALL and [] are opposites and both used to
         # hash to (), so a numeric result could be served for a symbolic request.
-        key = ("solve", inp, out, norm_keep(keep), tuple(self._matches))
+        key = ("solve", inp, out, norm_keep(keep), float(fmin),
+               float(fmax), int(points), bool(reference),
+               tuple(self._matches))
         if key not in self._cache:
             self._guard_cost(inp, out, keep, max_seconds)
             H = self._analyzer_ready().tf(inp, out, keep=keep,
@@ -820,6 +836,8 @@ class SessionController:
         withdraws the declaration. This is the only way the loop benches
         open without stb results — a reconstructed loop gain is never
         shown without simulator ground truth to check it against."""
+        if out_net != self.ac_loop_gain:
+            self._cache.clear()      # cached overlays describe the other truth
         self.ac_loop_gain = out_net
 
     def _stb_reference(self, points_freqs):
@@ -857,7 +875,9 @@ class SessionController:
 
         The default band starts at 1 Hz so the +180-deg DC phase reference
         unwraps correctly even for sub-kHz dominant poles."""
-        key = ("loopgain", probe, norm_keep(keep), tuple(self._matches))
+        key = ("loopgain", probe, norm_keep(keep), float(fmin),
+               float(fmax), int(points), self.ac_loop_gain,
+               tuple(self._matches))
         if key in self._cache:
             return self._cache[key]
 
@@ -1093,6 +1113,7 @@ class SessionController:
         self._reduction = {"nodes": nodes}
         self._analyzer = None
         self._cache.clear()
+        self._op_values = None       # OP symbols changed with the circuit
         an = self._analyzer_ready()          # builds the reduced circuit
 
         f = np.geomspace(1.0, 1e10, 41)
@@ -1116,6 +1137,7 @@ class SessionController:
         self._reduction = None
         self._analyzer = None
         self._cache.clear()
+        self._op_values = None       # OP symbols changed with the circuit
 
     def reduction_summary(self) -> dict | None:
         """The apply_reduction summary of the active reduction, or None."""
@@ -1378,6 +1400,7 @@ class SessionController:
         terms within `mag_db`/`phase_deg`. The Result carries the achieved error
         and the term count before/after pruning."""
         key = ("simplify", inp, out, norm_keep(keep), mag_db, phase_deg,
+               float(fmin), float(fmax),
                tuple(self._matches))
         if key not in self._cache:
             H = self._analyzer_ready().tf(inp, out, keep=keep,
@@ -1463,7 +1486,21 @@ class SessionController:
                 float(red.baseline_db)
             r.simplified = True
             r.reduced_order = True
-            r.mag_err_db = band_err                 # reduced model vs full, in-band
+            # band_err is dB ONLY in the legacy branch; the strategy and
+            # eps branches store their normalized score separately and
+            # keep mag_err_db a genuine dB figure
+            if strategy is not None:
+                r.band_score = float(band_err)
+                r.band_score_unit = "x budget"
+                gdb = opts.get("gain_db", opts.get("rej_db"))
+                r.mag_err_db = (band_err * gdb if gdb is not None
+                                else float(Hs.achieved_mag_err_db))
+            elif eps is not None:
+                r.band_score = float(band_err)
+                r.band_score_unit = "fraction"
+                r.mag_err_db = 20.0 * math.log10(1.0 + band_err)
+            else:
+                r.mag_err_db = band_err             # legacy: already dB
             r.phase_err_deg = float(Hs.achieved_phase_err_deg)
             r.n_terms_full = _n_terms(H)
             r.band_fmin, r.band_fmax = float(fmin), float(fmax)
