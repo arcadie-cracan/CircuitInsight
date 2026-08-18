@@ -164,6 +164,20 @@ the budget at every band point, phase unconstrained &ndash; dB error
 is relative error of the small quantity.</td></tr>
 </table>
 
+<p><b>One contract for every approximation.</b> The tolerance
+strategy, its budgets and the band selector define the session's
+accuracy contract &ndash; and every budgeted step speaks it: the
+lowest-order solve, the AC-ground scan, the removal scan and the
+applied reduction are all priced and gated by the same criterion over
+the same band, reported as a fraction of the same budget
+(<i>0.42&times; budget</i>; at or under 1.00&times; means within it).
+Exact steps say so: <i>exact, no budget spent</i>. After each solve
+the Summary appends the <b>approximation ledger</b>: each step's
+score, and the totals <i>measured end to end</i> against the imported
+circuit &ndash; never summed, because errors do not add linearly. The
+ledger is what tells you when a composition of individually-passing
+steps has exceeded the contract.</p>
+
 <p>Every strategy is <b>capped at a readable order</b>: if the
 tolerance is not reachable with six reactances, the tool does not
 dump a 26-element model &ndash; it returns the best readable one with
@@ -303,6 +317,35 @@ the message strip reports the worst overwrite and the measured response
 shift. If the plot disagrees with the simulator reference, look there
 first &ndash; then Unmatch the offending group, or Clear all
 matches.</p>
+
+<p><b>The device model</b> lives in the Model menu. <b>Charge-matrix
+caps</b> picks the exact trans-capacitance matrix over the five-cap
+lumped model. <b>Lump &#285;<sub>m</sub> = g<sub>m</sub> +
+g<sub>mb</sub></b> bundles the body-effect transconductance into the
+main one, <i>exactly and per device</i>: a device qualifies when its
+gate and bulk sit at the same AC potential (the same net, or nets held
+by DC sources), because there g<sub>m</sub>&middot;v<sub>gs</sub> +
+g<sub>mb</sub>&middot;v<sub>bs</sub> collapses to one term. Such a
+device shows a single hatted symbol &#285;<sub>m</sub> whose value is
+the sum; a device with bulk tied to source has v<sub>bs</sub> = 0, so
+its inert g<sub>mb</sub> symbol is simply dropped. Devices with a
+signal-driven gate keep their separate g<sub>mb</sub> &ndash; lumping
+there would change the response, and this tool does not approximate
+silently. The strip reports exactly which devices were bundled; if
+none qualify, it says so. Selecting one of the justifying DC sources
+as the <i>input</i> is refused with an explanation rather than
+answered wrongly. Both model choices re-open the run, keep your
+matches and keep ticks, and re-run the last analysis.</p>
+
+<p>The toggle <b>composes with the Reduce-circuit bench</b>: on a real
+extracted circuit a cascode gate usually sits on an internal bias net
+&ndash; not exactly AC ground, so no hat. Once the measured AC-ground
+flow grounds that net (with the response shift quantified against your
+budget), the criterion holds on the <i>reduced</i> circuit and the
+device earns its &#285;<sub>m</sub> there &ndash; the grounding is the
+only approximation, already accounted for by the reduction's own error
+report; the bundle itself stays exact. The log names each device that
+gained its hat through the reduction.</p>
 
 <h2><a name="keep"></a>The keep set and the estimate</h2>
 

@@ -219,8 +219,11 @@ def test_reduction_is_a_named_revertible_session_state():
         nodes = list(rep.recommended)
 
         # pricing an arbitrary ticked set matches the scan's joint pricing
-        assert c.acground_joint("VIND", "vout", nodes) == pytest.approx(
-            rep.joint_db, rel=1e-6)
+        # (a dict now, so the GUI reads dB, degrees and the contract
+        # score through one shape)
+        jm = c.acground_joint("VIND", "vout", nodes)
+        assert jm["worst_db"] == pytest.approx(rep.joint_db, rel=1e-6)
+        assert jm["score"] is None            # no contract given here
 
         pv = c.preview_reduction(nodes)
         assert pv["prims_after"] < pv["prims_before"]
@@ -403,3 +406,40 @@ def test_reduce_strategies_speak_the_designer_language():
         assert res.band_score_unit == "x budget"
     assert rj.mag_err_db == pytest.approx(rj.band_score * 3.0)
     assert pl.mag_err_db == pytest.approx(pl.band_score * 3.0)
+
+
+def test_approximation_ledger_measures_not_sums(miller):
+    """One contract prices every circuit-level approximation, and the
+    total is MEASURED end to end -- never the sum of the entries."""
+    import numpy as np
+
+    miller.set_matches(*miller.suggest_matches())
+    try:
+        rep = miller.scan_ac_grounds(
+            "VIND", "vout", strategy="plain",
+            strategy_opts={"gain_db": 1.0, "phase_deg": 5.0},
+            fmin=1e3, fmax=1e8)
+        assert rep.criterion_label == "plain"
+        assert all(c.score is not None for c in rep.candidates)
+        assert rep.recommended and rep.joint_score <= 1.0
+        miller.apply_reduction(list(rep.recommended), inp="VIND",
+                               out="vout", strategy="plain",
+                               strategy_opts={"gain_db": 1.0,
+                                              "phase_deg": 5.0},
+                               fmin=1e3, fmax=1e8)
+        led = miller.approximation_report(
+            "VIND", "vout", strategy="plain",
+            strategy_opts={"gain_db": 1.0, "phase_deg": 5.0},
+            fmin=1e3, fmax=1e8)
+        steps = {e["step"].split(" ")[0] for e in led["entries"]}
+        assert "matches" in steps and "AC-ground" in steps
+        assert all(e["score"] <= 1.0 for e in led["entries"]
+                   if not e["exact"])
+        # the total is a measurement of the composed circuit, within
+        # the contract here, and NOT the arithmetic sum of the parts
+        assert 0.0 < led["circuit_score"] <= 1.0
+        s = sum(e["score"] for e in led["entries"] if not e["exact"])
+        assert led["circuit_score"] != s
+    finally:
+        miller.revert_reduction()
+        miller.set_matches()                      # reset shared fixture

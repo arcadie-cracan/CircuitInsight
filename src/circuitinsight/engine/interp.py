@@ -106,6 +106,24 @@ def resolve_backend(n_dense_dets: int) -> str:
 LAST_SOLVE: dict | None = None
 
 
+def _record_solve(*, backend, backend_requested, fell_back, reduced,
+                  batch, grid_K, L, n_dense_dets, wall_s,
+                  fallback_reason=None, **binfo) -> dict:
+    """Build LAST_SOLVE with ONE schema. The two solve paths used to
+    assemble it by hand with different key sets (the numeric-s path
+    omitted fallback_reason and the backend info), so every consumer
+    had to read it defensively; now absent values are present-but-None
+    and backend extras ride along explicitly."""
+    global LAST_SOLVE
+    LAST_SOLVE = {
+        "backend": backend, "backend_requested": backend_requested,
+        "fell_back": fell_back, "fallback_reason": fallback_reason,
+        "reduced": reduced, "batch": batch, "grid_K": grid_K, "L": L,
+        "n_dense_dets": n_dense_dets, "wall_s": wall_s, **binfo,
+    }
+    return LAST_SOLVE
+
+
 # parallelize the grid when there are at least this many QQ determinants
 _PARALLEL_MIN_DETS = 600
 
@@ -505,7 +523,6 @@ def _solve_numeric_s(tasks, cols, A, progress=None) -> list:
     And it is what makes the solve REPORTABLE: the sweep is B+1 units of
     known size, so a caller sees real progress and can cancel between
     determinants, neither of which is possible inside sympy's det()."""
-    global LAST_SOLVE
     t0 = time.perf_counter()
     sys0 = tasks[0][0]
     Aks = []
@@ -575,11 +592,9 @@ def _solve_numeric_s(tasks, cols, A, progress=None) -> list:
         raise MnaError("singular MNA matrix: floating node or short loop?")
 
     wall = time.perf_counter() - t0
-    LAST_SOLVE = {
-        "backend": "qq-s", "backend_requested": "qq-s", "fell_back": False,
-        "reduced": False, "batch": len(tasks), "grid_K": 1, "L": L,
-        "n_dense_dets": total, "wall_s": wall,
-    }
+    _record_solve(backend="qq-s", backend_requested="qq-s",
+                  fell_back=False, reduced=False, batch=len(tasks),
+                  grid_K=1, L=L, n_dense_dets=total, wall_s=wall)
     t_det_now = _S_CACHE.get(key, (None, 0.0))[1]
     if t_det_now:
         NUMERIC_S_HISTORY.append({"wall_s": wall,
@@ -772,7 +787,6 @@ def solve_tf_interp_batch(tasks, keep: list[str],
     # produce a wrong answer -- it produces a fallback to the QQ grid.
     # Single-output solves only ("zp"/"bot"/"ratfun"): a batch's whole point
     # is the shared QQ-grid walk.
-    global LAST_SOLVE
     t_solve0 = time.perf_counter()
     grid_K = 1
     for g in grids:
@@ -901,16 +915,12 @@ def solve_tf_interp_batch(tasks, keep: list[str],
         den = sp.together(den.xreplace(back))
         nums = [sp.together(n_.xreplace(back)) for n_ in nums]
 
-    LAST_SOLVE = {
-        "backend": backend if not fell_back else "qq",
-        "backend_requested": backend,
-        "fell_back": fell_back, "fallback_reason": fb_reason,
-        "reduced": reduced_ok,
-        "batch": len(tasks),
-        "grid_K": grid_K, "L": L, "n_dense_dets": n_dense,
-        "wall_s": time.perf_counter() - t_solve0,
-        **binfo,
-    }
+    _record_solve(backend=backend if not fell_back else "qq",
+                  backend_requested=backend, fell_back=fell_back,
+                  fallback_reason=fb_reason, reduced=reduced_ok,
+                  batch=len(tasks), grid_K=grid_K, L=L,
+                  n_dense_dets=n_dense,
+                  wall_s=time.perf_counter() - t_solve0, **binfo)
     out = []
     for (system, _), num in zip(tasks, nums):
         expr = num / den

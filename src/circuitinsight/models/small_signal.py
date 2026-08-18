@@ -52,6 +52,81 @@ class ModelError(ValueError):
     pass
 
 
+def dc_nets(flat: FlatCircuit) -> frozenset:
+    """Nets pinned to AC ground by the DC sources: the ground nets plus
+    the closure over vsource terminals (an independent vsource is an AC
+    short). Whether one of those sources is later chosen as the INPUT is
+    the analyzer's concern -- it re-checks the closure without that
+    source before every solve (see Analyzer._guard_lumped_input)."""
+    nets = set(flat.ground)
+    grew = True
+    while grew:
+        grew = False
+        for d in flat.devices:
+            if d.device_type != "vsource":
+                continue
+            p, n = d.terminals["p"], d.terminals["n"]
+            if (p in nets) != (n in nets):
+                nets |= {p, n}
+                grew = True
+    return frozenset(nets)
+
+
+def lump_gmb_primitives(prims: list, acset: frozenset,
+                        info: dict | None = None,
+                        tag: str = "lumped") -> list:
+    """The exact gmb bundle (mos_model='lumped-gmb'), at the PRIMITIVE
+    level so it serves both callers: the expand-time pass (acset = the
+    DC-source nets) and the post-reduction pass, where ac_ground has
+    rewired the chosen nets to the ground node and the criterion holds
+    on the REDUCED circuit (`tag` marks those entries "lumped
+    (reduced)" -- their justification is structural, so the analyzer's
+    input guard rightly ignores them).
+
+    i_d = gm*v(g,s) + gmb*v(b,s): whenever gate and bulk sit at the
+    same AC potential the two controls coincide and ONE conductance
+    ghat = gm + gmb carries both -- no approximation. Two exact cases,
+    read off the stamps themselves (gm controls (g,s), gmbs (b,s)):
+
+    - bulk tied to source: v(b,s) == 0 identically, so the gmbs stamp
+      is inert and only clutters the symbol space -- drop it;
+    - gate and bulk on the same net, or both in `acset`: merge into one
+      'gmhat' stamp with the gm control nodes.
+
+    Everything else keeps its separate gmb -- a signal-driven gate with
+    a grounded bulk has v(g,s) != v(b,s) and lumping there would be a
+    lie the reference overlay would immediately expose."""
+    gms = {p.inst: p for p in prims if p.param == "gm"
+           and p.kind == "vccs"}
+    gmbs = {p.inst: p for p in prims if p.param == "gmbs"}
+    drop, merge = set(), {}
+    for inst, pb in gmbs.items():
+        b, s = pb.nodes[2], pb.nodes[3]
+        if b == s:
+            drop.add(inst)
+            if info is not None:
+                info[inst] = "dropped (bulk tied to source)"
+            continue
+        pg = gms.get(inst)
+        if pg is None:
+            continue
+        g = pg.nodes[2]
+        if g == b or (g in acset and b in acset):
+            merge[inst] = Primitive(inst, "gmhat", "vccs", pg.nodes,
+                                    pg.value + pb.value)
+            if info is not None:
+                info[inst] = tag
+    out = []
+    for p in prims:
+        if p.param == "gmbs" and (p.inst in drop or p.inst in merge):
+            continue
+        if p.param == "gm" and p.inst in merge:
+            out.append(merge[p.inst])
+            continue
+        out.append(p)
+    return out
+
+
 def _val(dev: FlatDevice, param: str, op: dict | None) -> float | None:
     if op is not None and param in op:
         return float(op[param])
@@ -203,20 +278,29 @@ def expand_device(dev: FlatDevice, op: dict | None = None,
 
 def expand_circuit(flat: FlatCircuit, op_data: dict[str, dict] | None = None,
                    cap_model: str = "lumped",
-                   bjt_model: str = "intrinsic") -> list[Primitive]:
+                   bjt_model: str = "intrinsic",
+                   mos_model: str = "separate",
+                   lump_info: dict | None = None) -> list[Primitive]:
     """Expand every device; op_data maps sim_name -> {param: value}.
     cap_model: 'lumped' (reciprocal 5-cap MOS model) or 'matrix' (exact
     charge-based trans-capacitance matrix). bjt_model: 'intrinsic'
     (hybrid-pi on the external terminals) or 'extrinsic' (adds rb/re/rc
-    series resistances via internal nodes)."""
+    series resistances via internal nodes). mos_model: 'separate'
+    (gm and gmbs stamped independently) or 'lumped-gmb' (the exact
+    per-device bundle, see _lump_gmb; `lump_info` collects
+    device -> what happened)."""
     if cap_model not in ("lumped", "matrix"):
         raise ModelError(f"unknown cap_model {cap_model!r}")
     if bjt_model not in ("intrinsic", "extrinsic"):
         raise ModelError(f"unknown bjt_model {bjt_model!r}")
+    if mos_model not in ("separate", "lumped-gmb"):
+        raise ModelError(f"unknown mos_model {mos_model!r}")
     gnd = flat.ground[0] if flat.ground else None
     prims: list[Primitive] = []
     for dev in flat.devices:
         op = op_data.get(dev.sim_name) if op_data else None
         prims.extend(expand_device(dev, op, cap_model, ground=gnd,
                                    bjt_model=bjt_model))
+    if mos_model == "lumped-gmb":
+        prims = lump_gmb_primitives(prims, dc_nets(flat), lump_info)
     return prims

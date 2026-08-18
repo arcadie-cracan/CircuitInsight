@@ -34,7 +34,8 @@ _FMT = 1
 
 
 def fingerprint(cin: str | Path, psf: str | Path, cap_model: str,
-                matches, circuit_state: str) -> str:
+                matches, circuit_state: str,
+                mos_model: str = "separate") -> str:
     """Identity of the run a solution belongs to. Content-based for the
     data files (copies and touched mtimes must not invalidate), plus
     everything that changes the reconstruction."""
@@ -51,6 +52,10 @@ def fingerprint(cin: str | Path, psf: str | Path, cap_model: str,
     h.update(repr(sorted(tuple(g) for g in matches)).encode())
     h.update(str(circuit_state).encode())
     h.update(str(ver).encode())
+    if mos_model != "separate":
+        # hashed only when non-default, so every state saved before this
+        # field existed keeps its fingerprint (and its stored solution)
+        h.update(str(mos_model).encode())
     return h.hexdigest()
 
 

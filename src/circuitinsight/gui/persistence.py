@@ -133,6 +133,7 @@ class PersistenceMixin:
         return {
             "cin": self._cin, "psf": self._psf,
             "cap_model": self.cap_model,
+            "mos_model": self.mos_model,
             "matches": [list(g) for g in self._match_groups],
             "circuit_state": getattr(c, "circuit_state", "as imported"),
             "in": self.in_combo.currentText(),
@@ -152,7 +153,8 @@ class PersistenceMixin:
             "fingerprint": st.fingerprint(
                 self._cin, self._psf, self.cap_model,
                 self._match_groups,
-                getattr(c, "circuit_state", "as imported")),
+                getattr(c, "circuit_state", "as imported"),
+                mos_model=self.mos_model),
         }
 
     def _autosave_state(self):
@@ -217,7 +219,8 @@ class PersistenceMixin:
             fp = st.fingerprint(
                 self._cin, self._psf, self.cap_model,
                 self._match_groups,
-                getattr(self.controller, "circuit_state", "as imported"))
+                getattr(self.controller, "circuit_state", "as imported"),
+                mos_model=self.mos_model)
             manifest, result, stale = st.load_state(path, fp)
         except Exception as exc:
             self._set_strip(f"state load failed: {exc}", "error")
@@ -286,6 +289,7 @@ class PersistenceMixin:
     def _save_cap_model(self):
         s = self._settings()
         s.setValue("cap_model", self.cap_model)
+        s.setValue("mos_model", self.mos_model)
         s.sync()
 
     def _alias_key(self) -> str:

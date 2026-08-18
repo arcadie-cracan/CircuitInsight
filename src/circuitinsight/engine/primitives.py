@@ -24,7 +24,7 @@ KINDS = {
 
 # kinds whose symbol is inherently positive (helps sympy cancel/simplify)
 POSITIVE_KINDS = {"r", "g", "c", "l"}
-POSITIVE_PARAMS = {"gm", "gmbs", "gds", "gpi", "go"}
+POSITIVE_PARAMS = {"gm", "gmbs", "gmhat", "gds", "gpi", "go"}
 
 
 @dataclass(frozen=True)

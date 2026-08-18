@@ -1,8 +1,9 @@
 """Cadence-like styling, so the app sits beside Virtuoso instead of shouting.
 
 Virtuoso is a Qt application too, so blending in is a palette + a compact font +
-a few widget rules -- not a bitmap skin. Everything lives here and nothing else
-in the GUI hard-codes a colour.
+a few widget rules -- not a bitmap skin. The chrome palette, the severity
+roles and the plot-overlay cycle live here; rangeslider/launch/summaryweb
+keep small self-contained palettes of their own.
 
 Switchable on purpose (`circuitinsight-gui --theme native`): launched from the
 CIW you want it to look like part of the toolchain, but a designer running it
@@ -33,6 +34,25 @@ MENU_BG = "#fdfdfd"
 MENU_BORDER = "#5a5a5a"
 MENU_SELECT = "#9a9a9a"
 MENU_SEP = "#c4c4c4"
+
+# ---- semantic roles shared by the main window ---------------------------
+MUTED = "#555"                       # secondary labels, hints
+GOOD = "#1e5c2f"                     # done / within budget (quiet green)
+BAD = "#8a1c12"                      # over budget / failed
+WARN = "#7a5200"                     # close to the limit
+INFO = "#1a466b"                     # the next step, info strips
+PENDING = "#888888"                  # not yet reached
+#: message-strip severities: (background tint, text)
+SEVERITY = {"info": ("#eef4fa", INFO), "ok": ("#eaf6ec", GOOD),
+            "warn": ("#fdf3e0", WARN), "error": ("#fbe9e7", BAD)}
+WARN_TINT = "#f0f4f8"                # value-conflict row tint
+TOL_BAND = "#c9962a"                 # tolerance-tube fill (with alpha)
+BAND_SPAN = "#4a78a8"                # selected-band shading (with alpha)
+#: Okabe-Ito plot cycle -- the SAME order as view._OVERLAY_COLORS, which
+#: must stay Qt-free and therefore keeps its own copy of these values
+OVERLAY = ("#D55E00", "#009E73", "#CC79A7", "#E69F00")
+BLUE, GREEN, PINK, ORANGE = "#0072B2", "#009E73", "#CC79A7", "#E69F00"
+VERMILION = "#D55E00"
 
 # Fusion + the palette above render every standard widget the way Virtuoso does
 # -- buttons with Fusion's subtle gradient, native tabs, framed inputs -- so the

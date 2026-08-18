@@ -364,6 +364,63 @@ def _lift(residue_stacks: list[np.ndarray], primes: list[int],
 _MAX_PRIMES = 256
 
 
+def _crt_rounds(worker, argfn, run, n_stacks, *, start_primes, step_primes,
+                max_primes, progress, primes, stacks, error_cls):
+    """THE prime-round driver, shared by all three mod-p backends (it
+    was copy-pasted into each, and the copies had already begun to
+    drift). Add primes in rounds until every stack's rational lift
+    reconstructs, then verify against ONE extra confirming prime -- the
+    lifted rationals' residues must match that prime's values; on
+    mismatch the confirming prime simply joins the stack and the rounds
+    continue. The caller's exact probe self-check remains the final
+    authority.
+
+    worker: the picklable per-prime function; run(worker, [argfn(q)..])
+    yields (q, *residues) tuples with residues[0] None marking an
+    unlucky (dropped) prime. `primes`/`stacks` may arrive pre-seeded
+    with a support prime's residues. Returns (lifts, primes_used)."""
+    hard = [[] for _ in range(n_stacks)]     # coeffs needing most primes
+    state = [dict() for _ in range(n_stacks)]  # incremental CRT state
+    want = start_primes
+    while True:
+        new = [q for q in _primes(want) if q not in primes]
+        results = list(run(worker, [argfn(q) for q in new]))
+        for q, *res in results:
+            if res[0] is None:
+                continue                      # unlucky prime, dropped
+            primes.append(q)
+            for stack, r in zip(stacks, res):
+                stack.append(r)
+        if progress is not None:
+            # never report done == total: the caller reads that as "the
+            # evaluation is finished", and more prime rounds may follow
+            progress(len(primes), want + step_primes)
+        if len(primes) >= 2:
+            lifts = []
+            for k in range(n_stacks):
+                lf = _lift(stacks[k], primes, hard=hard[k], state=state[k])
+                if lf is None:
+                    lifts = None
+                    break
+                lifts.append(lf)
+            if lifts is not None:
+                # one confirming prime instead of a whole agreeing round
+                want += 1
+                (q, *res), = list(run(worker,
+                                      [argfn(_primes(want)[-1])]))
+                if res[0] is not None:
+                    if all(_confirm(lf, r, q)
+                           for lf, r in zip(lifts, res)):
+                        return lifts, len(primes) + 1
+                    primes.append(q)          # spurious lift: keep going
+                    for stack, r in zip(stacks, res):
+                        stack.append(r)
+        if want >= max_primes:
+            raise error_cls(
+                f"no stable rational reconstruction after {want} primes")
+        want = min(max_primes, want + step_primes)
+
+
 # ------------------------------------------------------------- entry point
 def solve_tensors(pay_den: dict, pay_num: dict, grids_pairs: list,
                   s_pairs: list, vinvs: list, progress=None, map_impl=None,
@@ -391,54 +448,15 @@ def solve_tensors(pay_den: dict, pay_num: dict, grids_pairs: list,
         # W-worker pool, so never leave workers idle between lifts
         start_primes = max(start_primes, batch)
         step_primes = max(step_primes, batch)
-    primes: list[int] = []
-    stacks_d: list[np.ndarray] = []
-    stacks_n: list[np.ndarray] = []
-    hard_d: list[int] = []           # coefficients that needed the most primes
-    hard_n: list[int] = []
-    st_d: dict = {}                  # incremental CRT state, one per tensor
-    st_n: dict = {}
-    want = start_primes
-    while True:
-        new = [q for q in _primes(want) if q not in primes]
-        results = list(run(_prime_worker,
-                           [(pay_den, pay_num, axes_num, vinvs, q)
-                            for q in new]))
-        for q, td, tn in results:
-            if td is None:
-                continue                          # unlucky prime, dropped
-            primes.append(q)
-            stacks_d.append(td)
-            stacks_n.append(tn)
-        if progress is not None:
-            # never report done == total: the caller reads that as "the
-            # evaluation is finished", and more prime rounds may follow
-            progress(len(primes), want + step_primes)
-        if len(primes) >= 2:
-            lift_d = _lift(stacks_d, primes, hard=hard_d, state=st_d)
-            lift_n = (_lift(stacks_n, primes, hard=hard_n, state=st_n)
-                      if lift_d is not None else None)
-            if lift_n is not None:
-                # one confirming prime instead of a whole agreeing round
-                want += 1
-                (q, td, tn), = list(run(
-                    _prime_worker,
-                    [(pay_den, pay_num, axes_num, vinvs,
-                      _primes(want)[-1])]))
-                if td is not None:
-                    if (_confirm(lift_d, td, q)
-                            and _confirm(lift_n, tn, q)):
-                        if info is not None:
-                            info.update(primes=len(primes) + 1)
-                        return (_to_dict(lift_d, shape),
-                                _to_dict(lift_n, shape))
-                    primes.append(q)              # spurious lift: keep going
-                    stacks_d.append(td)
-                    stacks_n.append(tn)
-        if want >= max_primes:
-            raise ZpBatchError(
-                f"no stable rational reconstruction after {want} primes")
-        want = min(max_primes, want + step_primes)
+    (lift_d, lift_n), used = _crt_rounds(
+        _prime_worker,
+        lambda q: (pay_den, pay_num, axes_num, vinvs, q),
+        run, 2, start_primes=start_primes, step_primes=step_primes,
+        max_primes=max_primes, progress=progress, primes=[],
+        stacks=[[], []], error_cls=ZpBatchError)
+    if info is not None:
+        info.update(primes=used)
+    return _to_dict(lift_d, shape), _to_dict(lift_n, shape)
 
 
 def _confirm(lift: dict, tens: np.ndarray, q: int) -> bool:

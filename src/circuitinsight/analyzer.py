@@ -33,9 +33,15 @@ class PortEquivalent:
 
 class Analyzer:
     def __init__(self, flat: FlatCircuit, op_data: dict[str, dict] | None = None,
-                 cap_model: str = "lumped", bjt_model: str = "intrinsic"):
+                 cap_model: str = "lumped", bjt_model: str = "intrinsic",
+                 mos_model: str = "separate"):
         self.flat = flat
-        self.primitives = expand_circuit(flat, op_data, cap_model, bjt_model)
+        self.mos_model = mos_model
+        #: device -> "lumped" | "dropped (...)" when mos_model bundles gmb
+        self.lumped_gmb: dict[str, str] = {}
+        self.primitives = expand_circuit(flat, op_data, cap_model, bjt_model,
+                                         mos_model=mos_model,
+                                         lump_info=self.lumped_gmb)
         self._alias: dict[str, str] = {}
 
     # -------------------------------------------------- constructors
@@ -43,7 +49,8 @@ class Analyzer:
     def from_cin(cls, source: str | Path | dict | CinDoc,
                  op_data: dict[str, dict] | None = None,
                  cap_model: str = "lumped",
-                 bjt_model: str = "intrinsic") -> "Analyzer":
+                 bjt_model: str = "intrinsic",
+                 mos_model: str = "separate") -> "Analyzer":
         if isinstance(source, CinDoc):
             doc = source
         elif isinstance(source, dict):
@@ -51,7 +58,7 @@ class Analyzer:
         else:
             doc = load_cin(source)
         return cls(flatten(doc), op_data, cap_model=cap_model,
-                   bjt_model=bjt_model)
+                   bjt_model=bjt_model, mos_model=mos_model)
 
     # -------------------------------------------------- symbol matching
     def match(self, *instances: str) -> None:
@@ -68,7 +75,38 @@ class Analyzer:
             self._alias[inst] = target
 
     # -------------------------------------------------- analyses
+    def _guard_lumped_input(self, inp: str | None) -> None:
+        """The ĝ bundle (mos_model='lumped-gmb') is exact only while the
+        justifying gate/bulk nets stay at AC ground. Choosing one of the
+        DC sources of that closure as the INPUT un-grounds them -- so
+        re-derive the closure without the input source and refuse the
+        solve if any lumped device loses its justification, instead of
+        silently returning a wrong answer."""
+        lumped = [n for n, how in self.lumped_gmb.items() if how == "lumped"]
+        if not lumped or inp is None:
+            return
+        from dataclasses import replace
+
+        from .models.small_signal import dc_nets
+
+        flat = replace(self.flat, devices=tuple(
+            d for d in self.flat.devices if d.name != inp))
+        dcn = dc_nets(flat)
+        bad = []
+        for dev in self.flat.devices:
+            if dev.name not in lumped:
+                continue
+            t = dev.terminals
+            if t["g"] != t["b"] and not (t["g"] in dcn and t["b"] in dcn):
+                bad.append(dev.name)
+        if bad:
+            raise MnaError(
+                f"input {inp!r} drives a net that justified the "
+                f"ĝm = gm+gmb bundle on {', '.join(sorted(bad))}; "
+                f"switch mos_model back to 'separate' for this input")
+
     def system(self, inp: str) -> MnaSystem:
+        self._guard_lumped_input(inp)
         return build_mna(self.primitives, self.flat.ground, inp, self._alias)
 
     def frequency_response(self, inp: str, out: str, freqs) -> "np.ndarray":

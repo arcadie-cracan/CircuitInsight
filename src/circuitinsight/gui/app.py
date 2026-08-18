@@ -26,6 +26,9 @@ from matplotlib.figure import Figure
 
 from ..session import SessionController
 from . import devtree, exprweb, summaryweb, theme, view
+from .benches import (CompensateBenchMixin, GFTBenchMixin,
+                      ModesBenchMixin, ReduceBenchMixin,
+                      WhatIfMixin)
 from .jobs import JobRunnerMixin, _Cancelled, _Worker
 from .persistence import PersistenceMixin
 from .report import ReportMixin
@@ -54,8 +57,10 @@ _TOOLS = (
 )
 
 
-class MainWindow(JobRunnerMixin, PersistenceMixin,
-                 ReportMixin, QMainWindow):
+class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
+                 WhatIfMixin, ReduceBenchMixin,
+                 CompensateBenchMixin, ModesBenchMixin,
+                 GFTBenchMixin, QMainWindow):
     #: tests point this at a temp .ini so they never touch the registry
     settings_path: str | None = None
 
@@ -89,6 +94,8 @@ class MainWindow(JobRunnerMixin, PersistenceMixin,
         # cap model persists across sessions; read before _build so the
         # Model-menu check reflects it
         self.cap_model = str(self._settings().value("cap_model", "matrix"))
+        self.mos_model = str(self._settings().value("mos_model",
+                                                    "separate"))
         self._build()
         self._restore_settings()
 
@@ -347,7 +354,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin,
         # the live order certificate: what the band DEMANDS at the set
         # tolerance, before any solve (Loewner rank, ~50 ms, debounced)
         self.cert_lbl = QLabel("")
-        self.cert_lbl.setStyleSheet("color: #555; font-size: 8pt;")
+        self.cert_lbl.setStyleSheet(f"color: {theme.MUTED}; font-size: 8pt;")
         self.cert_lbl.setAlignment(Qt.AlignHCenter)
         self.cert_lbl.setVisible(False)
         bl.addWidget(self.cert_lbl)
@@ -628,6 +635,21 @@ class MainWindow(JobRunnerMixin, PersistenceMixin,
             "drifts up to ~1 dB at 10 GHz (5T ~28 dB; follower Zout 0.70 dB "
             "vs matrix 0.004 dB near its peak). Re-opens the run.")
         self.a_matrix_caps.toggled.connect(self._on_cap_model_toggled)
+        # exact per-device gmb bundle: where gate and bulk sit at the
+        # same AC potential, one hat symbol carries gm+gmb; a
+        # bulk-tied-to-source gmbs is dropped as inert. Re-opens the run.
+        self.a_lump_gmb = m_dev.addAction("Lump ĝm = gm + gmb")
+        self.a_lump_gmb.setCheckable(True)
+        self.a_lump_gmb.setChecked(getattr(self, "mos_model", "separate")
+                                   == "lumped-gmb")
+        self.a_lump_gmb.setToolTip(
+            "EXACT per-device bundle: devices whose gate and bulk sit at "
+            "the same AC potential (same net, or both held by DC "
+            "sources) get one ĝm = gm + gmb symbol; a "
+            "bulk-tied-to-source gmbs is dropped as inert. Devices with "
+            "a signal-driven gate keep their separate gmb. Re-opens "
+            "the run.")
+        self.a_lump_gmb.toggled.connect(self._on_mos_model_toggled)
 
         m_help = mb.addMenu("&Help")
         m_help.setTearOffEnabled(True)
@@ -762,7 +784,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin,
         # Off by default -- it costs a graph scan plus numeric solves.
         self.split_lbl = QLabel("")
         self.split_lbl.setWordWrap(True)
-        self.split_lbl.setStyleSheet("color: #555;")
+        self.split_lbl.setStyleSheet(f"color: {theme.MUTED};")
         # a wrapped label's sizeHint is WIDE: left unchecked it inflates the
         # keep pane's minimum and flips the main splitter's proportions
         # (caught by test_splitter_gives_plots_the_width). Let it take
@@ -840,14 +862,14 @@ class MainWindow(JobRunnerMixin, PersistenceMixin,
         current_seen = False
         for i, (label, action, done) in enumerate(self._crumb_steps(), 1):
             if done:
-                color, weight = "#1e5c2f", "normal"      # done: quiet green
+                color, weight = theme.GOOD, "normal"     # done: quiet green
                 mark = "✓ "
             elif not current_seen:
-                color, weight = "#1a466b", "bold"        # the next step
+                color, weight = theme.INFO, "bold"       # the next step
                 mark = ""
                 current_seen = True
             else:
-                color, weight = "#888888", "normal"      # not yet
+                color, weight = theme.PENDING, "normal"  # not yet
                 mark = ""
             parts.append(
                 f'<a href="{action}" style="color:{color}; '
@@ -956,7 +978,8 @@ class MainWindow(JobRunnerMixin, PersistenceMixin,
             return
         best = adv.cuts[0] if adv.cuts else None
         self.split_lbl.setStyleSheet(
-            "color: #1e5c2f;" if best and best["pays"] else "color: #555;")
+            f"color: {theme.GOOD};" if best and best["pays"]
+            else f"color: {theme.MUTED};")
         self.split_lbl.setText("split: " + adv.verdict())
 
     def _apply_keep_filter(self, text: str):
@@ -1014,10 +1037,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin,
             self._showing_from_history = False
 
     def _set_strip(self, text: str, severity: str = "info"):
-        colors = {"info": ("#eef4fa", "#1a466b"),
-                  "ok": ("#eaf6ec", "#1e5c2f"),
-                  "warn": ("#fdf3e0", "#7a5200"),
-                  "error": ("#fbe9e7", "#8a1c12")}
+        colors = theme.SEVERITY
         bg, fg = colors.get(severity, colors["info"])
         self.msg_strip.setStyleSheet(
             f"QLabel {{ background: {bg}; color: {fg}; padding: 3px 8px;"
@@ -1194,1111 +1214,6 @@ class MainWindow(JobRunnerMixin, PersistenceMixin,
             sev = "warn"
         self._set_strip("advisor: " + verdict, sev)
 
-    # ------------------------------------------------------------- what-if
-    def _whatif_page(self):
-        from PySide6.QtWidgets import QGridLayout
-
-        page = QWidget()
-        v = QVBoxLayout(page)
-        self._wf_hint = QLabel(
-            "Solve with a keep set to get sliders: each kept symbol can be "
-            "swept ×0.25…"
-            "×4 while the rest of the circuit stays "
-            "EXACT at the operating point.")
-        self._wf_hint.setWordWrap(True)
-        self._wf_hint_default = self._wf_hint.text()
-        v.addWidget(self._wf_hint)
-        self._wf_grid_host = QWidget()
-        self._wf_grid = QGridLayout(self._wf_grid_host)
-        self._wf_grid.setContentsMargins(0, 0, 0, 0)
-        v.addWidget(self._wf_grid_host)
-        self._wf_pm = QLabel("")
-        v.addWidget(self._wf_pm)
-        v.addStretch(1)
-        self._wf_sliders = {}
-        self._wf_eval = None
-        self._whatif_tab = page
-        return page
-
-    def _rebuild_whatif(self, result):
-        from PySide6.QtWidgets import QSlider
-
-        while self._wf_grid.count():
-            item = self._wf_grid.takeAt(0)
-            if item.widget() is not None:
-                item.widget().deleteLater()
-        self._wf_sliders = {}
-        self._wf_pm.setText("")
-        self._wf_hint.setText(self._wf_hint_default)
-        if getattr(result, "reduced_order", False):
-            # a lowest-order model is certified for ONE band at ONE
-            # operating point; a slider excursion moves the operating
-            # point, and the dropped dynamics that would react are no
-            # longer in the model to react. Refusing with the reason
-            # teaches the contract; the fix is one form-selector click.
-            self._wf_hint.setText(
-                "What-if is disabled for lowest-order results: moving a "
-                "parameter can silently leave the band and operating "
-                "point the reduction was certified for — the dropped "
-                "poles cannot respond. Solve as Simplified · full order "
-                "to explore parameters.")
-            self._wf_hint.setVisible(True)
-            self._wf_eval = None
-            return
-        wf = view.whatif_fn(result)
-        self._wf_eval = wf
-        self._wf_hint.setVisible(wf is None)
-        if wf is None:
-            return
-        names, _ = wf
-        for row, name in enumerate(names):
-            lbl = QLabel(name)
-            sl = QSlider(Qt.Horizontal)
-            sl.setRange(0, 100)
-            sl.setValue(50)
-            sl.valueChanged.connect(self._on_whatif_changed)
-            val = QLabel("×1.00")
-            self._wf_grid.addWidget(lbl, row, 0)
-            self._wf_grid.addWidget(sl, row, 1)
-            self._wf_grid.addWidget(val, row, 2)
-            self._wf_sliders[name] = (sl, val)
-
-    def whatif_factors(self) -> dict:
-        out = {}
-        for name, (sl, _val) in self._wf_sliders.items():
-            out[name] = 4.0 ** ((sl.value() - 50) / 50.0)
-        return out
-
-    def _on_whatif_changed(self, _v=None):
-        if self._wf_eval is None or self.result is None:
-            return
-        import numpy as np
-
-        factors = self.whatif_factors()
-        for name, (sl, val) in self._wf_sliders.items():
-            val.setText(f"×{factors[name]:.2f}")
-        names, ev = self._wf_eval
-        f = np.asarray(self.result.freqs, dtype=float)
-        h = ev(f, factors)
-        view.bode_figure(self.result, self.canvas.figure)
-        ax1, ax2 = self.canvas.figure.axes[:2]
-        ax1.semilogx(f, 20 * np.log10(np.abs(h)), color="#E69F00",
-                     lw=1.3, ls="--", label="what-if")
-        ax2.semilogx(f, np.degrees(np.unwrap(np.angle(h))),
-                     color="#E69F00", lw=1.3, ls="--")
-        view.figure_legend(self.canvas.figure, ax1)
-        theme.style_figure(self.canvas.figure)
-        self.canvas.draw_idle()
-        if self.result.out.startswith("T@"):
-            from ..analysis.sensitivity import loop_margins
-            pm, fpm, gm, _ = loop_margins(f, h)
-            self._wf_pm.setText(
-                f"what-if margins:  PM {pm:.1f}°"
-                f" @ {view.eng(fpm, 'Hz')}" +
-                (f",  GM {gm:.1f} dB" if gm is not None else "")
-                if pm is not None else "what-if: no unity crossing")
-
-    # --------------------------------------------------------- compensation
-    def _reduce_page(self):
-        """The Reduce-circuit bench (gui-ux-plan.md U-C): scan the bias
-        nodes, tick a set, watch the measured joint cost and the exact
-        follow-on (dead sources, lumping) update, then Apply — the reduced
-        circuit becomes THE working circuit for every bench, revertibly.
-        Grounding is the only approximation in the chain; everything shown
-        after it is exact for the rewritten circuit."""
-        page = QWidget()
-        v = QVBoxLayout(page)
-        row = QHBoxLayout()
-        self.removal_btn = QPushButton("Scan removals")
-        self.removal_btn.setToolTip(
-            "Which explicit elements can simply be DELETED: every netlist "
-            "passive priced by the exact response shift its removal would "
-            "cause. Advisory only -- edit the schematic to act on it.")
-        self.removal_btn.clicked.connect(self.run_removal_scan)
-        scanb = QPushButton("Scan AC grounds")
-        scanb.setToolTip(
-            "Rank the mirror/bias nodes by the EXACT error grounding each "
-            "would cause in the current in→out transfer (one matrix inverse "
-            "per frequency prices every node)")
-        scanb.clicked.connect(self.run_acg_scan)
-        row.addWidget(scanb)
-        row.addWidget(self.removal_btn)
-        row.addWidget(QLabel("budget:"))
-        self.acg_budget = self._spin(0.1, 0.001, 3.0, 0.05, " dB")
-        self.acg_budget.setDecimals(3)
-        row.addWidget(self.acg_budget)
-        self.acg_joint_lbl = QLabel("")
-        self.acg_joint_lbl.setSizePolicy(QSizePolicy.Ignored,
-                                         QSizePolicy.Preferred)
-        row.addWidget(self.acg_joint_lbl, 1)
-        v.addLayout(row)
-
-        self.acg_tbl = QTableWidget(0, 5)
-        self.acg_tbl.setHorizontalHeaderLabels(
-            ["node", "cost", "phase", "kind", "gates"])
-        self.acg_tbl.horizontalHeader().setStretchLastSection(True)
-        self.acg_tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.acg_tbl.itemChanged.connect(self._on_acg_toggled)
-        v.addWidget(self.acg_tbl, 2)
-
-        self.acg_preview = QTextEdit()
-        self.acg_preview.setReadOnly(True)
-        self.acg_preview.setPlaceholderText(
-            "Tick nodes above to see what grounding them unlocks: the "
-            "controlled sources that die (exact) and the passives that "
-            "lump into C_node / R_node symbols (exact).")
-        v.addWidget(self.acg_preview, 1)
-
-        arow = QHBoxLayout()
-        self.acg_apply = QPushButton("Apply reduction")
-        self.acg_apply.setEnabled(False)
-        self.acg_apply.setToolTip(
-            "Rewrite the working circuit: ground the ticked nodes, remove "
-            "the dead sources, lump. Measures the true end-to-end cost and "
-            "banners it. Every bench then analyses the reduced circuit.")
-        self.acg_apply.clicked.connect(self.apply_reduction)
-        arow.addWidget(self.acg_apply)
-        self.acg_revert = QPushButton("Revert to as-imported")
-        self.acg_revert.setEnabled(False)
-        self.acg_revert.clicked.connect(self.revert_reduction)
-        arow.addWidget(self.acg_revert)
-        self.red_banner = QLabel("circuit: as imported")
-        self.red_banner.setSizePolicy(QSizePolicy.Ignored,
-                                      QSizePolicy.Preferred)
-        arow.addWidget(self.red_banner, 1)
-        v.addLayout(arow)
-        self._acg_report = None
-        return page
-
-    def explain_per_numeral(self):
-        """Analysis menu: the deep pass — every collapsed numeral of the
-        current expression resolved individually. Needs the result's
-        symbolic keep set (the numerals ARE the collapsed complements of
-        those letters)."""
-        if self.controller is None or self.result is None:
-            return
-        keep = self.result.keep if isinstance(self.result.keep, list) else []
-        if not keep:
-            self._set_strip("per-numeral attribution needs a symbolic "
-                            "keep set — solve with kept letters first",
-                            "info")
-            return
-        inp, out = self.result.inp, self.result.out
-
-        def run(cb):
-            # the float64 circle kernel (~20x): slots and values stay
-            # exact from the cached solve; unconfirmed slots arrive
-            # flagged approx and render with a leading ≈. Runs FIRST so
-            # its progress (which includes a hidden plain solve when the
-            # display is a lowest-order form) starts moving immediately
-            deep = self.controller.explain_per_numeral(
-                inp, out, keep=keep, progress=cb, fast=True)
-            # the coefficient-level stories ride along (seconds next to
-            # the deep sweep): they fill the A0/p1/z1 line hovers, which
-            # are ratio attributions over whole coefficients -- without
-            # them the formula-line numerals kept showing the run-me
-            # prompt even after the deep pass
-            self.controller.explain_numerals(inp, out, keep=keep)
-            return deep
-
-        self._launch(
-            run,
-            f"resolving each numeral of {inp} → {out} (hybrid-grid "
-            f"derivative sweep) …",
-            on_done=self._on_explain_deep_done, est_s=None)
-
-    def _shown_numerals(self) -> dict:
-        """(part, k) -> the collapsed numeral the expression displays for
-        that coefficient, when it has exactly one — the bridge from the
-        numbers on screen to their attributions."""
-        shown = {}
-        try:
-            import sympy as sp
-
-            from ..units import eng
-
-            npoly, dpoly = self.result.tf.num_den
-            for part, poly in (("num", npoly), ("den", dpoly)):
-                for powers, coeff in poly.as_dict().items():
-                    fl = list(view.round_expr(coeff).atoms(sp.Float))
-                    if len(fl) == 1:
-                        shown[(part, powers[0])] = eng(float(fl[0]), sig=4)
-        except Exception:
-            pass
-        return shown
-
-    def _on_explain_deep_done(self, stories):
-        self._tick.stop()
-        self._t0 = None
-        self.progress.hide()
-        self.cancel_btn.hide()
-        self._job_finished()
-        lines = []
-        # the coefficient stories were computed alongside the deep pass;
-        # lead with the DISPLAYED numerals before the full per-numeral list
-        if self.controller is not None and self.result is not None:
-            rkeep = (self.result.keep
-                     if isinstance(self.result.keep, list) else ())
-            coarse = self.controller.cached_numerals(
-                self.result.inp, self.result.out, keep=rkeep)
-            if coarse:
-                from ..analysis.explain import ratio_lines
-                lines += ["ratio attribution — the DISPLAYED numerals "
-                          "(shares subtract in a ratio):"]
-                lines += ["  " + ln
-                          for ln in ratio_lines(
-                              coarse, shown=self._shown_numerals())]
-                lines += [""]
-        lines += ["per-numeral attribution (each collapsed numeral of the "
-                  "expression, kept letters excluded):"]
-        lines += ["  " + st.describe() for st in stories
-                  if st.contributors]
-        self.summary.setPlainText(self.summary.toPlainText()
-                                  + "\n\n" + "\n".join(lines))
-        self.tabs.setCurrentIndex(0)             # Summary
-        self._render_expr()                      # fine hovers go live
-        self.statusBar().showMessage(
-            f"numerals resolved: {len(stories)} (see Summary — and hover "
-            f"the numerals in the Expression tab)")
-
-    def run_removal_scan(self):
-        if self.controller is None:
-            return
-        inp, out = self._io()
-        budget = self.acg_budget.value()
-        self._launch(
-            lambda cb: self.controller.scan_removals(inp, out,
-                                                     budget_db=budget),
-            f"pricing element removals for {inp} → {out} …",
-            on_done=self._on_removal_scan_done, est_s=None)
-
-    def _on_removal_scan_done(self, rep):
-        self._tick.stop()
-        self._t0 = None
-        self.progress.hide()
-        self.cancel_btn.hide()
-        self._job_finished()
-        self.acg_preview.setPlainText(rep.describe())
-        if rep.recommended:
-            self.statusBar().showMessage(
-                f"removal scan: {', '.join(rep.recommended)} deletable "
-                f"together at {rep.joint_db:.3g} dB")
-        else:
-            self.statusBar().showMessage(
-                "removal scan: every element earns its place")
-
-    def attribute_poles(self):
-        """Analysis menu: which element establishes which pole, verified.
-        On demand rather than per solve -- it costs a few seconds."""
-        if self.controller is None:
-            return
-        inp, _ = self._io()
-        self._launch(
-            lambda cb: self.controller.pole_attribution(inp),
-            f"attributing poles of {inp}'s network …",
-            on_done=self._on_attribution_done, est_s=None)
-
-    def _on_attribution_done(self, atts):
-        self._tick.stop()
-        self._t0 = None
-        self.progress.hide()
-        self.cancel_btn.hide()
-        self._job_finished()
-        lines = ["pole attribution (nudge-verified):"]
-        lines += ["  " + a.describe() for a in atts]
-        self.summary.setPlainText(self.summary.toPlainText()
-                                  + "\n\n" + "\n".join(lines))
-        self.tabs.setCurrentIndex(0)             # Summary
-        self.statusBar().showMessage(
-            f"poles attributed: {len(atts)} (see Summary)")
-
-    def explain_numbers(self):
-        """Analysis menu: rank the collapsed parameters behind each
-        numeral of H(s). The current keep-set is excluded — those are
-        already letters in the expression."""
-        if self.controller is None:
-            return
-        inp, out = self._io()
-        keep = self.checked_keep()
-        self._launch(
-            lambda cb: self.controller.explain_numerals(inp, out, keep=keep,
-                                                        progress=cb),
-            f"explaining the numbers of {inp} → {out} …",
-            on_done=self._on_explain_done, est_s=None)
-
-    def _on_explain_done(self, stories):
-        self._tick.stop()
-        self._t0 = None
-        self.progress.hide()
-        self.cancel_btn.hide()
-        self._job_finished()
-        from ..analysis.explain import ratio_lines
-        lines = ["the numbers, explained (kept symbols excluded):",
-                 "ratio attribution — what shapes each DISPLAYED numeral "
-                 "(shares subtract in a ratio, so the common gm chain "
-                 "cancels):"]
-        lines += ["  " + ln
-                  for ln in ratio_lines(stories,
-                                        shown=self._shown_numerals())]
-        lines += ["per-coefficient shares (the raw material):"]
-        lines += ["  " + st.describe() for st in stories]
-        self.summary.setPlainText(self.summary.toPlainText()
-                                  + "\n\n" + "\n".join(lines))
-        self.tabs.setCurrentIndex(0)             # Summary
-        self._render_expr()                      # numeral hovers go live
-        self.statusBar().showMessage(
-            f"numbers explained: {len(stories)} coefficients (see Summary "
-            f"— and hover the numerals in the Expression tab)")
-
-    def run_acg_scan(self):
-        if self.controller is None:
-            return
-        inp, out = self._io()
-        budget = self.acg_budget.value()
-        self._launch(
-            lambda cb: self.controller.scan_ac_grounds(inp, out,
-                                                       budget_db=budget),
-            f"scanning AC-ground candidates for {inp} → {out} …",
-            on_done=self._on_acg_scan_done, est_s=None)
-
-    def _on_acg_scan_done(self, rep):
-        self._tick.stop()
-        self._t0 = None
-        self.progress.hide()
-        self.cancel_btn.hide()
-        self._job_finished()
-        self._acg_report = rep
-        recommended = set(rep.recommended)
-        self._filling = True
-        try:
-            self.acg_tbl.setRowCount(len(rep.candidates))
-            ro = Qt.ItemIsEnabled | Qt.ItemIsSelectable
-            for i, c in enumerate(rep.candidates):
-                node_it = QTableWidgetItem(c.node)
-                node_it.setFlags(ro | Qt.ItemIsUserCheckable)
-                node_it.setCheckState(Qt.Checked if c.node in recommended
-                                      else Qt.Unchecked)
-                cost_it = QTableWidgetItem(f"{c.worst_db:.3g} dB")
-                deg_it = QTableWidgetItem(f"{c.worst_deg:.3g}°")
-                kind_it = QTableWidgetItem(c.kind)
-                gates_it = QTableWidgetItem(", ".join(c.controls[:6]))
-                if not c.within_budget:
-                    from PySide6.QtGui import QBrush, QColor
-                    cost_it.setForeground(QBrush(QColor("#8a1c12")))
-                for col, it in enumerate((node_it, cost_it, deg_it,
-                                          kind_it, gates_it)):
-                    if col:
-                        it.setFlags(ro)
-                    self.acg_tbl.setItem(i, col, it)
-        finally:
-            self._filling = False
-        if self._acg_pending:
-            # a Nets-tree wish arrived before the scan: tick it now that
-            # it is priced (unknown nets simply are not candidates)
-            self._filling = True
-            try:
-                for i in range(self.acg_tbl.rowCount()):
-                    it = self.acg_tbl.item(i, 0)
-                    if it is not None and it.text() in self._acg_pending:
-                        it.setCheckState(Qt.Checked)
-            finally:
-                self._filling = False
-            self._acg_pending.clear()
-        if rep.recommended:
-            self.statusBar().showMessage(
-                f"scan: ground {', '.join(rep.recommended)} together for "
-                f"{rep.joint_db:.3g} dB")
-        else:
-            self.statusBar().showMessage(
-                "scan: no node is groundable within the budget")
-        self._refresh_acg_choice()
-
-    # ------------------------------------------------------------ nets tree
-    def _input_net(self) -> str | None:
-        """The net the input source drives: the source instance's first
-        non-ground terminal."""
-        if self.controller is None:
-            return None
-        inp = self.in_combo.currentText()
-        gnd = set(self.controller.ground) | {"0"}
-        for d in self.controller.devices:
-            if d.name == inp:
-                for net in d.terminals.values():
-                    if net not in gnd:
-                        return net
-        return None
-
-    def _refresh_net_decor(self):
-        """The Nets tree tells the truth about the working circuit: ⏚ on
-        the nets the active reduction AC-grounded, arrows on the input
-        source's net and the output net."""
-        if self.controller is None or not hasattr(self, "nets_tree"):
-            return
-        summ = self.controller.reduction_summary()
-        self.nets_tree.set_decorations(
-            acg=(summ or {}).get("nodes", ()),
-            inp=self._input_net(), out=self.out_combo.currentText())
-
-    def _set_output_net(self, net: str):
-        self.out_combo.setCurrentText(net)
-        self._refresh_net_decor()
-        self.statusBar().showMessage(f"output: {net}")
-
-    def _acg_from_net(self, net: str):
-        """Route an AC-ground request from the Nets tree through the
-        measured Reduce flow: never ground silently — the scan prices
-        the node, the user applies."""
-        if self.controller is None:
-            return
-        self.mode_combo.setCurrentText("Reduce circuit")
-        for i in range(self.acg_tbl.rowCount()):
-            it = self.acg_tbl.item(i, 0)
-            if it is not None and it.text() == net:
-                it.setCheckState(Qt.Checked)
-                self.statusBar().showMessage(
-                    f"{net} ticked — Apply reduction to ground it "
-                    f"(cost shown above)")
-                return
-        # not scanned yet: remember the wish, scan, tick when priced
-        self._acg_pending.add(net)
-        self.run_acg_scan()
-
-    def _goto_instance(self, name: str):
-        """A connection in the Nets tree jumps to its instance."""
-        it = self.devices.item_for(name)
-        if it is None:
-            return
-        self.dev_tabs.setCurrentWidget(self.devices)
-        self.devices.setCurrentItem(it)
-        self.devices.scrollToItem(it)
-
-    def checked_acg_nodes(self) -> list[str]:
-        out = []
-        for i in range(self.acg_tbl.rowCount()):
-            it = self.acg_tbl.item(i, 0)
-            if it is not None and it.checkState() == Qt.Checked:
-                out.append(it.text())
-        return out
-
-    def _on_acg_toggled(self, item):
-        if self._filling or item.column() != 0:
-            return
-        self._refresh_acg_choice()
-
-    def _refresh_acg_choice(self):
-        """Price the ticked set and preview its exact follow-on. Both are
-        sub-second (one inverse per frequency; a pure-python rewrite), so
-        this runs inline on every toggle."""
-        if self.controller is None:
-            return
-        nodes = self.checked_acg_nodes()
-        self.acg_apply.setEnabled(bool(nodes))
-        if not nodes:
-            self.acg_joint_lbl.setText("")
-            self.acg_preview.clear()
-            return
-        inp, out = self._io()
-        try:
-            joint = self.controller.acground_joint(inp, out, nodes)
-            pv = self.controller.preview_reduction(nodes)
-        except Exception as exc:
-            self.acg_joint_lbl.setText(f"({type(exc).__name__}: {exc})")
-            return
-        self.acg_joint_lbl.setText(
-            f"ticked set: {joint:.3g} dB together — the only approximation")
-        lines = [f"{pv['prims_before']} → {pv['prims_after']} primitives:"]
-        if pv["dead_sources"]:
-            lines.append(
-                f"  {len(pv['dead_sources'])} controlled sources contribute "
-                f"exactly zero — removed (exact): "
-                + ", ".join(pv["dead_sources"][:8])
-                + ("…" if len(pv["dead_sources"]) > 8 else ""))
-        for g in pv["lump_groups"]:
-            lines.append("  lump (exact): " + g)
-        if pv["symbols_saved"]:
-            lines.append(f"  {pv['symbols_saved']} symbols saved for the "
-                         f"solver grid")
-        self.acg_preview.setPlainText("\n".join(lines))
-
-    def apply_reduction(self):
-        if self.controller is None:
-            return
-        nodes = self.checked_acg_nodes()
-        if not nodes:
-            return
-        inp, out = self._io()
-        self._launch(
-            lambda cb: self.controller.apply_reduction(nodes, inp=inp,
-                                                       out=out),
-            f"applying reduction ({', '.join(nodes)}) …",
-            on_done=self._on_reduction_applied, est_s=None)
-
-    def _on_reduction_applied(self, summ):
-        self._tick.stop()
-        self._t0 = None
-        self.progress.hide()
-        self.cancel_btn.hide()
-        self._job_finished()
-        self._refresh_reduction_banner()
-        self._refresh_net_decor()
-        # the reduction REWRITES the circuit: dead sources removed,
-        # passives lumped into Ceq/Req node symbols -- the old ranking
-        # and its ticks name symbols that may no longer exist, and a
-        # solve with them fails. Invalidate, like the matches path does.
-        self.keep_tbl.setRowCount(0)
-        self.estimate_lbl.setText(
-            "estimate: — (re-Rank: the reduced circuit has lumped/removed "
-            "symbols)")
-        self._set_strip(
-            f"circuit reduced: {summ['prims_before']} → "
-            f"{summ['prims_after']} primitives at a measured "
-            f"{summ['worst_db']:.3g} dB / {summ['worst_deg']:.3g}° "
-            f"({summ['inp']} → {summ['out']}); grounding was the only "
-            f"approximation — every bench now analyses the reduced circuit",
-            "ok")
-
-    def revert_reduction(self):
-        if self.controller is None:
-            return
-        self.controller.revert_reduction()
-        self._refresh_reduction_banner()
-        self._refresh_net_decor()
-        self.keep_tbl.setRowCount(0)             # reduced-circuit ranking
-        self.estimate_lbl.setText("estimate: — (re-Rank)")
-        self._set_strip("circuit: back to as-imported — re-Rank for the "
-                        "restored symbols", "info")
-
-    def _refresh_reduction_banner(self):
-        summ = (self.controller.reduction_summary()
-                if self.controller is not None else None)
-        if summ is None:
-            self.red_banner.setText("circuit: as imported")
-            self.red_banner.setStyleSheet("color: #555;")
-            self.acg_revert.setEnabled(False)
-        else:
-            self.red_banner.setText(
-                f"circuit: REDUCED — grounded {', '.join(summ['nodes'])}; "
-                f"{summ['prims_before']} → {summ['prims_after']} primitives, "
-                f"≤ {summ['worst_db']:.3g} dB measured")
-            self.red_banner.setStyleSheet("color: #1e5c2f;")
-            self.acg_revert.setEnabled(True)
-
-    def _comp_page(self):
-        page = QWidget()
-        v = QVBoxLayout(page)
-        row = QHBoxLayout()
-        row.addWidget(QLabel("goal:"))
-        self.goal_combo = QComboBox()
-        self.goal_combo.addItems(["mfm", "pm", "spec"])
-        self.goal_combo.setToolTip(
-            "mfm: place the dominant closed-loop pair at Butterworth damping\n"
-            "pm: meet a phase-margin floor\n"
-            "spec: hold the peak sensitivity Ms = max|1/(1-T)| (Middlebrook's\n"
-            "      discrepancy target; Ms 1.3 ~ PM 50°, 1.2 ~ PM 60°)")
-        self.goal_combo.currentTextChanged.connect(self._on_goal_changed)
-        row.addWidget(self.goal_combo)
-        self.pm_lbl = QLabel("PM target:")
-        row.addWidget(self.pm_lbl)
-        self.comp_pm_spin = self._spin(60.0, 30.0, 85.0, 1.0, " °")
-        row.addWidget(self.comp_pm_spin)
-        self.ms_lbl = QLabel("Ms target:")
-        row.addWidget(self.ms_lbl)
-        self.ms_spin = self._spin(1.3, 1.0, 3.0, 0.05, "")
-        self.ms_spin.setDecimals(2)
-        row.addWidget(self.ms_spin)
-        row.addWidget(QLabel("branches:"))
-        self.kmax_spin = QSpinBox()
-        self.kmax_spin.setRange(1, 3)
-        self.kmax_spin.setValue(1)
-        self.kmax_spin.setToolTip(
-            "1: rank single OP-invariant branches by area.\n"
-            ">1: grow a nested (NMC) network one branch at a time, stopping\n"
-            "when the goal is met or a further branch does not pay its area.")
-        row.addWidget(self.kmax_spin)
-        row.addWidget(QLabel("strip:"))
-        self.exclude_edit = QLineEdit()
-        self.exclude_edit.setPlaceholderText("I0.Cc, I0.Rz")
-        self.exclude_edit.setMaximumWidth(140)
-        self.exclude_edit.setToolTip(
-            "Existing compensation instances to remove before suggesting:\n"
-            "the re-compensate workflow. Removing a C or series-RC branch is\n"
-            "operating-point invariant, so the reconstruction stays exact and\n"
-            "one DC solve still spans the whole design space.")
-        row.addWidget(self.exclude_edit)
-        self.mirror_chk = QCheckBox("mirrored")
-        self.mirror_chk.setToolTip(
-            "Fully-differential: install each branch as a matched symmetric\n"
-            "pair (itself plus its mirror image, same value). The map is\n"
-            "derived from p/n node names; self-symmetric positions such as\n"
-            "CMFB or tail stay single-ended.")
-        row.addWidget(self.mirror_chk)
-        self.suggest_btn = QPushButton("Suggest compensation")
-        self.suggest_btn.clicked.connect(self.suggest_comp)
-        row.addWidget(self.suggest_btn)
-        row.addStretch(1)
-        v.addLayout(row)
-        self.comp_tbl = QTableWidget(0, 8)
-        self.comp_tbl.setHorizontalHeaderLabels(
-            ["pair", "network", "C", "R", "area", "ζ",
-             "PM", "ok"])
-        self.comp_tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.comp_tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.comp_tbl.itemSelectionChanged.connect(self._on_comp_selected)
-        v.addWidget(self.comp_tbl, 1)
-        self._comp_hint = QLabel(
-            "Select a row to preview its loop gain instantly (rank-one "
-            "update, no re-solve).")
-        self._comp_hint.setWordWrap(True)
-        v.addWidget(self._comp_hint)
-        self._comp_steps = QLabel("")
-        self._comp_steps.setWordWrap(True)
-        v.addWidget(self._comp_steps)
-        self._comp_suggestions = []
-        self._comp_multi = None
-        self._comp_exclude = ()
-        self._comp_probe = None
-        self._comp_upd = None
-        self._comp_tab = page
-        self._on_goal_changed(self.goal_combo.currentText())
-        return page
-
-    def _on_goal_changed(self, goal):
-        """PM and Ms targets are alternatives; mfm needs neither."""
-        for w in (self.pm_lbl, self.comp_pm_spin):
-            w.setVisible(goal == "pm")
-        for w in (self.ms_lbl, self.ms_spin):
-            w.setVisible(goal == "spec")
-
-    def _comp_mirror(self):
-        """The p/n mirror map for this design, or None when unchecked."""
-        if not self.mirror_chk.isChecked() or self.controller is None:
-            return None
-        an = self.controller._analyzer_ready()
-        return view.mirror_map(an.system(self._comp_probe).node_index) or None
-
-    def _comp_kw(self):
-        """Goal-specific keywords, so an unused target never reaches the
-        session cache key."""
-        goal = self.goal_combo.currentText()
-        kw = {"goal": goal}
-        if goal == "pm":
-            kw["pm_target"] = self.comp_pm_spin.value()
-        elif goal == "spec":
-            kw["ms_target"] = self.ms_spin.value()
-        return kw
-
-    def suggest_comp(self):
-        if self.controller is None:
-            return
-        probe = self.probe_combo.currentText()
-        if not probe:
-            self.statusBar().showMessage("no loop probe in this design")
-            return
-        self._comp_probe = probe
-        kw = self._comp_kw()
-        exclude = tuple(s.strip() for s in self.exclude_edit.text().split(",")
-                        if s.strip())
-        self._comp_exclude = exclude
-        if exclude:
-            kw["exclude"] = exclude
-        k_max = self.kmax_spin.value()
-        mirror = self._comp_mirror()
-        if mirror is not None:
-            kw["mirror"] = mirror
-        what = "network" if k_max > 1 else "branches"
-
-        def fn(_cb):
-            baseline = self.controller.loop_gain(probe)
-            if k_max > 1:
-                res = self.controller.suggest_multi_compensation(
-                    probe, k_max=k_max, **kw)
-            else:
-                res = self.controller.suggest_compensation(probe, **kw)
-            return (baseline, res)
-
-        self._launch(fn, f"searching compensation {what} at {probe} "
-                         f"({kw['goal']})…", on_done=self._on_comp_done)
-
-    def suggest_sync(self, probe, *, k_max=1, **kw):
-        """Blocking search, for tests and scripting. k_max > 1 grows a
-        multi-branch (NMC) network instead of ranking single branches."""
-        self._comp_probe = probe
-        self._comp_exclude = tuple(kw.get("exclude", ()))
-        baseline = self.controller.loop_gain(probe)
-        if k_max > 1:
-            res = self.controller.suggest_multi_compensation(
-                probe, k_max=k_max, **kw)
-        else:
-            res = self.controller.suggest_compensation(probe, **kw)
-        self._on_comp_done((baseline, res))
-        return self._comp_multi if k_max > 1 else self._comp_suggestions
-
-    def _on_comp_done(self, payload):
-        self._tick.stop()
-        self._t0 = None
-        self.progress.hide()
-        self.cancel_btn.hide()
-        self._job_finished(self.suggest_btn)
-        baseline, res = payload
-        self._comp_baseline = baseline
-        self._comp_upd = None                     # rebuilt lazily on select
-        if not self._comp_probe:
-            self._comp_probe = self.probe_combo.currentText()
-        self._show(baseline)
-        tbl = self.comp_tbl
-
-        if hasattr(res, "branches"):              # MultiSuggestion (NMC)
-            self._comp_multi = res
-            self._comp_suggestions = []
-            rows = res.branches
-            tbl.setRowCount(len(rows))
-            for i, b in enumerate(rows):
-                pair = f"{b.node_a} ↔ {b.node_b or 'gnd'}"
-                if b.twin is not None:
-                    pair += f"  (+{b.twin[0]} ↔ {b.twin[1] or 'gnd'})"
-                cells = (pair, b.network, view.eng(b.C, "F"),
-                         view.eng(b.R, "Ω"),
-                         f"{b.mult * (b.C / 1e-12 + 0.05 * b.R / 1e3):.1f}",
-                         "—", "—", "—")
-                for j, text in enumerate(cells):
-                    tbl.setItem(i, j, QTableWidgetItem(text))
-            self._comp_steps.setText("  ·  ".join(res.steps))
-            ms = (f", Ms {res.spec_dev:.2f}" if res.spec_dev is not None
-                  else "")
-            pm = (f", PM {res.pm_deg:.1f}°" if res.pm_deg is not None else "")
-            verdict = "goal met" if res.achieved else "goal NOT met"
-            self._comp_hint.setText(
-                f"{len(rows)}-branch network, area {res.area:.1f}, "
-                f"ζ {res.zeta:.3f}{pm}{ms} — {verdict}. "
-                f"Select any row to preview the whole network.")
-            self.tabs.setCurrentWidget(self._comp_tab)
-            self.statusBar().showMessage(
-                f"{len(rows)}-branch network at {self._comp_probe} "
-                f"({verdict})")
-            return
-
-        self._comp_multi = None
-        self._comp_suggestions = list(res)
-        self._comp_steps.setText("")
-        tbl.setRowCount(len(self._comp_suggestions))
-        for i, sg in enumerate(self._comp_suggestions):
-            pair = f"{sg.candidate.node_a} ↔ "                    f"{sg.candidate.node_b or 'gnd'}"
-            cells = (pair, sg.network, view.eng(sg.C, "F"),
-                     view.eng(sg.R, "Ω"),
-                     f"{sg.area:.1f}", f"{sg.zeta:.3f}",
-                     f"{sg.pm_deg:.1f}°" if sg.pm_deg else "—",
-                     "✓" if sg.achieved else "✗")
-            for j, text in enumerate(cells):
-                tbl.setItem(i, j, QTableWidgetItem(text))
-        self.tabs.setCurrentWidget(self._comp_tab)
-        self.statusBar().showMessage(
-            f"{len(self._comp_suggestions)} suggestions at "
-            f"{self._comp_probe}; select one to preview")
-
-    def _comp_updater(self):
-        """Preview updater on the SAME system the search ran on. When the
-        search excluded existing compensation, the preview must exclude it
-        too, or it would stack the suggestion on top of the branches the
-        search had removed and report a margin nobody designed."""
-        if self._comp_upd is None:
-            import numpy as np
-            from ..analysis.compensate import LoopGainUpdater
-            from ..engine.mna import build_mna
-
-            an = self.controller._analyzer_ready()
-            drop = set(self._comp_exclude)
-            if drop:
-                system = build_mna(
-                    [p for p in an.primitives if p.inst not in drop],
-                    an.flat.ground, self._comp_probe, an._alias)
-            else:
-                system = an.system(self._comp_probe)
-            self._comp_upd = LoopGainUpdater(
-                system, self._comp_probe, np.geomspace(1.0, 1e10, 300))
-        return self._comp_upd
-
-    @staticmethod
-    def _admittance(C, R):
-        """Y(s) of a series R-C branch (R = 0 is a plain capacitor)."""
-        return lambda s: s * C / (1 + s * R * C)
-
-    def _preview_branches(self, row):
-        """The physical (node_a, node_b, Y) branches the selected row
-        installs. For a multi-branch network this is the WHOLE network, since
-        the intermediate states are not designs the tool proposes; for a
-        single suggestion it is that branch, plus its mirror image when the
-        search ran mirrored."""
-        import re
-
-        if self._comp_multi is not None:
-            out = []
-            for b in self._comp_multi.branches:
-                Y = self._admittance(b.C, b.R)
-                out.extend((na, nb, Y) for na, nb in b.physical())
-            return out
-        sg = self._comp_suggestions[row]
-        Y = self._admittance(sg.C, sg.R)
-        out = [(sg.candidate.node_a, sg.candidate.node_b, Y)]
-        # the single-branch suggester records a mirrored twin in its rationale
-        m = re.search(r"\[symmetric pair with \(([^,]+), ([^)]+)\)\]",
-                      sg.candidate.rationale)
-        if m:
-            a, b = (x.strip() for x in m.groups())
-            out.append((a, None if b in ("None", "gnd") else b, Y))
-        return out
-
-    def _on_comp_selected(self):
-        import numpy as np
-
-        rows = {i.row() for i in self.comp_tbl.selectedIndexes()}
-        if not rows or not (self._comp_suggestions or self._comp_multi):
-            return
-        upd = self._comp_updater()
-        branches = self._preview_branches(min(rows))
-        T = (upd.with_branches(branches) if len(branches) > 1
-             else upd.with_branch(*branches[0]))
-        f = upd.freqs
-        view.bode_figure(self._comp_baseline, self.canvas.figure)
-        ax1, ax2 = self.canvas.figure.axes[:2]
-        ax1.semilogx(f, 20 * np.log10(np.abs(T)), color="#E69F00", lw=1.3,
-                     ls="--", label="preview")
-        ax2.semilogx(f, np.degrees(np.unwrap(np.angle(T))), color="#E69F00",
-                     lw=1.3, ls="--")
-        ax1.legend(fontsize=8, frameon=False, loc="lower left")
-        theme.style_figure(self.canvas.figure)
-        self.canvas.draw_idle()
-        from ..analysis.sensitivity import loop_margins
-        pm, fpm, gm, _ = loop_margins(f, T)
-        note = (f"preview PM {pm:.1f}° @ {view.eng(fpm, 'Hz')}"
-                if pm is not None else "preview: no crossing")
-        if gm is not None:
-            note += f",  GM {gm:.1f} dB"
-        if len(branches) > 1:
-            note += f"  ({len(branches)} branches installed)"
-        self._comp_hint.setText(note)
-
-    # ---------------------------------------------------------------- modes
-    def run_modes(self):
-        if self.controller is None:
-            return
-        pa, pb = self.probe_combo.currentText(), self.probe2_combo.currentText()
-        if not pa or not pb or pa == pb:
-            self.statusBar().showMessage("Modes needs two distinct probes")
-            return
-
-        def fn(_cb):
-            an = self.controller._analyzer_ready()
-            return an.mode_loop(pa, pb)
-
-        self._launch(fn, f"mode loop matrix at ({pa}, {pb})…",
-                     on_done=self._on_modes_done)
-
-    def modes_sync(self, pa, pb):
-        an = self.controller._analyzer_ready()
-        rep = an.mode_loop(pa, pb)
-        self._on_modes_done(rep)
-        return rep
-
-    def _on_modes_done(self, rep):
-        import numpy as np
-
-        self._tick.stop()
-        self._t0 = None
-        self.progress.hide()
-        self.cancel_btn.hide()
-        self._job_finished()
-        fig = self.canvas.figure
-        fig.clear()
-        ax1 = fig.add_subplot(2, 1, 1)
-        ax2 = fig.add_subplot(2, 1, 2, sharex=ax1)
-        colors = ("#0072B2", "#D55E00")
-        for k in range(rep.loci.shape[1]):
-            lam = rep.loci[:, k]
-            pm, fu, gm = rep.margins[k]
-            lab = rep.labels[k].split(".")[-1]
-            if pm is not None:
-                lab += f"  (PM {pm:.1f}°)"
-            ax1.semilogx(rep.freqs, 20 * np.log10(np.abs(lam)),
-                         color=colors[k % 2], lw=1.3, label=lab)
-            ax2.semilogx(rep.freqs,
-                         np.degrees(np.unwrap(np.angle(lam))),
-                         color=colors[k % 2], lw=1.3)
-            if fu:
-                for ax in (ax1, ax2):
-                    ax.axvline(fu, color=colors[k % 2], lw=0.6, ls="--",
-                               alpha=0.6)
-        try:                       # the run's own stb, on its locus
-            stb = self.controller._run.stb()
-            sp_probe = self.controller.stb_probe()
-            if sp_probe in rep.probes:
-                k = list(rep.probes).index(sp_probe)
-                ax1.semilogx(stb.freq,
-                             20 * np.log10(np.abs(stb.loop_gain)),
-                             color="k", ls="--", lw=0.9,
-                             label=f"Spectre stb ({sp_probe.split('.')[-1]})")
-                ax2.semilogx(stb.freq,
-                             np.degrees(np.unwrap(np.angle(stb.loop_gain))),
-                             color="k", ls="--", lw=0.9)
-        except Exception:
-            pass                    # no stb truth here -- not a show-stopper
-        ax1.axhline(0.0, color="k", lw=0.5, ls=":", alpha=0.6)
-        ax1.set_ylabel("|λ| (dB)")
-        ax2.set_ylabel("phase (deg)")
-        ax2.set_xlabel("frequency (Hz)")
-        for ax in (ax1, ax2):
-            ax.grid(True, which="both", alpha=0.25, lw=0.4)
-        ax1.legend(fontsize=8, frameon=False, loc="lower left")
-        fig.tight_layout()
-        theme.style_figure(fig)
-        self.canvas.draw_idle()
-        sev = "ok"
-        if any(m[0] is not None and m[0] < 45 for m in rep.margins):
-            sev = "warn"
-        self._set_strip("modes: " + rep.summary()
-                        + f"  |  Schur certificate {rep.schur_residual:.1e}",
-                        sev)
-        self.summary.setPlainText(
-            "Mode loop matrix (eigenloci)\n" + rep.summary()
-            + f"\nmax cross-mode coupling r = {rep.max_coupling:.3g}"
-            + f"\nSchur certificate {rep.schur_residual:.2e}")
-
-    # ----------------------------------------------------------------- gft
-    def _gft_page(self):
-        page = QWidget()
-        v = QVBoxLayout(page)
-        row = QHBoxLayout()
-        row.addWidget(QLabel("error ref:"))
-        self.gft_ref_combo = QComboBox()
-        self.gft_ref_combo.setMinimumWidth(120)
-        row.addWidget(self.gft_ref_combo)
-        self.gft_c_combo = QComboBox()
-        self.gft_c_combo.addItems(["follower (c = −1)",
-                                   "inverting (c = +1)"])
-        row.addWidget(self.gft_c_combo)
-        self.gft_btn = QPushButton("Dissect")
-        self.gft_btn.clicked.connect(self.run_gft)
-        row.addWidget(self.gft_btn)
-        row.addStretch(1)
-        v.addLayout(row)
-        self.gft_lbl = QLabel(
-            "The GFT quartet at the designated probe: H, the ideal Hinf "
-            "(error nulled), the loop part Hinf·T/(1+T) and the "
-            "feedthrough part H0/(1+T). The identity is checked in EXACT "
-            "rational arithmetic.")
-        self.gft_lbl.setWordWrap(True)
-        v.addWidget(self.gft_lbl)
-        v.addStretch(1)
-        self._gft_tab = page
-        return page
-
-    def run_gft(self):
-        if self.controller is None:
-            return
-        probe = self.probe_combo.currentText()
-        inp, out = self._io()
-        ref = self.gft_ref_combo.currentText()
-        c = -1 if self.gft_c_combo.currentIndex() == 0 else +1
-        if not probe or not ref:
-            self.statusBar().showMessage("GFT needs a probe and an error ref")
-            return
-
-        def fn(_cb):
-            return self._gft_compute(probe, inp, out, ref, c)
-
-        self._launch(fn, f"GFT dissection at {probe}…",
-                     on_done=self._on_gft_done)
-
-    def gft_sync(self, probe, inp, out, ref, c):
-        payload = self._gft_compute(probe, inp, out, ref, c)
-        self._on_gft_done(payload)
-        return payload
-
-    def _gft_compute(self, probe, inp, out, ref, c):
-        import numpy as np
-        import sympy as sp
-
-        from ..analysis import nested_gft
-        from ..analysis.gft import _probe_indices
-        from ..engine.mna import S
-
-        an = self.controller._analyzer_ready()
-        sys_in = an.system(inp)
-        sys_pr = an.system(probe)
-        A = nested_gft._exact_A(sys_pr)
-        pr = _probe_indices(sys_pr, probe)
-        err = (nested_gft._node(sys_pr, ref), int(c))
-        io = nested_gft._node(sys_pr, out)
-        fn_A = sp.lambdify(S, A, "numpy")
-        z_in = np.asarray(sys_in.z, dtype=complex).ravel()
-        z_pr = np.asarray(sys_pr.z, dtype=complex).ravel()
-        freqs = np.geomspace(1.0, 1e10, 240)
-        qs = [nested_gft._num_quartet(np.asarray(fn_A(2j * np.pi * f), complex),
-                                z_in, z_pr, io, pr, err) for f in freqs]
-        pack = {k: np.array([q[k] for q in qs]) for k in qs[0]}
-        worst = 0.0
-        for sv in (2, 3):
-            A0 = A.xreplace({S: sp.Rational(sv)})
-            q = nested_gft._point_quartet(A0, sys_in.z, sys_pr.z, io, pr, err)
-            r = nested_gft._residual_of(q)
-            if r != 0:
-                worst = max(worst, abs(float((r / q["H"]).evalf())))
-        return {"freqs": freqs, "q": pack, "residual": worst,
-                "probe": probe, "ref": ref, "c": c, "inp": inp, "out": out}
-
-    def _on_gft_done(self, payload):
-        import numpy as np
-
-        self._tick.stop()
-        self._t0 = None
-        self.progress.hide()
-        self.cancel_btn.hide()
-        self._job_finished(self.gft_btn)
-        f = payload["freqs"]
-        q = payload["q"]
-        T = q["T"]
-        loop_part = q["Hinf"] * T / (1 + T)
-        ft_part = q["H0"] / (1 + T)
-        fig = self.canvas.figure
-        fig.clear()
-        ax1 = fig.add_subplot(2, 1, 1)
-        ax2 = fig.add_subplot(2, 1, 2, sharex=ax1)
-        db = lambda z: 20 * np.log10(np.maximum(np.abs(z), 1e-300))
-        for arr, lab, color, ls in (
-                (q["H"], "H", "#0072B2", "-"),
-                (q["Hinf"], "H∞", "#009E73", "--"),
-                (loop_part, "loop part", "#E69F00", "-"),
-                (ft_part, "feedthrough", "#CC79A7", ":")):
-            ax1.semilogx(f, db(arr), color=color, lw=1.2, ls=ls, label=lab)
-        try:                       # ac truth for the closed-loop H
-            fr, packed = self.controller._reference(payload["inp"],
-                                                    payload["out"])
-            if packed is not None:
-                ax1.semilogx(fr, db(packed[0]), color="k", ls="--", lw=0.9,
-                             label="AC sim")
-        except Exception:
-            pass                    # no ac truth here -- not a show-stopper
-        dev = np.abs(q["H"] / q["Hinf"] - 1)
-        ax2.loglog(f, np.maximum(dev, 1e-16), color="#D55E00", lw=1.2)
-        ax1.set_ylabel("(dB)")
-        ax2.set_ylabel("|H/H∞ − 1|")
-        ax2.set_xlabel("frequency (Hz)")
-        for ax in (ax1, ax2):
-            ax.grid(True, which="both", alpha=0.25, lw=0.4)
-        ax1.legend(fontsize=8, frameon=False, loc="lower left", ncols=2)
-        fig.tight_layout()
-        theme.style_figure(fig)
-        self.canvas.draw_idle()
-        res = payload["residual"]
-        sign = "+" if payload["c"] > 0 else "−"
-        if res == 0.0:
-            self._set_strip("GFT identity EXACT (rational residual 0.0) at "
-                            f"probe {payload['probe']}, error "
-                            f"v({payload['ref']}) {sign} v(p)",
-                            "ok")
-        else:
-            self._set_strip(f"GFT identity residual {res:.2e} -- designation "
-                            "does not straddle the probe?", "error")
-
     # ----------------------------------------------------------------- open
     def open_dialog(self):
         cin, _ = QFileDialog.getOpenFileName(
@@ -2317,19 +1232,48 @@ class MainWindow(JobRunnerMixin, PersistenceMixin,
     def _on_cap_model_toggled(self, matrix_on: bool):
         self.cap_model = "matrix" if matrix_on else "lumped"
         self._save_cap_model()
+        self._reopen_with_model(f"cap model: {self.cap_model}")
+
+    def _on_mos_model_toggled(self, lump_on: bool):
+        self.mos_model = "lumped-gmb" if lump_on else "separate"
+        self._save_cap_model()
+        self._reopen_with_model(
+            "ĝm lumping: " + ("on" if lump_on else "off"))
+        if self.controller is None or not lump_on:
+            return
+        # say per device what the toggle actually did -- the criterion
+        # is exact and therefore selective, and "nothing qualified" must
+        # not read as "it worked everywhere"
+        info = self.controller.lumped_gmb()
+        lumped = sorted(n for n, how in info.items() if how == "lumped")
+        dropped = sorted(n for n, how in info.items() if how != "lumped")
+        bits = []
+        if lumped:
+            bits.append(f"ĝm = gm+gmb on {len(lumped)} device(s): "
+                        f"{', '.join(lumped)}")
+        if dropped:
+            bits.append(f"inert gmbs dropped (bulk=source) on "
+                        f"{len(dropped)}: {', '.join(dropped)}")
+        if not bits:
+            bits.append("no device qualifies -- no gate/bulk pair at "
+                        "the same AC potential, every gmb stays "
+                        "separate")
+        self.log("ĝm lumping: " + "; ".join(bits))
+
+    def _reopen_with_model(self, label: str):
+        """The shared model-toggle flow: the model is baked into the
+        reconstruction, so re-open the same run -- preserving the
+        user's in/out, matches and keep ticks -- and re-run whatever
+        was last shown so the change is visible immediately."""
         if self.controller is None:
             return
-        # the model is baked into the reconstruction, so re-open the same run
-        # -- preserving the user's in/out, matches and keep ticks -- and
-        # re-run whatever was last shown so the change is visible immediately
         inp, out = self._io()
         mode = self.mode_combo.currentText()
         groups = list(self._match_groups)
         checked = self.checked_keep()
         had_result = self.result is not None
         with_probe = self.probe_combo.currentText()
-        self.statusBar().showMessage(
-            f"re-opening with {self.cap_model} caps …")
+        self.statusBar().showMessage(f"re-opening ({label}) …")
         QApplication.setOverrideCursor(Qt.WaitCursor)
         # keep the user's result on screen through the re-open: the
         # first-light numeric solve would contradict the keep panel
@@ -2366,8 +1310,8 @@ class MainWindow(JobRunnerMixin, PersistenceMixin,
                                 f"the cap-model switch "
                                 f"({type(exc).__name__}) — re-Rank and "
                                 f"re-tick", "warn")
-        self.statusBar().showMessage(f"cap model: {self.cap_model}")
-        self.log(f"cap model: {self.cap_model} (run re-opened)")
+        self.statusBar().showMessage(label)
+        self.log(f"{label} (run re-opened)")
         # re-run the last shown analysis WITH THE USER'S OWN KEEP TICKS,
         # async with progress and Cancel. The previous result stays on
         # screen until the new one lands, so display and keep panel
@@ -2376,28 +1320,28 @@ class MainWindow(JobRunnerMixin, PersistenceMixin,
         # nobody asked for).
         if had_result and mode in ("Transfer", "Loop gain"):
             self._set_strip(
-                f"cap model: {self.cap_model} — showing the previous "
-                f"model's result until the re-solve with your keep set "
-                f"lands", "info")
+                f"{label} — showing the previous model's result until "
+                f"the re-solve with your keep set lands", "info")
             try:
                 self.solve()
             except Exception as exc:
-                self._set_strip(f"cap model: {self.cap_model} — the "
-                                f"promised re-solve failed to launch "
+                self._set_strip(f"{label} — the promised re-solve "
+                                f"failed to launch "
                                 f"({type(exc).__name__}); press Solve",
                                 "warn")
         elif had_result:
             self._set_strip(
-                f"cap model: {self.cap_model} — the shown result still "
-                f"uses the previous model; press Solve to recompute "
-                f"with your keep set", "warn")
+                f"{label} — the shown result still uses the previous "
+                f"model; press Solve to recompute with your keep set",
+                "warn")
 
     def open_session(self, cin, psf, probe=None):
         # cap model chosen in the Model menu; matrix is the accurate one on
         # non-reciprocal processes (SKY130 CM loops shift ~6 deg vs lumped),
         # and the GUI default -- lumped is offered for the textbook contrast
         self.controller = SessionController.open(
-            cin, psf, cap_model=getattr(self, "cap_model", "matrix"))
+            cin, psf, cap_model=getattr(self, "cap_model", "matrix"),
+            mos_model=getattr(self, "mos_model", "separate"))
         self._cin, self._psf = str(cin), str(psf)
         self._match_groups = []
         self._push_recent(str(cin), str(psf))
@@ -2763,7 +1707,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin,
                 order.setdefault(self._sym_device(name), len(order))
             rows = sorted(rows, key=lambda r: (order[self._sym_device(r[0])],))
         from PySide6.QtGui import QBrush, QColor
-        tints = (QBrush(), QBrush(QColor("#f0f4f8")))
+        tints = (QBrush(), QBrush(QColor(theme.WARN_TINT)))
         self.keep_tbl.setRowCount(len(rows))
         prev_dev, band = None, 0
         for i, (name, opval, score, peak) in enumerate(rows):
@@ -2933,11 +1877,11 @@ class MainWindow(JobRunnerMixin, PersistenceMixin,
             # estimate is visible while you wait, not only afterwards
             self._est_s = secs
             budget = self.budget_spin.value()
-            color = "#1e5c2f"                        # green: within budget
+            color = theme.GOOD                       # green: within budget
             if secs is None or secs > budget:
-                color = "#8a1c12"                    # red: over / unknown
+                color = theme.BAD                    # red: over / unknown
             elif secs > 0.7 * budget:
-                color = "#7a5200"                    # amber: close
+                color = theme.WARN                   # amber: close
             self.estimate_lbl.setStyleSheet(f"color: {color};")
 
         def compute():
@@ -3170,16 +2114,16 @@ class MainWindow(JobRunnerMixin, PersistenceMixin,
                 pdeg = self.phase_spin.value()
                 self._tol_bands.append(axes[0].fill_between(
                     f[mask], (mag - gdb)[mask], (mag + gdb)[mask],
-                    color="#c9962a", alpha=0.18, zorder=0))
+                    color=theme.TOL_BAND, alpha=0.18, zorder=0))
                 if len(axes) > 1:
                     self._tol_bands.append(axes[1].fill_between(
                         f[mask], (ph - pdeg)[mask], (ph + pdeg)[mask],
-                        color="#c9962a", alpha=0.18, zorder=0))
+                        color=theme.TOL_BAND, alpha=0.18, zorder=0))
             elif strat == "rejection":
                 rej = self.strat_rej_spin.value()
                 self._tol_bands.append(axes[0].fill_between(
                     f[mask], (mag - rej)[mask], (mag + rej)[mask],
-                    color="#c9962a", alpha=0.18, zorder=0))
+                    color=theme.TOL_BAND, alpha=0.18, zorder=0))
             else:                                # stability
                 absh = np.abs(h)
                 cross = np.where(np.diff(np.sign(
@@ -3195,18 +2139,18 @@ class MainWindow(JobRunnerMixin, PersistenceMixin,
                     if len(axes) > 1 and near.any():
                         self._tol_bands.append(axes[1].fill_between(
                             f[near], (ph - pmd)[near], (ph + pmd)[near],
-                            color="#c9962a", alpha=0.18, zorder=0))
+                            color=theme.TOL_BAND, alpha=0.18, zorder=0))
             self.canvas.draw_idle()
             return
         m = self.mag_spin.value()
         self._tol_bands.append(axes[0].fill_between(
             f, mag - m, mag + m,
-            color="#c9962a", alpha=0.18, zorder=0))
+            color=theme.TOL_BAND, alpha=0.18, zorder=0))
         if len(axes) > 1:
             pd = self.phase_spin.value()
             self._tol_bands.append(axes[1].fill_between(
                 f, ph - pd, ph + pd,
-                color="#c9962a", alpha=0.18, zorder=0))
+                color=theme.TOL_BAND, alpha=0.18, zorder=0))
         self.canvas.draw_idle()
 
     def _align_error_axes(self):
@@ -3279,7 +2223,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin,
             return
         for ax in self.canvas.figure.axes:
             self._band_spans.append(
-                ax.axvspan(fmin, fmax, color="#4a78a8", alpha=0.10,
+                ax.axvspan(fmin, fmax, color=theme.BAND_SPAN, alpha=0.10,
                            zorder=0))
         self._update_tol_bands()
         self._cert_timer.start()          # the band's demand, debounced
@@ -3467,6 +2411,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin,
         if not self._showing_from_history:
             self._autosave_state()      # every shown result checkpoints
         self.summary.setPlainText(view.summary_text(result))
+        self._refresh_ledger(result)
         try:
             view.error_figure(result, self.err_canvas.figure)
             theme.style_figure(self.err_canvas.figure)
@@ -3480,6 +2425,63 @@ class MainWindow(JobRunnerMixin, PersistenceMixin,
         for b in (self.a_export, self.a_copy_tex,
                   self.a_add_report, self.a_export_csv):
             b.setEnabled(True)
+
+    def _refresh_ledger(self, result):
+        """Append the approximation ledger to the Summary, computed off
+        the GUI thread: every approximation between the imported circuit
+        and the shown response, priced under the toolbar contract, with
+        the MEASURED totals (never summed). Advisory -- failures drop
+        silently like every advisor, and a stale result is discarded."""
+        if (self.controller is None or result is None
+                or not result.inp or result.out.startswith("T@")):
+            return
+        kw = self._contract_kw()
+
+        def compute():
+            return self.controller.approximation_report(
+                result.inp, result.out, result=result, **kw)
+
+        def done(rep):
+            if self.result is not result or isinstance(rep, Exception):
+                return
+            self.summary.setPlainText(view.summary_text(result)
+                                      + chr(10) + chr(10)
+                                      + self._ledger_text(rep))
+
+        self._run_bg(compute, done)
+
+    @staticmethod
+    def _ledger_text(rep) -> str:
+        """One contract, one unit, one sentence shape -- the totals are
+        measured end to end, and an over-budget total says so even when
+        every step individually passed."""
+        lo, hi = rep["band"]
+        lines = [f"approximation ledger — contract: {rep['criterion']}, "
+                 f"band {view.eng(lo, 'Hz')}–{view.eng(hi, 'Hz')} "
+                 f"(≤ 1.00× budget means within it)"]
+        for e in rep["entries"]:
+            if e["exact"]:
+                lines.append(f"  {e['step']} — exact, no budget spent")
+            else:
+                lines.append(f"  {e['step']}: {e['score']:.2f}× budget")
+        if not rep["entries"]:
+            lines.append("  no circuit-level approximations — the "
+                         "working circuit IS the imported one")
+        lines.append(f"  working circuit vs imported, measured end to "
+                     f"end: {rep['circuit_score']:.2f}× budget")
+        if rep.get("grand_score") is not None:
+            sv = rep.get("solve_score")
+            solve = (f" (the solve's own score: {sv:.2f}×)"
+                     if sv is not None else "")
+            lines.append(f"  SHOWN RESULT vs imported circuit, measured: "
+                         f"{rep['grand_score']:.2f}× budget{solve}")
+        worst = rep.get("grand_score", rep["circuit_score"])
+        if worst is not None and worst > 1.0:
+            lines.append("  OVER BUDGET: the composition exceeds the "
+                         "contract even though each step may have "
+                         "passed alone — revert a step or relax the "
+                         "budget")
+        return chr(10).join(lines)
 
     def _render_expr(self):
         """(Re)draw the Expression tab for the current result, honouring the

@@ -580,16 +580,22 @@ def test_reduce_bench_scan_apply_revert(qapp):
         win.mode_combo.setCurrentText("Reduce circuit")
         assert win.tabs.currentWidget() is win._reduce_tab
 
-        win.acg_budget.setValue(0.2)
+        # no local budget knob: the scan gates under the toolbar
+        # contract (strategy + budgets + band), like every approximation
+        assert not hasattr(win, "acg_budget")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
-            rep = win.controller.scan_ac_grounds("VIND", "vout",
-                                                 budget_db=0.2)
+            rep = win.controller.scan_ac_grounds(
+                "VIND", "vout", **win._contract_kw())
             win._on_acg_scan_done(rep)
+        assert rep.criterion_label            # the contract gated it
+        assert all(c.score is not None for c in rep.candidates)
         assert win.acg_tbl.rowCount() > 0
         assert win.checked_acg_nodes() == list(rep.recommended)
         assert win.acg_apply.isEnabled()
-        assert "dB together" in win.acg_joint_lbl.text()
+        # the one grammar: x budget first, native units in parentheses
+        assert "× budget" in win.acg_joint_lbl.text()
+        assert "together" in win.acg_joint_lbl.text()
         pv = win.acg_preview.toPlainText()
         assert "removed (exact)" in pv and "primitives" in pv
 
@@ -1714,5 +1720,67 @@ def test_autosave_failure_is_reported_once(qapp, tmp_path, monkeypatch):
         assert "autosave failed" in win.msg_strip.text()
         win._autosave_state()               # said once, not per result
         assert win.logview.toPlainText().count("autosave FAILED") == 1
+    finally:
+        win.close()
+
+
+def test_gmb_lump_toggle_reopens_with_the_model(qapp, tmp_path):
+    """The Model-menu ĝm toggle mirrors the cap-model flow: it flips
+    mos_model, persists it, re-opens the run with the model baked in,
+    and reports per device what the exact criterion actually did."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "gui.ini")
+    try:
+        win = MainWindow()
+    finally:
+        MainWindow.settings_path = None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"))
+        win.in_combo.setCurrentText("VIND")
+        win.out_combo.setCurrentText("vout")
+    try:
+        assert win.mos_model == "separate"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win.a_lump_gmb.setChecked(True)
+        assert win.mos_model == "lumped-gmb"
+        assert win.controller.mos_model == "lumped-gmb"
+        # the report says what happened -- lumped, dropped, or nothing
+        assert "ĝm" in win.logview.toPlainText().lower()             or "gm lumping" in win.logview.toPlainText().lower()
+        # persisted beside the cap model
+        assert str(win._settings().value("mos_model")) == "lumped-gmb"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win.a_lump_gmb.setChecked(False)
+        assert win.controller.mos_model == "separate"
+    finally:
+        win.close()
+
+
+def test_summary_grows_the_approximation_ledger(qapp, tmp_path):
+    """After a solve, a background advisor appends the ledger to the
+    Summary: every circuit-level approximation priced under the toolbar
+    contract, with the measured totals — one unit everywhere."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "gui.ini")
+    try:
+        win = MainWindow()
+    finally:
+        MainWindow.settings_path = None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"))
+        win.in_combo.setCurrentText("VIND")
+        win.out_combo.setCurrentText("vout")
+        win.solve_sync()
+    try:
+        assert _wait_bg(qapp, lambda: "approximation ledger"
+                        in win.summary.toPlainText()),             "the ledger advisor must land in the Summary"
+        txt = win.summary.toPlainText()
+        assert "× budget" in txt
+        assert "measured end to end" in txt
     finally:
         win.close()

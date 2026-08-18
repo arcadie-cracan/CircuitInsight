@@ -358,7 +358,7 @@ def _flat_coeffs(slots, coeffs) -> np.ndarray:
 
 #: the prime ceiling and its justification live in zpbatch -- one
 #: number, one story; a re-tune must not apply to one backend only
-from .zpbatch import _MAX_PRIMES
+from .zpbatch import _MAX_PRIMES, _crt_rounds
 
 
 # ------------------------------------------------------------- entry point
@@ -456,44 +456,18 @@ def solve_tensors_ratfun(pay_den: dict, pay_num: dict, grids_pairs: list,
 
     primes = [p1]
     stacks = [_flat_coeffs(slots, coeffs1)]
-    hard: list[int] = []             # coefficients that needed the most primes
-    st: dict = {}                    # incremental CRT state
     sup_list = [supports[sl] for sl in slots]
     wargs = (pay_den, pay_num, lens, radK, beta, sup_list, dN, dB,
              max(Tmax, dN + dB + 2))
 
-    want = start_primes
-    while True:
-        new = [q for q in _primes(want) if q not in primes]
-        results = list(run(_ratfun_prime_worker,
-                           [wargs + (q,) for q in new]))
-        for q, arr in results:
-            if arr is None:
-                continue
-            primes.append(q)
-            stacks.append(arr)
-        if progress is not None:
-            # never report done == total: the caller reads that as "the
-            # evaluation is finished", and more prime rounds may follow
-            progress(len(primes), want + step_primes)
-        if len(primes) >= 2:
-            lift = _lift(stacks, primes, hard=hard, state=st)
-            if lift is not None:
-                want += 1
-                (q, arr), = list(run(_ratfun_prime_worker,
-                                     [wargs + (_primes(want)[-1],)]))
-                if arr is not None:
-                    if _confirm(lift, arr, q):
-                        if info is not None:
-                            info.update(primes=len(primes) + 1,
-                                        probes_j=J, deg_num=dN, deg_den=dB)
-                        return _assemble(lift, sup_list, slots, lens, L)
-                    primes.append(q)
-                    stacks.append(arr)
-        if want >= max_primes:
-            raise RatFunError(
-                f"no stable rational reconstruction after {want} primes")
-        want = min(max_primes, want + step_primes)
+    (lift,), used = _crt_rounds(
+        _ratfun_prime_worker, lambda q: wargs + (q,),
+        run, 1, start_primes=start_primes, step_primes=step_primes,
+        max_primes=max_primes, progress=progress, primes=primes,
+        stacks=[stacks], error_cls=RatFunError)
+    if info is not None:
+        info.update(primes=used, probes_j=J, deg_num=dN, deg_den=dB)
+    return _assemble(lift, sup_list, slots, lens, L)
 
 
 def _ratfun_prime_worker(args):

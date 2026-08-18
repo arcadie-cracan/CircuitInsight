@@ -459,14 +459,18 @@ def test_prepare_display_prewarms_the_expression_lines(result):
     view.prepare_display(result, base=True, wrap=False)
     first = view._expr_lines(result, base=True, wrap=False)
 
-    real = view.round_expr
+    # patch at the HOME module: _expr_lines resolves round_expr there,
+    # not through the package's re-export
+    from circuitinsight.gui.view import simplify as _simplify
+
+    real = _simplify.round_expr
     def boom(*a, **k):
         raise AssertionError("cache miss: the GUI thread would compute")
-    view.round_expr = boom
+    _simplify.round_expr = boom
     try:
         again = view._expr_lines(result, base=True, wrap=False)
         assert again is first                    # a lookup, not a compute
         with pytest.raises(AssertionError):
             view._expr_lines(result, base=False, wrap=False)  # other key
     finally:
-        view.round_expr = real
+        _simplify.round_expr = real

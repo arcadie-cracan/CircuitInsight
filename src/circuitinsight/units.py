@@ -34,6 +34,25 @@ def eng_expr_str(expr) -> str:
     return sp.sstr(expr.xreplace(reps) if reps else expr)
 
 
+def db(x: float) -> float:
+    """20*log10(|x|), with the zero guard every inline copy re-derived
+    differently: db(0) is -inf, never an exception."""
+    x = abs(x)
+    return 20.0 * math.log10(x) if x > 0 else float("-inf")
+
+
+def from_db(d: float) -> float:
+    """The amplitude ratio for a dB figure: from_db(20) == 10."""
+    return 10.0 ** (d / 20.0)
+
+
+def eps_to_db_deg(eps: float) -> tuple[float, float]:
+    """A relative tolerance projected onto the two Bode axes:
+    |dH|/|H| <= eps bounds the magnitude within ~8.7*eps dB and the
+    phase within ~57*eps degrees."""
+    return 20.0 * math.log10(1.0 + eps), math.degrees(eps)
+
+
 def eng(x: float, unit: str = "", *, sig: int = 3) -> str:
     """Engineering notation, e.g. '1.24 kHz', '12.9 MHz', '63.8 fF'.
     The separator is a thin space (U+2009), matching the GUI's historic

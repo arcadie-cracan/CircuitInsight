@@ -41,31 +41,41 @@ class RemovalCandidate:
     worst_deg: float = 0.0
     f_worst_hz: float = 0.0
     within_budget: bool = False
+    score: float | None = None    # x budget under the active criterion
 
     def describe(self) -> str:
         unit = {"c": "F", "r": "Ω", "g": "S", "l": "H"}.get(self.kind, "")
         val = f" = {self.value:.4g} {unit}" if self.value is not None else ""
         verdict = ("REMOVABLE" if self.within_budget
                    else "needed")
-        return (f"{self.inst}{val}: removing costs {self.worst_db:.3g} dB / "
-                f"{self.worst_deg:.3g}° (worst at {self.f_worst_hz:.3g} Hz) "
-                f"-> {verdict}")
+        cost = (f"{self.score:.2f}x budget ({self.worst_db:.3g} dB / "
+                f"{self.worst_deg:.3g}°)" if self.score is not None else
+                f"{self.worst_db:.3g} dB / {self.worst_deg:.3g}° "
+                f"(worst at {self.f_worst_hz:.3g} Hz)")
+        return f"{self.inst}{val}: removing costs {cost} -> {verdict}"
 
 
 @dataclass
 class RemovalReport:
-    candidates: list = field(default_factory=list)   # worst_db ascending
+    candidates: list = field(default_factory=list)   # cheapest first
     recommended: list = field(default_factory=list)  # jointly inside budget
     joint_db: float = 0.0                            # measured for the set
     budget_db: float = 0.1
+    joint_score: float | None = None  # x budget under the active criterion
+    criterion_label: str = ""         # names the contract that gated
 
     def describe(self) -> str:
-        lines = [f"element-removal scan (budget {self.budget_db:g} dB):"]
+        gate = (f"criterion: {self.criterion_label}" if self.criterion_label
+                else f"budget {self.budget_db:g} dB")
+        lines = [f"element-removal scan ({gate}):"]
         for c in self.candidates:
             lines.append("  " + c.describe())
         if self.recommended:
+            cost = (f"{self.joint_score:.2f}x budget"
+                    if self.joint_score is not None
+                    else f"{self.joint_db:.3g} dB")
             lines.append(f"  -> delete {', '.join(self.recommended)} "
-                         f"together: {self.joint_db:.3g} dB")
+                         f"together: {cost}")
         else:
             lines.append("  -> nothing is removable within the budget")
         return "\n".join(lines)
@@ -85,11 +95,14 @@ def _admittance(kind: str, value: float, w: complex):
 
 def scan_removals(primitives, ground, inp: str, out: str, *,
                   freqs=None, budget_db: float = 0.1, alias=None,
-                  max_report: int = 12, protect=()) -> RemovalReport:
+                  max_report: int = 12, protect=(),
+                  criterion=None) -> RemovalReport:
     """Price the removal of every EXPLICIT two-terminal passive in
     tf(inp -> out), and recommend the largest jointly-removable set inside
     `budget_db`. `protect` names instances never to propose (e.g. the load
-    the spec is defined against)."""
+    the spec is defined against). With a BandCriterion in `criterion`,
+    pricing AND gating run under that contract (same unit and window as
+    the order reduction); pass `freqs` spanning its band."""
     explicit = [p for p in primitives
                 if p.kind in ("c", "r", "g", "l") and not p.param
                 and p.value is not None and p.inst not in protect
@@ -126,11 +139,16 @@ def scan_removals(primitives, ground, inp: str, out: str, *,
     worst = np.zeros(n)
     worst_deg = np.zeros(n)
     f_worst = np.zeros(n)
+    vouts = []                       # the full response H(f)
+    ratios = []                      # per-f dv_out/v_out rows
     for f in freqs:
         w = 2j * np.pi * f
         Z = np.linalg.inv(np.asarray(fn(w), dtype=complex))
         v = Z @ z
         v_out = v[k_out]
+        vouts.append(v_out)
+        row = np.zeros(n, dtype=complex)
+        ratios.append(row)
         if v_out == 0:
             continue
         for i, (p, b) in enumerate(zip(explicit, bs)):
@@ -145,20 +163,35 @@ def scan_removals(primitives, ground, inp: str, out: str, *,
                 continue
             dv_out = Y * Zb[k_out] * (b @ v) / den
             r = dv_out / v_out
+            row[i] = r
             db = abs(20 * np.log10(abs(1 + r))) if 1 + r != 0 else np.inf
             if db > worst[i]:
                 worst[i] = db
                 worst_deg[i] = abs(np.degrees(np.angle(1 + r)))
                 f_worst[i] = f
 
+    H_full = np.array(vouts, dtype=complex)
+    R = np.array(ratios, dtype=complex)
+    scores = None
+    if criterion is not None:
+        scores = [float(criterion.score(freqs, H_full,
+                                        H_full * (1.0 + R[:, i])))
+                  for i in range(n)]
+
+    def ok(i):
+        return (scores[i] <= 1.0 if scores is not None
+                else worst[i] <= budget_db)
+
     cands = [RemovalCandidate(inst=p.inst, kind=p.kind, value=p.value,
                               nodes=tuple(p.nodes),
                               worst_db=float(worst[i]),
                               worst_deg=float(worst_deg[i]),
                               f_worst_hz=float(f_worst[i]),
-                              within_budget=bool(worst[i] <= budget_db))
+                              within_budget=bool(ok(i)),
+                              score=(None if scores is None
+                                     else scores[i]))
              for i, p in enumerate(explicit)]
-    cands.sort(key=lambda c: c.worst_db)
+    cands.sort(key=lambda c: c.worst_db if c.score is None else c.score)
 
     # greedy joint growth, VERIFIED numerically per step: unlike the
     # AC-ground case there is no cheap exact joint identity across mixed
@@ -166,21 +199,28 @@ def scan_removals(primitives, ground, inp: str, out: str, *,
     # the pruned circuit -- still numeric-only and cheap
     chosen: list[str] = []
     joint = 0.0
+    joint_score = None
     for c in cands:
         if not c.within_budget:
             break
         trial = chosen + [c.inst]
-        j = _joint_removal_db(primitives, ground, inp, out, trial,
-                              freqs, alias)
-        if j <= budget_db:
+        j, js = _joint_removal_metric(primitives, ground, inp, out, trial,
+                                      freqs, alias, criterion)
+        if criterion is not None:
+            if js is not None and js <= 1.0:
+                chosen, joint, joint_score = trial, j, js
+        elif j <= budget_db:
             chosen, joint = trial, j
+    label = "" if criterion is None else (criterion.name or "dB band")
     return RemovalReport(candidates=cands[:max_report], recommended=chosen,
-                         joint_db=float(joint), budget_db=budget_db)
+                         joint_db=float(joint), budget_db=budget_db,
+                         joint_score=joint_score, criterion_label=label)
 
 
-def _joint_removal_db(primitives, ground, inp, out, insts, freqs,
-                      alias) -> float:
-    """Worst |dB| of deleting the SET, by re-solving the pruned circuit."""
+def _joint_removal_metric(primitives, ground, inp, out, insts, freqs,
+                          alias, criterion=None):
+    """(worst_db, score) of deleting the SET, by re-solving the pruned
+    circuit -- the score priced by the contract when one is active."""
     from . import tearing
 
     keep = [p for p in primitives
@@ -191,4 +231,8 @@ def _joint_removal_db(primitives, ground, inp, out, insts, freqs,
     with np.errstate(divide="ignore", invalid="ignore"):
         db = np.abs(20 * np.log10(np.abs(b / a)))
     db = db[np.isfinite(db)]
-    return float(db.max()) if db.size else float("inf")
+    worst = float(db.max()) if db.size else float("inf")
+    score = (None if criterion is None
+             else float(criterion.score(np.asarray(freqs, dtype=float),
+                                        a, b)))
+    return worst, score

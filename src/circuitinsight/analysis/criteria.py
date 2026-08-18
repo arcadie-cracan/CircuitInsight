@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from ..units import eng
+from ..units import db, eng, eps_to_db_deg, from_db
 
 
 def _finite(sig, Hr, positive: bool = True):
@@ -75,6 +75,24 @@ class BandCriterion:
 
     def metrics(self, freqs, Hr, sig) -> dict:
         return {}
+
+    def score(self, freqs, H_full, H_mod) -> float:
+        """THE one currency: the cost of a modified response under this
+        contract, as a fraction of its budget — <= 1 means within it.
+        Every budgeted approximation prices itself through this method
+        (the order reduction natively, the AC-ground and removal scans
+        via their rank-one ratios, the ledger's end-to-end total), so
+        the user reads a single unit everywhere."""
+        freqs = np.asarray(freqs, dtype=float)
+        H_full = np.asarray(H_full, dtype=complex)
+        H_mod = np.asarray(H_mod, dtype=complex)
+        m = np.isfinite(H_full) & (np.abs(H_full) > 0)
+        mag_full = np.abs(H_full)
+        sig = self.window(freqs, mag_full, m, H_full)
+        if not sig.any():
+            sig = m
+        self.prepare(freqs, H_full, sig)
+        return self.error(freqs, H_full, mag_full, H_mod, sig) / self.tol
 
     # ---- language -------------------------------------------------
     def collapse_budgets(self) -> tuple[float, float]:
@@ -186,7 +204,7 @@ class LegacyCriterion(BandCriterion):
                                   "caller's own mag_db/phase_deg")
 
     def eps_equivalent(self) -> float:
-        return 10.0 ** (self.tol_db / 20.0) - 1.0
+        return from_db(self.tol_db) - 1.0
 
     def score_fields(self, band_err, fallback_db):
         return None, "", float(band_err)          # already dB
@@ -251,15 +269,14 @@ class AnchoredCriterion(BandCriterion):
     def collapse_budgets(self) -> tuple[float, float]:
         # the collapse budgets derive from the SAME ε (dB/deg are its
         # projections)
-        return (20.0 * math.log10(1.0 + self.eps),
-                math.degrees(self.eps))
+        return eps_to_db_deg(self.eps)
 
     def eps_equivalent(self) -> float:
         return self.eps
 
     def score_fields(self, band_err, fallback_db):
         return (float(band_err), "fraction",
-                20.0 * math.log10(1.0 + band_err))
+                eps_to_db_deg(band_err)[0])
 
     def headline(self, red, band_err, fmin, fmax, tol_db=0.0):
         head = (f"reduced to {len(red.selected)} reactance(s)"
@@ -274,8 +291,7 @@ class AnchoredCriterion(BandCriterion):
         return head
 
     def details(self, red, band_err, fmin, fmax) -> list[str]:
-        a_db = (20.0 * math.log10(red.anchor) if red.anchor > 0
-                else float("-inf"))
+        a_db = db(red.anchor)
         det = [
             self._kept(red),
             f"criterion: |ΔH| ≤ ε·(|H| + anchor) at every band "
@@ -323,7 +339,7 @@ class PlainCriterion(BandCriterion):
         return self.gain_db, self.phase_deg
 
     def eps_equivalent(self) -> float:
-        return 10.0 ** (self.gain_db / 20.0) - 1.0
+        return from_db(self.gain_db) - 1.0
 
     def score_fields(self, band_err, fallback_db):
         return float(band_err), "x budget", band_err * self.gain_db
@@ -472,7 +488,7 @@ class RejectionCriterion(BandCriterion):
         return self.rej_db, 30.0
 
     def eps_equivalent(self) -> float:
-        return 10.0 ** (self.rej_db / 20.0) - 1.0
+        return from_db(self.rej_db) - 1.0
 
     def score_fields(self, band_err, fallback_db):
         return float(band_err), "x budget", band_err * self.rej_db

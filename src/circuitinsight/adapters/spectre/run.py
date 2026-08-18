@@ -203,9 +203,10 @@ class SpectreRun:
             warnings.warn(f"netlist reduction: {note}")
 
     def analyzer(self, cap_model: str = "lumped",
-                 bjt_model: str = "intrinsic") -> Analyzer:
+                 bjt_model: str = "intrinsic",
+                 mos_model: str = "separate") -> Analyzer:
         return Analyzer(self.flat, self.op_data, cap_model=cap_model,
-                        bjt_model=bjt_model)
+                        bjt_model=bjt_model, mos_model=mos_model)
 
     @property
     def _base(self) -> Path:
