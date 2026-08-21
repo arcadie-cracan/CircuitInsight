@@ -112,6 +112,9 @@ class ReduceBenchMixin:
             self.controller.explain_numerals(inp, out, keep=keep)
             return deep
 
+        # (the deep handler re-renders the CURRENT result; its keep is
+        # the result's own, so display and stories agree by build)
+
         self._launch(
             run,
             f"resolving each numeral of {inp} → {out} (hybrid-grid "
@@ -225,24 +228,48 @@ class ReduceBenchMixin:
 
     def explain_numbers(self):
         """Analysis menu: rank the collapsed parameters behind each
-        numeral of H(s). The current keep-set is excluded — those are
-        already letters in the expression."""
-        if self.controller is None:
+        numeral of H(s). Kept symbols are excluded — those are already
+        letters in the expression.
+
+        Everything keys off the DISPLAYED result, not the panel: right
+        after opening, the panel is ahead of the display by design
+        (first light is pre-match, the auto plan pre-ticks the table),
+        and stories computed for the panel's keep could never attach to
+        the shown numerals — the hover kept its run-me prompt after the
+        run (field report). The worker also re-solves the displayed
+        (in, out, keep) under the CURRENT configuration — a cache hit
+        when nothing drifted; when matches did drift, the refreshed
+        display is what makes the value-keyed hovers land."""
+        if self.controller is None or self.result is None:
             return
-        inp, out = self._io()
-        keep = self.checked_keep()
+        r = self.result
+        inp, out = r.inp, r.out
+        keep = r.keep if isinstance(r.keep, list) else []
+
+        def run(cb):
+            cur = self.controller.attach_template(
+                self.controller.solve(inp, out, keep, progress=cb))
+            stories = self.controller.explain_numerals(inp, out, keep=keep,
+                                                       progress=cb)
+            return cur, stories
+
         self._launch(
-            lambda cb: self.controller.explain_numerals(inp, out, keep=keep,
-                                                        progress=cb),
+            run,
             f"explaining the numbers of {inp} → {out} …",
             on_done=self._on_explain_done, est_s=None)
 
-    def _on_explain_done(self, stories):
+    def _on_explain_done(self, payload):
+        cur, stories = payload
         self._tick.stop()
         self._t0 = None
         self.progress.hide()
         self.cancel_btn.hide()
         self._job_finished()
+        if cur is not self.result:
+            # the configuration moved since the shown solve (auto
+            # matches landing is the common case): show the aligned
+            # result so the numerals ARE the ones the stories explain
+            self._show(cur, push_history=False)
         from ...analysis.explain import ratio_lines
         lines = ["the numbers, explained (kept symbols excluded):",
                  "ratio attribution — what shapes each DISPLAYED numeral "
@@ -284,6 +311,9 @@ class ReduceBenchMixin:
             return
         inp, out = self._io()
         kw = self._contract_kw()
+        # a Nets-tree wish is ALWAYS priced: include carries it past the
+        # structural filter, so the request cannot vanish silently
+        kw["include"] = tuple(sorted(self._acg_pending))
         self._launch(
             lambda cb: self.controller.scan_ac_grounds(inp, out, **kw),
             f"scanning AC-ground candidates for {inp} → {out} …",
@@ -327,7 +357,8 @@ class ReduceBenchMixin:
             self._filling = False
         if self._acg_pending:
             # a Nets-tree wish arrived before the scan: tick it now that
-            # it is priced (unknown nets simply are not candidates)
+            # it is priced -- the scan's `include` guarantees it is in
+            # the table, structural candidate or not
             self._filling = True
             try:
                 for i in range(self.acg_tbl.rowCount()):
@@ -521,6 +552,10 @@ class ReduceBenchMixin:
     def _refresh_reduction_banner(self):
         summ = (self.controller.reduction_summary()
                 if self.controller is not None else None)
+        try:
+            self._schematic_restyle()
+        except Exception:                         # noqa: BLE001
+            pass                                  # decoration only
         if summ is None:
             self.red_banner.setText("circuit: as imported")
             self.red_banner.setStyleSheet(f"color: {theme.MUTED};")

@@ -28,7 +28,7 @@ from ..session import SessionController
 from . import devtree, exprweb, summaryweb, theme, view
 from .benches import (CompensateBenchMixin, GFTBenchMixin,
                       ModesBenchMixin, ReduceBenchMixin,
-                      WhatIfMixin)
+                      SchematicMixin, WhatIfMixin)
 from .jobs import JobRunnerMixin, _Cancelled, _Worker
 from .persistence import PersistenceMixin
 from .report import ReportMixin
@@ -60,7 +60,7 @@ _TOOLS = (
 class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                  WhatIfMixin, ReduceBenchMixin,
                  CompensateBenchMixin, ModesBenchMixin,
-                 GFTBenchMixin, QMainWindow):
+                 GFTBenchMixin, SchematicMixin, QMainWindow):
     #: tests point this at a temp .ini so they never touch the registry
     settings_path: str | None = None
 
@@ -328,6 +328,10 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         tabs.addTab(self._gft_page(), "GFT")
         self._reduce_tab = self._reduce_page()
         tabs.addTab(self._reduce_tab, "Reduce")
+        # the circuit as drawn: a view of the session, not of a bench,
+        # so it stays visible everywhere like Summary/Expression
+        self._schematic_tab = self._schematic_page()
+        tabs.addTab(self._schematic_tab, "Schematic")
         tabs.addTab(self.logview, "Log")
         self.tabs = tabs
 
@@ -1200,6 +1204,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             return self.controller.assess_probe(probe)
 
         self._advisor_thread = _Worker(fn)
+        self._track(self._advisor_thread)
         self._advisor_thread.done.connect(self._on_advisor_done)
         self._advisor_thread.failed.connect(
             lambda msg: self._set_strip(f"advisor failed: {msg}", "warn"))
@@ -1335,7 +1340,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                 f"model; press Solve to recompute with your keep set",
                 "warn")
 
-    def open_session(self, cin, psf, probe=None):
+    def open_session(self, cin, psf, probe=None, async_open=False):
         # cap model chosen in the Model menu; matrix is the accurate one on
         # non-reciprocal processes (SKY130 CM loops shift ~6 deg vs lumped),
         # and the GUI default -- lumped is offered for the textbook contrast
@@ -1344,6 +1349,8 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             mos_model=getattr(self, "mos_model", "separate"))
         self._cin, self._psf = str(cin), str(psf)
         self._match_groups = []
+        self._auto_token = None      # invalidate any in-flight auto chain
+        self._open_async = bool(async_open)
         self._push_recent(str(cin), str(psf))
         self._load_aliases()
         self._populate()
@@ -1477,15 +1484,26 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                   self.a_solve, self.a_simplify,
                   self.a_reduce):
             b.setEnabled(True)
-        self._auto_setup()
+        try:
+            self._schematic_load()
+        except Exception as e:                   # noqa: BLE001
+            self._sch_status.setText(f"schematic unavailable: {e}")
+        self._auto_setup(getattr(self, "_open_async", False))
 
-    def _auto_setup(self):
+    def _auto_setup(self, async_open: bool = False):
         """Make the tool SYMBOLIC by default. Left alone, the keep table opens
         empty -> keep=[] -> a purely numeric solve, so a symbolic analyzer's
         first result shows no symbols but `s`. Instead: apply the suggested
         matched pairs and pre-select a budget-fit keep set, so the first Solve
         already reads gm/(gds_n+gds_p). All heuristic and all reversible (Clear
         matches, untick symbols); guarded so a hiccup never blocks opening.
+
+        async_open (the launcher's path): first light runs in the solve
+        worker and the rest of the chain in background advisors, so the
+        WINDOW shows in about a second instead of hiding 8+ seconds of
+        session work behind the splash (measured on fc: first light
+        2.4 s, keep plan 4.1 s, ranking 0.8 s, conflict solve 0.9 s).
+        The synchronous path remains for tests and model re-opens.
         """
         c = self.controller
         name = Path(str(c.cin_path)).name
@@ -1497,50 +1515,136 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             if probe:
                 txt += f" (stb probe {probe})"
             self.mode_combo.setToolTip("simulator truth in this run: " + txt)
+        # A model re-open (cap/mos toggle) owns its own restoration: the
+        # handler brings back the user's matches and ticks and re-solves.
+        # Running the auto plan under it was exactly the pollution the
+        # correlation work removed -- skip the whole chain.
+        if getattr(self, "_suppress_first_light", False):
+            self._update_crumb()
+            return
+        if async_open:
+            self._auto_setup_async(name, n, carries)
+            self._update_crumb()
+            return
         try:
             inp, out = self._io()
             # FIRST LIGHT BEFORE MATCHES: the first thing on screen is the
             # honest unmatched model against the sim reference. Auto-matches
             # apply after -- so if they move the model, the user has seen
             # the truth once, and the conflicts strip below says why.
-            # A cap-model re-open SUPPRESSES it: replacing the user's
-            # hybrid result with a keep=[] numeric one contradicted the
-            # untouched keep panel (field report) — the previous result
-            # stays up until the re-solve with their ticks lands.
-            suppress = getattr(self, "_suppress_first_light", False)
-            if not suppress:
-                self._first_light()
+            self._first_light()
             groups = [tuple(g) for g in c.suggest_matches()]
             if groups:
                 self._match_groups = groups
                 self.controller.set_matches(*groups)
                 self._refresh_matches_label()
-                if not suppress:
-                    self._surface_match_conflicts(baseline=self.result)
+                self._surface_match_conflicts(baseline=self.result)
             plan = c.suggest_keep(inp, out, self.budget_spin.value())
             ranking = c.rank_symbols(inp, out)
             self._fill_keep_table(ranking, checked=list(plan.keep))
             self._update_estimate()          # the empty-state hint yields
-            kept = ", ".join(plan.keep) if plan.keep else "none within budget"
-            ref_note = (" | run carries: " + " ".join(carries)
-                        if carries else "")
-            self.statusBar().showMessage(
-                f"{name}: {n} devices — auto keep-set [{kept}]; "
-                f"Solve for a symbolic result, or edit the ticks.{ref_note}")
-            ii = getattr(self, "_ii", {})
-            if ii:
-                worst = sorted(ii, key=lambda k: -ii[k])[:4]
-                self._set_strip(
-                    "\N{WARNING SIGN} impact ionization active without a gii "
-                    "model on " + ", ".join(f"{k} ({ii[k]:.1%})" for k in worst)
-                    + " -- the first-order model is incomplete here (identify "
-                    "gii by AC injection; see the r2r case)", "warn")
+            self._auto_status(name, n, carries, plan.keep)
+            self._ii_strip()
         except Exception as exc:
             # fall back to the manual flow -- never let auto-setup break opening
             self.statusBar().showMessage(
                 f"{name}: {n} devices — Suggest matches, Rank, Solve "
                 f"(auto-setup skipped: {type(exc).__name__}).")
         self._update_crumb()
+
+    def _auto_status(self, name, n, carries, keep) -> None:
+        kept = ", ".join(keep) if keep else "none within budget"
+        ref_note = (" | run carries: " + " ".join(carries)
+                    if carries else "")
+        self.statusBar().showMessage(
+            f"{name}: {n} devices — auto keep-set [{kept}]; "
+            f"Solve for a symbolic result, or edit the ticks.{ref_note}")
+
+    def _ii_strip(self) -> None:
+        ii = getattr(self, "_ii", {})
+        if ii:
+            worst = sorted(ii, key=lambda k: -ii[k])[:4]
+            self._set_strip(
+                "\N{WARNING SIGN} impact ionization active without a gii "
+                "model on " + ", ".join(f"{k} ({ii[k]:.1%})" for k in worst)
+                + " -- the first-order model is incomplete here (identify "
+                "gii by AC injection; see the r2r case)", "warn")
+
+    def _auto_setup_async(self, name, n, carries) -> None:
+        """The launcher's open chain: first light in the solve worker
+        (progress + Cancel), then matches -> conflicts + keep plan +
+        ranking in background advisors, each landing on the GUI thread
+        as it completes. A token guards every landing: a re-open, a
+        model toggle or a restored state invalidates the chain, and the
+        keep table is only auto-filled while it is still empty -- the
+        user's (or a state's) ticks are never clobbered by a late
+        plan."""
+        c = self.controller
+        self._auto_token = tok = object()
+        try:
+            inp, out = self._io()
+        except Exception:
+            self.statusBar().showMessage(f"{name}: {n} devices — pick "
+                                         f"in/out and Solve")
+            return
+
+        def live() -> bool:
+            return self._auto_token is tok and self.controller is c
+
+        def fl(_cb):
+            return c.attach_template(c.solve(inp, out, []))
+
+        def fl_done(r):
+            self._log_finish("FIRST LIGHT")
+            self._tick.stop()
+            self._t0 = None
+            self.progress.hide()
+            self.cancel_btn.hide()
+            self._job_finished()
+            if not live():
+                return
+            self._show(r, push_history=False)
+            self.statusBar().showMessage(
+                f"first light: {inp} → {out} numeric, "
+                f"{r.dc_gain_db:.2f} dB — matches and keep plan on the "
+                f"way …")
+            self._run_bg(lambda: [tuple(g) for g in c.suggest_matches()],
+                         land_matches)
+
+        def land_matches(groups):
+            if not live():
+                return
+            if groups:
+                self._match_groups = list(groups)
+                c.set_matches(*groups)
+                self._refresh_matches_label()
+            baseline = self.result
+
+            def compute():
+                plan = c.suggest_keep(inp, out, self.budget_spin.value())
+                ranking = c.rank_symbols(inp, out)
+                if groups:
+                    c.solve(inp, out, [])   # warms the conflicts measure
+                return plan, ranking
+
+            def land_plan(res):
+                if not live():
+                    return
+                plan, ranking = res
+                if groups:
+                    self._surface_match_conflicts(baseline=baseline)
+                if not self.keep_tbl.rowCount():
+                    self._fill_keep_table(ranking,
+                                          checked=list(plan.keep))
+                    self._update_estimate()
+                self._auto_status(name, n, carries, plan.keep)
+                self._ii_strip()
+                self._update_crumb()
+
+            self._run_bg(compute, land_plan)
+
+        self._launch(fl, f"first light: {inp} → {out} …",
+                     on_done=fl_done, est_s=None)
 
     # ------------------------------------------------------------- matches
     def _apply_matches(self):
@@ -1990,25 +2094,32 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                                       span highlighted: the certification
                                       region of the reduced model.
         """
-        transfer = self.mode_combo.currentText() == "Transfer"
+        mode = self.mode_combo.currentText()
+        transfer = mode == "Transfer"
         form = self.form_combo.currentText()
         budgeted = transfer and form.startswith("Simplified")
         lowest = budgeted and "lowest" in form
         strat = self._strategy()
-        # full order: dB/deg collapse budgets. Lowest order: the strategy
-        # dropdown plus ITS spins — plain reuses the dB/deg pair.
-        self._budget_lbl_act.setVisible(budgeted
-                                        and (not lowest
-                                             or strat == "plain"))
-        self._mag_act.setVisible(budgeted and (not lowest
-                                               or strat == "plain"))
-        self._phase_act.setVisible(budgeted and (not lowest
-                                                 or strat == "plain"))
-        self._strategy_act.setVisible(lowest)
-        self._pm_act.setVisible(lowest and strat == "stability")
-        self._gm_act.setVisible(lowest and strat == "stability")
-        self._rej_act.setVisible(lowest and strat == "rejection")
-        self.band_row.setVisible(lowest)
+        # the CONTRACT surface (strategy dropdown, its budget spins, the
+        # band slider) shows wherever the contract governs something on
+        # screen: the lowest-order solve, and the Reduce-circuit tool --
+        # its AC-ground and removal scans price and gate under exactly
+        # these controls, and a criterion set by invisible knobs would
+        # be the dead-knob bug inverted (field report: the tool showed
+        # neither the band nor the strategy it was gating with).
+        contract = lowest or mode == "Reduce circuit"
+        # full order: dB/deg collapse budgets. Under the contract, the
+        # plain strategy reuses the same dB/deg pair as its budgets.
+        show_dbdeg = ((budgeted and not lowest)
+                      or (contract and strat == "plain"))
+        self._budget_lbl_act.setVisible(show_dbdeg)
+        self._mag_act.setVisible(show_dbdeg)
+        self._phase_act.setVisible(show_dbdeg)
+        self._strategy_act.setVisible(contract)
+        self._pm_act.setVisible(contract and strat == "stability")
+        self._gm_act.setVisible(contract and strat == "stability")
+        self._rej_act.setVisible(contract and strat == "rejection")
+        self.band_row.setVisible(contract)
         self._on_band_changed(*self.band_slider.values())
 
     def _strategy(self) -> str:
@@ -2385,6 +2496,10 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
 
     def _show(self, result, overlays=(), push_history=True):
         self.result = result
+        try:
+            self._schematic_restyle()
+        except Exception:                         # noqa: BLE001
+            pass                                  # decoration only
         view.bode_figure(result, self.canvas.figure, overlays=overlays)
         theme.style_figure(self.canvas.figure)
         self.canvas.draw_idle()
@@ -2699,14 +2814,18 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.xprobe_instances(self.devices.selected_names())
 
 
-def build_window(cin=None, psf=None, probe=None) -> MainWindow:
+def build_window(cin=None, psf=None, probe=None,
+                 async_open=False) -> MainWindow:
     """Construct the window, optionally preloaded with a CIN + psf (the entry
     the Virtuoso SKILL launcher targets). `probe` preselects the loop-gain
     bench on that vsource; without it the run's own stb designation is
-    discovered from the psf header / netlist."""
+    discovered from the psf header / netlist. async_open: show the
+    window after the cheap populate and run first light + auto-setup as
+    narrated background work (the launcher's path; tests default to the
+    synchronous open)."""
     win = MainWindow()
     if cin and psf:
-        win.open_session(cin, psf, probe=probe)
+        win.open_session(cin, psf, probe=probe, async_open=async_open)
     return win
 
 

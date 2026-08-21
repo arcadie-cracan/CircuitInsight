@@ -1014,15 +1014,17 @@ class SessionController:
         one unit; `budget_db` gates only the legacy no-strategy path.
         Cached."""
         opts = dict(strategy_opts or {})
+        include = tuple(kw.pop("include", ()) or ())
         key = self._key("acground", inp, out, budget_db, strategy,
-                        tuple(sorted(opts.items())), fmin, fmax)
+                        tuple(sorted(opts.items())), fmin, fmax, include)
         if not kw and key in self._cache:
             return self._cache[key]
         crit, freqs = self._band_criterion(strategy, opts, fmin, fmax)
         if freqs is not None:
             kw.setdefault("freqs", freqs)
         rep = self._analyzer_ready().scan_ac_grounds(
-            inp, out, budget_db=budget_db, criterion=crit, **kw)
+            inp, out, budget_db=budget_db, criterion=crit,
+            include=include, **kw)
         if set(kw) <= {"freqs"}:
             self._cache[key] = rep
         return rep

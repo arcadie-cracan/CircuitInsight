@@ -38,6 +38,10 @@
   ;; "cross-probe unavailable". Loading it only defines procedures -- nothing
   ;; here touches a window or the skillbridge server.
   (load (strcat dir "/cin_xprobe.il"))
+  ;; layout hints: harvests the schematic geometry (instances, wires,
+  ;; labels) into a .hints.json sidecar so CircuitInsight can re-draw
+  ;; the schematic with its own symbol library. Procedures only.
+  (load (strcat dir "/cin_hints.il"))
 
   ;; ----------------------------------------------------------------- the menu
   ;; .cdsinit runs before any window exists, so we cannot install a menu now.

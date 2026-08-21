@@ -118,6 +118,7 @@ class JobRunnerMixin:
             return res
 
         self._thread = _Worker(_prepped)
+        self._track(self._thread)
         self._thread.progress.connect(self._on_progress)
         self._thread.done.connect(on_done or self._on_done)
         self._thread.failed.connect(self._on_failed)
@@ -137,6 +138,56 @@ class JobRunnerMixin:
                   self.a_reduce, *extra):
             b.setEnabled(True)
 
+    def _track(self, th) -> None:
+        """Every started QThread, until it finishes. self._thread is
+        overwritten by the next launch (a re-open's first light while
+        the previous solve still runs), and a running QThread whose
+        last Python reference goes is a Qt fatal -- the registry keeps
+        it alive and lets closeEvent wait for it."""
+        reg = self.__dict__.setdefault("_live_threads", [])
+        reg.append(th)
+        th.finished.connect(lambda _t=th: (
+            reg.remove(_t) if _t in reg else None))
+
+    def closeEvent(self, ev):
+        """Orderly shutdown: every advisor, solve, probe-advisor and
+        calibration thread is waited out before the window goes, and
+        their results are dropped. Without this a QThread still running
+        when Python freed the window aborted the PROCESS (Qt's
+        "destroyed while thread is still running" is a fail-fast on
+        Windows, 0xC0000409) -- seen as the GUI test file dying without
+        a traceback after a test that re-opened twice and closed."""
+        self._closing = True
+        threads = list(getattr(self, "_live_threads", []))
+        threads += list(getattr(self, "_bg_workers", []))
+        for name in ("_thread", "_advisor_thread", "_calib_thread"):
+            th = getattr(self, name, None)
+            if th is not None:
+                threads.append(th)
+        for th in threads:
+            try:
+                if hasattr(th, "cancel"):
+                    th.cancel()
+                import warnings
+                for sig in ("done", "failed", "progress"):
+                    s = getattr(th, sig, None)
+                    if s is not None:
+                        # PySide warns on disconnecting an unconnected
+                        # signal; that is the normal case for some
+                        try:
+                            with warnings.catch_warnings():
+                                warnings.simplefilter("ignore",
+                                                      RuntimeWarning)
+                                s.disconnect()
+                        except (RuntimeError, TypeError):
+                            pass
+                if th.isRunning():
+                    th.wait(30000)
+            except RuntimeError:             # already deleted
+                pass
+        self._bg_workers = []
+        super().closeEvent(ev)
+
     def _run_bg(self, fn, on_done):
         """Advisor-pattern short worker: controller math off the GUI
         thread (estimates, rank, the certificate — each measured
@@ -146,10 +197,12 @@ class JobRunnerMixin:
         if not hasattr(self, "_bg_workers"):
             self._bg_workers = []
         self._bg_workers.append(w)
+        self._track(w)
 
         def _done(res, _w=w):
             try:
-                on_done(res)
+                if not getattr(self, "_closing", False):
+                    on_done(res)
             finally:
                 if _w in self._bg_workers:
                     self._bg_workers.remove(_w)
@@ -379,6 +432,7 @@ class JobRunnerMixin:
             self._update_estimate()
 
         self._calib_thread = _Calib()
+        self._track(self._calib_thread)
         self._calib_thread.done.connect(finished)
         self._calib_thread.start()
 

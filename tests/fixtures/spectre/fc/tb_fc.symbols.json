@@ -1,0 +1,38 @@
+{
+ "symbols_version": "0.1",
+ "cells": {
+  "ota_folded_cascode": {
+   "symbol": "gm.svg",
+   "pins": {
+    "vin_n": "in-",
+    "vin_p": "in+",
+    "vout": "out"
+   },
+   "stubs": {
+    "ib": "auto"
+   },
+   "confirmed": true,
+   "evidence": {
+    "vout": [
+     "inside: reaches only MOS drains/sources (NM5, PM11)",
+     "parent: loaded by CL"
+    ],
+    "vin_n": [
+     "inside: reaches only MOS gates (PM13)",
+     "parent: driven by I5",
+     "name says -"
+    ],
+    "ib": [
+     "inside: gate+drain of NM0 (diode)",
+     "parent: driven by IBIAS (isource)",
+     "no anchor on the symbol: drawn as a stub"
+    ],
+    "vin_p": [
+     "inside: reaches only MOS gates (PM12)",
+     "parent: driven by I5",
+     "name says +"
+    ]
+   }
+  }
+ }
+}

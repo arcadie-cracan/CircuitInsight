@@ -109,3 +109,46 @@ def test_session_scan_is_cached():
         b = s.scan_ac_grounds("VIND", "vout")
     assert a is b
     assert "AC-ground scan" in a.describe()
+
+
+def test_include_prices_a_non_structural_node():
+    """A Nets-tree right-click must always come back with a price. The
+    structural filter nominates only transconductor-control nodes; a
+    passives-only junction was silently dropped ('unknown nets simply
+    are not candidates') — exactly the node a user experiments with.
+    `include` carries it through, priced by the same single inverse."""
+    from circuitinsight.engine.primitives import Primitive
+
+    prims = [
+        Primitive("VIN", "", "vsrc", ("in", "0"), 0.0),
+        Primitive("R1", "", "r", ("in", "mid"), 1e3),
+        Primitive("R2", "", "r", ("mid", "out"), 1e3),
+        Primitive("Cm", "", "c", ("mid", "0"), 1e-9),
+        Primitive("RL", "", "r", ("out", "0"), 1e4),
+    ]
+    # structural-only: no transconductors, no candidates — the request
+    # would have vanished
+    rep0 = scan_ac_grounds(prims, ("0",), "VIN", "out")
+    assert not rep0.candidates
+    # include: the junction comes back WITH its measured price
+    rep = scan_ac_grounds(prims, ("0",), "VIN", "out", include=("mid",))
+    by = {c.node: c for c in rep.candidates}
+    assert "mid" in by
+    assert by["mid"].worst_db > 3.0        # grounding a divider mid is loud
+    assert not by["mid"].within_budget     # and the verdict says so
+    # a request for a held or unknown node is filtered, not an error
+    rep2 = scan_ac_grounds(prims, ("0",), "VIN", "out",
+                           include=("in", "nosuch"))
+    assert all(c.node not in ("in", "nosuch") for c in rep2.candidates)
+
+
+def test_include_survives_the_report_cap(ota5t):
+    """The requested node must appear even when the cap would have cut
+    it: ask for the most expensive candidate with max_report=1."""
+    full = scan_ac_grounds(ota5t.primitives, ota5t.flat.ground, "VIND",
+                           "vout", structural_only=False, max_report=99)
+    worst = full.candidates[-1].node
+    rep = scan_ac_grounds(ota5t.primitives, ota5t.flat.ground, "VIND",
+                          "vout", structural_only=False, max_report=1,
+                          include=(worst,))
+    assert any(c.node == worst for c in rep.candidates)

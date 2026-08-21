@@ -962,7 +962,9 @@ def test_advisors_surface_in_the_gui(qapp):
         assert "pole attribution" in txt and "set by" in txt
 
         stories = win.controller.explain_numerals("VIND", "vout")
-        win._on_explain_done(stories)
+        # the handler now receives (aligned result, stories) so the
+        # display can be refreshed when the configuration drifted
+        win._on_explain_done((win.result, stories))
         txt2 = win.summary.toPlainText()
         assert txt2.startswith(txt)
         assert "the numbers, explained" in txt2 and "den s^0" in txt2
@@ -1511,9 +1513,15 @@ def test_advisory_passes_do_not_inherit_the_solve_estimate(qapp, tmp_path):
             win._run_est = (win._est_s if est_s is win._KEEP_EST else est_s)
 
         win._launch = spy
-        win.controller = object()                # only the launch is exercised
-        win.result = None
-        win.explain_numbers()                    # needs no result
+        # explain now keys off the DISPLAYED result (the field report:
+        # right after opening, panel and display disagree by design and
+        # stories computed for the panel could never attach) — a stub
+        # result stands in; only the launch pricing is exercised
+        from types import SimpleNamespace
+
+        win.controller = object()
+        win.result = SimpleNamespace(inp="VIND", out="vout", keep=[])
+        win.explain_numbers()
         assert launched and launched[-1][1] is None
         assert win._run_est is None              # no inherited promise
 
@@ -1784,3 +1792,222 @@ def test_summary_grows_the_approximation_ledger(qapp, tmp_path):
         assert "measured end to end" in txt
     finally:
         win.close()
+
+
+def test_async_open_shows_the_window_first(qapp, tmp_path):
+    """The launcher's path: open_session(async_open=True) returns after
+    the cheap populate (combos filled, no result yet), first light lands
+    from the worker, and the auto keep plan fills the table from the
+    advisors — the splash no longer hides 8+ seconds of session work."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "gui.ini")
+    try:
+        win = MainWindow()
+    finally:
+        MainWindow.settings_path = None
+    import time as _t
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        t0 = _t.monotonic()
+        win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"),
+                         async_open=True)
+        open_s = _t.monotonic() - t0
+    try:
+        # the synchronous slice is the cheap populate only
+        assert win.in_combo.count() > 0
+        assert win.result is None, "first light must NOT be synchronous"
+        assert _wait_bg(qapp, lambda: win.result is not None),             "first light lands from the worker"
+        assert _wait_bg(qapp, lambda: win.keep_tbl.rowCount() > 0),             "the auto keep plan fills the table from the advisors"
+        assert _wait_bg(qapp,
+                        lambda: "auto keep-set"
+                        in win.statusBar().currentMessage())
+        assert win._match_groups, "auto matches applied in the chain"
+        # the guard: a user tick set is never clobbered by a late plan —
+        # simulated by the rowCount>0 gate the chain checks
+        assert open_s < 10.0        # sanity, not a benchmark
+    finally:
+        win.close()
+
+
+def test_explain_right_after_open_attaches_to_the_display(qapp, tmp_path):
+    """Field report: right after opening, the shown result is the
+    pre-match first light with keep=[], while the panel already carries
+    the auto plan's ticks — Explain the numbers computed stories for
+    the PANEL's keep and they could never attach to the displayed
+    numerals; the hover kept its run-me prompt. Explain now keys off
+    the displayed result and aligns it to the current configuration
+    first."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "gui.ini")
+    try:
+        win = MainWindow()
+    finally:
+        MainWindow.settings_path = None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"))
+        win.in_combo.setCurrentText("VIND")
+        win.out_combo.setCurrentText("vout")
+    try:
+        # the field state: display keep=[] (first light), panel ticked
+        assert win.result is not None and win.result.keep == []
+        assert win.checked_keep(), "the auto plan pre-ticks the panel"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win.explain_numbers()
+        assert _wait_bg(qapp, lambda: win._thread is None
+                        or not win._thread.isRunning())
+        qapp.processEvents()
+        # the stories are cached under the DISPLAYED result's key, so
+        # the hover lookup in _render_expr finds them
+        r = win.result
+        rkeep = r.keep if isinstance(r.keep, list) else []
+        assert win.controller.cached_numerals(r.inp, r.out,
+                                              keep=rkeep),             "stories must attach to the displayed expression"
+        assert "the numbers, explained" in win.summary.toPlainText()
+    finally:
+        win.close()
+
+
+def test_reduce_tool_shows_the_contract_it_gates_with(qapp, tmp_path):
+    """Field report: the Reduce-circuit tool hid the band slider and
+    the strategy dropdown while its scans priced and gated under
+    exactly those controls — a criterion set by invisible knobs. The
+    contract surface now shows wherever the contract governs."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "gui.ini")
+    try:
+        win = MainWindow()
+    finally:
+        MainWindow.settings_path = None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"))
+        win.in_combo.setCurrentText("VIND")
+        win.out_combo.setCurrentText("vout")
+    try:
+        win.mode_combo.setCurrentText("Reduce circuit")
+        assert win._strategy_act.isVisible()
+        assert win.band_row.isVisibleTo(win)
+        # the strategy's own spins follow it, exactly as in Transfer
+        win.strategy_combo.setCurrentText("Stability (margins)")
+        assert win._pm_act.isVisible() and win._gm_act.isVisible()
+        win.strategy_combo.setCurrentText("Gain & phase")
+        assert win._mag_act.isVisible() and win._phase_act.isVisible()
+        # the result-form selector stays a Transfer concept
+        assert not win._form_act.isVisible()
+        # and Transfer/Exact still hides the whole surface
+        win.mode_combo.setCurrentText("Transfer")
+        win.form_combo.setCurrentText("Exact")
+        assert not win._strategy_act.isVisible()
+        assert not win.band_row.isVisibleTo(win)
+    finally:
+        win.close()
+
+
+def test_schematic_pane_reports_its_missing_pieces(qapp, tmp_path):
+    """Without hints beside the CIN the pane says so; without a library
+    it says so; never an exception in the open path."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    assert win.tabs.indexOf(win._schematic_tab) >= 0
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"))
+    assert "no layout hints" in win._sch_status.text()
+    win.close()
+
+
+@pytest.mark.skipif(not os.environ.get("CIN_SYMLIB"),
+                    reason="CIN_SYMLIB not set (the symbol library is personal)")
+def test_schematic_pane_draws_pages_and_cross_probes(qapp, tmp_path):
+    """fc ships its hints + confirmed block symbol: the tb page draws,
+    a double-click on the OTA descends, a click on a device selects it
+    in the Instances tree by its dot-joined path, the crumb climbs
+    back."""
+    from PySide6.QtCore import QPoint
+
+    from circuitinsight.gui.app import MainWindow
+
+    FC = Path(__file__).resolve().parent / "fixtures" / "spectre" / "fc"
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    win.resize(1400, 900)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FC / "tb_fc.cin.json"), str(FC / "psf"))
+    st = win._sch_status.text()
+    assert st.startswith("tb_ota_folded_cascode:"), st
+    assert "1 block(s)" in st
+    assert win.sch_view.bounds_of("I0") is not None
+    # descend into the block
+    win._schematic_activated("I0", "block")
+    assert win._sch_status.text().startswith("ota_folded_cascode:")
+    assert win.sch_view.bounds_of("PM13") is not None
+    assert [d for _, d in win._sch_path] == ["tb_ota_folded_cascode",
+                                              "ota_folded_cascode"]
+    # click a device: the tree selects I0.PM13
+    win._schematic_clicked("PM13", "device")
+    assert win.devices.selected_names() == ["I0.PM13"]
+    # tree selection highlights on the page
+    win._schematic_follow_tree()
+    assert win.sch_view._hl is not None
+    # hit-testing maps a view point back to the instance
+    r = win.sch_view.bounds_of("PM13")
+    sp = win.sch_view._item.mapToScene(r.center())
+    vp = win.sch_view.mapFromScene(sp)
+    assert win.sch_view.hit(QPoint(vp.x(), vp.y()))[0] == "PM13"
+    # crumb back to the top
+    win._schematic_up(0)
+    assert win._sch_status.text().startswith("tb_ota_folded_cascode:")
+    win.close()
+
+
+@pytest.mark.skipif(not os.environ.get("CIN_SYMLIB"),
+                    reason="CIN_SYMLIB not set (the symbol library is personal)")
+def test_schematic_pane_draws_the_analysis_state(qapp, tmp_path,
+                                                 monkeypatch):
+    """The simplified view on the same layout: after first light the
+    devices whose symbols are in the formula are emphasized; after an
+    AC-ground reduction the grounded net is gray-dashed with an earth
+    and a dead source fades; the toggle returns the plain drawing."""
+    from circuitinsight.gui import app as appmod
+    from circuitinsight.gui.app import MainWindow
+    from circuitinsight.gui.benches import schematic as schmod
+
+    HINTS = Path(__file__).resolve().parent / "fixtures" / "hints" \
+        / "tb_ota5t.hints.json"
+    monkeypatch.setattr(schmod, "hints_path", lambda _cin: HINTS)
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"))
+        win.in_combo.setCurrentText("VIND")
+        win.out_combo.setCurrentText("vout")
+        win.solve_sync()
+    # first light / solve: symbols in the formula -> emphasized labels
+    win._schematic_activated("I0", "block")
+    styles, nets = win._schematic_styles()
+    assert any(v == "symbolic" for v in styles.values())
+    svg = win.sch_view._renderer            # rendered without error
+    assert svg.isValid()
+    # ground the mirror node inside the OTA; the page shows it
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.controller.apply_reduction(["I0.net1"], inp="VIND", out="vout")
+    win._refresh_reduction_banner()
+    styles, nets = win._schematic_styles()
+    assert nets == {"net1": "acground"}
+    assert "acground" in win._sch_status.text() or \
+        "AC-grounded" in win._sch_status.text()
+    # the toggle gives the plain drawing back
+    win._sch_state_chk.setChecked(False)
+    assert "AC-grounded" not in win._sch_status.text()
+    win.controller.revert_reduction()
+    win.close()

@@ -24,6 +24,7 @@ approximation it ever makes in measured dB.</i></p>
 <li><a href="#keep">The keep set and the estimate</a></li>
 <li><a href="#results">Reading results</a></li>
 <li><a href="#virtuoso">Working from Virtuoso</a></li>
+<li><a href="#schematic">The Schematic pane</a></li>
 <li><a href="#contract">The exactness contract</a></li>
 <li><a href="#shortcuts">Keyboard shortcuts</a></li>
 </ul>
@@ -437,6 +438,42 @@ finds the current run's results, and launches the GUI preloaded; the
 topology and the operating point always come from the same session.
 With cross-probe enabled in the Devices menu, clicking a symbol in the
 Expression view highlights its device in the schematic.</p>
+
+<h2><a name="schematic"></a>The Schematic pane</h2>
+
+<p>The <b>Schematic</b> tab shows the circuit as it was drawn in
+Virtuoso, redrawn with an SVG symbol library: the original placement,
+the original wiring, one page per cell. It needs two things beside the
+CIN: the <b>layout hints</b> the harvester writes
+(<code>CInHintsExport("lib" "cell" "schematic" "&lt;stem&gt;.hints.json")</code>
+in the CIW, saved next to <code>&lt;stem&gt;.cin.json</code>) and a
+<b>symbol library</b> directory (the one holding
+<code>terminals.csv</code>), chosen once with <b>Library&hellip;</b> or
+given by <code>CIN_SYMLIB</code>. Without either, the pane says what is
+missing.</p>
+
+<p>The wheel zooms, dragging pans, <b>Fit</b> re-frames the page.
+<b>Double-click a block</b> to descend into its cell; the breadcrumb
+climbs back. <b>Click a device</b> and the Instances tree selects it
+under its full path (<code>I0.PM13</code>); select in the tree and the
+page highlights it.</p>
+
+<p>With <b>analysis state</b> ticked the page also shows what the
+session did to the circuit, on the same layout: AC-grounded nets turn
+gray-dashed with an earth mark, sources the reduction made dead fade,
+&#285;m-lumped devices wear a badge, devices whose symbol is in the
+shown formula are bold and those folded into a number are gray. The
+geometry never changes; untick for the plain drawing.</p>
+
+<p>A subcircuit instance is drawn as a plain box until a symbol is
+<b>confirmed</b> for its cell in <code>&lt;stem&gt;.symbols.json</code>
+beside the CIN. <code>scripts/hints_symbols.py</code> proposes that
+mapping from the netlist (which ports reach only gates, only drains, a
+diode; what drives them at the parent) with its evidence line by line,
+and writes it unconfirmed; set <code>"confirmed": true</code> and the
+block becomes the amplifier symbol, its anchorless pins drawn as named
+stubs. A wrong polarity would mislead more than a box, so nothing is
+applied unasked.</p>
 
 <h2><a name="contract"></a>The exactness contract</h2>
 

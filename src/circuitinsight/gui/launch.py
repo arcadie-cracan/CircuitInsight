@@ -145,10 +145,12 @@ def main(argv=None):
     _stage(app, splash, "building the workbench …")
     if args.cin and args.psf:
         from pathlib import Path
-        _stage(app, splash,
-               f"opening {Path(args.cin).name} — matches, rank, "
-               f"first light …")
-    win = build_window(args.cin, args.psf, probe=args.probe)
+        _stage(app, splash, f"opening {Path(args.cin).name} …")
+    # async_open: the window appears after the cheap populate; first
+    # light and the auto-setup narrate themselves in the status bar
+    # instead of hiding 8+ measured seconds behind this splash
+    win = build_window(args.cin, args.psf, probe=args.probe,
+                       async_open=True)
     win.show()
     splash.finish(win)
     return app.exec()

@@ -121,7 +121,8 @@ def _structural_candidates(primitives, ground) -> dict:
 def scan_ac_grounds(primitives, ground, inp: str, out: str, *,
                     freqs=None, budget_db: float = 0.1, alias=None,
                     max_report: int = 12, structural_only: bool = True,
-                    exclude=(), criterion=None) -> AcGroundReport:
+                    exclude=(), criterion=None,
+                    include=()) -> AcGroundReport:
     """Rank nodes by the EXACT error that declaring them AC grounds would
     introduce in tf(inp -> out), and recommend the largest set that fits
     `budget_db`.
@@ -135,7 +136,13 @@ def scan_ac_grounds(primitives, ground, inp: str, out: str, *,
     greedy set) is priced AND gated by criterion.score -- the same
     contract, unit and window as the order reduction -- instead of the
     magnitude-only budget_db; the dB/deg figures stay as secondary
-    information. Pass `freqs` spanning the contract's band."""
+    information. Pass `freqs` spanning the contract's band.
+
+    include: nodes the USER asked about (a Nets-tree right-click).
+    They are priced alongside the structural candidates -- same single
+    inverse, zero extra cost -- and always survive into the report,
+    past both the structural filter and the max_report cap: a request
+    must come back with a price, never vanish."""
     system = build_mna(primitives, ground, inp, alias)
     subs = {system.symbols[n]: sp.Float(v)
             for n, v in system.values.items() if n in system.symbols}
@@ -166,8 +173,11 @@ def scan_ac_grounds(primitives, ground, inp: str, out: str, *,
     # scan would score a harmless-looking 0 dB for a change that simply
     # does not happen (measured on the 5T OTA: vin_p, held by the input
     # balun, reads 0 dB while obviously not being a bias node).
+    include = [n for n in include if n in system.node_index
+               and n not in skip]
     names = [n for n in system.node_index
-             if n not in skip and (not structural_only or n in struct)]
+             if n not in skip and (not structural_only or n in struct
+                                   or n in include)]
     if not names:
         return AcGroundReport(budget_db=budget_db)
 
@@ -228,6 +238,11 @@ def scan_ac_grounds(primitives, ground, inp: str, out: str, *,
                            score=(None if scores is None else scores[i]))
              for i, n in enumerate(names)]
     cands.sort(key=lambda c: c.worst_db if c.score is None else c.score)
+    # the requested nodes always make the report, cap or not
+    shown = cands[:max_report]
+    for c in cands[max_report:]:
+        if c.node in include:
+            shown.append(c)
 
     # greedy set growth, joint error EXACT from the same inverses -- and
     # gated by the SAME contract that gated the singles
@@ -252,7 +267,7 @@ def scan_ac_grounds(primitives, ground, inp: str, out: str, *,
         elif j <= budget_db:
             chosen, chosen_names, joint = trial, chosen_names + [c.node], j
     label = "" if criterion is None else (criterion.name or "dB band")
-    return AcGroundReport(candidates=cands[:max_report],
+    return AcGroundReport(candidates=shown,
                           recommended=chosen_names, joint_db=float(joint),
                           budget_db=budget_db, joint_score=joint_score,
                           criterion_label=label)
