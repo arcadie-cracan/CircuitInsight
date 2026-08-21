@@ -443,3 +443,32 @@ def test_approximation_ledger_measures_not_sums(miller):
     finally:
         miller.revert_reduction()
         miller.set_matches()                      # reset shared fixture
+
+
+def test_equivalent_elements_are_spelled_out():
+    """A reduction's lumped Geq/Ceq symbol is a definition: the session
+    lists its members (as H(s) join keys) and value; the formatter
+    renders it G_{eq,node}, never the bare node name."""
+    import warnings
+
+    from circuitinsight.gui.view.format import symbol_tex
+    from circuitinsight.session import SessionController
+
+    fc = FIX / "fc"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(fc / "tb_fc.cin.json", fc / "psf")
+        assert c.equivalent_elements() == []
+        rep = c.scan_ac_grounds("VIND", "vout")
+        nodes = [x.node for x in rep.candidates if x.within_budget][:2]
+        c.apply_reduction(nodes, inp="VIND", out="vout")
+    eqs = c.equivalent_elements()
+    assert eqs, "grounding mirror nodes lumps parallel elements"
+    g = next(e for e in eqs if e["name"].startswith("Geq_"))
+    assert all("." not in m and m.startswith("g") for m in g["members"])
+    assert g["value"] > 0
+    assert symbol_tex(g["name"]) == (
+        r"G_{eq,\mathrm{" + g["node"].split(".")[-1] + "}}")
+    assert "net" not in symbol_tex("Geq_I0_net8").replace("net8", "")
+    c.revert_reduction()
+    assert c.equivalent_elements() == []

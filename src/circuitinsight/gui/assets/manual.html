@@ -252,6 +252,14 @@ an xf analysis overlays it as truth.</p>
 working circuit. The session holds one circuit in one of two named
 states &ndash; <b>as imported</b> or <b>reduced</b> &ndash; and every
 result records which state produced it.</p>
+
+<p>Grounding a node folds the parallel same-kind elements it leaves
+to ground into ONE equivalent &ndash; exact, a sum &ndash; which then
+appears in H(s) as <i>G</i><sub>eq,net8</sub> or
+<i>C</i><sub>eq,net8</sub>. It is a definition you can look up:
+hover it in the Expression view and the tooltip spells out the
+members it stands for; the Summary's ledger lists every equivalent as
+<code>Geq_I0_net8 = gds_I0_NM6 + gds_I0_PM6 = 1.21 uS</code>.</p>
 <ol>
 <li><b>Scan AC grounds</b> prices every mirror and bias node by the exact
 error grounding it would cause in the current transfer. The recommended
@@ -447,9 +455,10 @@ the original wiring, one page per cell. It needs two things beside the
 CIN: the <b>layout hints</b> the harvester writes
 (<code>CInHintsExport("lib" "cell" "schematic" "&lt;stem&gt;.hints.json")</code>
 in the CIW, saved next to <code>&lt;stem&gt;.cin.json</code>) and a
-<b>symbol library</b> directory (the one holding
-<code>terminals.csv</code>), chosen once with <b>Library&hellip;</b> or
-given by <code>CIN_SYMLIB</code>. Without either, the pane says what is
+<b>symbol library</b> (the directory holding
+<code>terminals.csv</code>): a source checkout carries it as the
+<code>symbols/</code> submodule and finds it by itself; otherwise choose
+it once with <b>Library&hellip;</b> or give it by <code>CIN_SYMLIB</code>. Without either, the pane says what is
 missing.</p>
 
 <p>The wheel zooms, dragging pans, <b>Fit</b> re-frames the page.
@@ -467,13 +476,18 @@ geometry never changes; untick for the plain drawing.</p>
 
 <p>A subcircuit instance is drawn as a plain box until a symbol is
 <b>confirmed</b> for its cell in <code>&lt;stem&gt;.symbols.json</code>
-beside the CIN. <code>scripts/hints_symbols.py</code> proposes that
-mapping from the netlist (which ports reach only gates, only drains, a
-diode; what drives them at the parent) with its evidence line by line,
-and writes it unconfirmed; set <code>"confirmed": true</code> and the
-block becomes the amplifier symbol, its anchorless pins drawn as named
-stubs. A wrong polarity would mislead more than a box, so nothing is
-applied unasked.</p>
+beside the CIN. A box with a proposal waiting wears a <b>?</b>;
+<b>right-click it &rarr; Symbol&hellip;</b> opens the dialog: the
+library's block symbols with a preview, and one row per port with the
+proposal's evidence (which ports reach only gates, only drains, a
+diode; what drives them at the parent) and an anchor chooser &ndash;
+an anchor of the symbol, or a stub edge for pins the symbol has none
+for. An anchor used twice blocks OK with the reason. OK writes the
+mapping confirmed and the block becomes the symbol, its anchorless
+pins drawn as named stubs; <b>Draw as box</b> takes it back. The same
+proposal is printed by <code>scripts/hints_symbols.py</code>. A wrong
+polarity would mislead more than a box, so nothing is applied
+unasked.</p>
 
 <h2><a name="contract"></a>The exactness contract</h2>
 

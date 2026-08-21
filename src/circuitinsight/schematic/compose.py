@@ -69,13 +69,22 @@ class ComposeError(ValueError):
     pass
 
 
+#: the symbol library as a git submodule of the source checkout
+#: (github.com/arcadie-cracan/circuitinsight-symbols, CC BY 4.0): the
+#: default when nothing is configured. A pip install has no checkout,
+#: so CIN_SYMLIB / the GUI's Library... setting remain the way there.
+BUNDLED_SYMLIB = Path(__file__).resolve().parents[3] / "symbols"
+
+
 def library_root(explicit=None) -> Path:
     root = explicit or os.environ.get("CIN_SYMLIB")
+    if not root and (BUNDLED_SYMLIB / "terminals.csv").exists():
+        root = BUNDLED_SYMLIB
     if not root:
         raise ComposeError(
-            "no symbol library: set CIN_SYMLIB to the library-rescaled "
-            "directory (the library is personal and does not ship with "
-            "CircuitInsight)")
+            "no symbol library: set CIN_SYMLIB to the circuitinsight-"
+            "symbols checkout (a git submodule of the source tree: "
+            "git submodule update --init), or choose it in the GUI")
     root = Path(root)
     if not (root / "terminals.csv").exists():
         raise ComposeError(f"{root} has no terminals.csv — not the "
@@ -117,6 +126,19 @@ class SymbolLibrary:
                 self._anchors.setdefault(f, {})[term] = (float(x),
                                                          float(y))
         self._cache: dict = {}
+
+    def anchors_of(self, filename: str) -> dict:
+        """anchor name -> (x, y) mm from terminals.csv, {} if unknown."""
+        return dict(self._anchors.get(filename, {}))
+
+    def block_candidates(self) -> list:
+        """Library files usable as BLOCK symbols: those with at least one
+        anchor whose name carries an input/output role (in+/in-/in,
+        out/out1/out2), sorted by name."""
+        from .blocks import ANCHOR_ROLES
+        return sorted(f for f, an in self._anchors.items()
+                      if any(a in ANCHOR_ROLES for a in an)
+                      and (self.root / f).exists())
 
     def load(self, filename: str) -> Symbol:
         if filename in self._cache:
@@ -347,8 +369,8 @@ def _register(reg, mode=True):
 def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
             *, margin_mm: float = 8.0, subckts=frozenset(),
             overlay: bool = False, block_symbols: dict | None = None,
-            styles: dict | None = None, net_styles: dict | None = None
-            ) -> str:
+            styles: dict | None = None, net_styles: dict | None = None,
+            proposed_cells=frozenset()) -> str:
     """SVG document string for one page (a definition, or the flat
     view).
 
@@ -375,6 +397,8 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
     instances fade, ĝm-lumped ones wear a badge, instances whose
     symbol is in the shown formula are emphasized, AC-grounded nets
     turn gray-dashed with an earth mark. The geometry never changes.
+    proposed_cells: block cells that have a symbol PROPOSED but not
+    confirmed — their boxes wear a "?" badge inviting the dialog.
     """
     block_symbols = block_symbols or {}
     styles = styles or {}
@@ -748,9 +772,11 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
             f'width="{q1[0] - q0[0]:.2f}" height="{q1[1] - q0[1]:.2f}" '
             f'fill="white" stroke="#000000" stroke-width="{WIRE_STROKE}"/>')
         cxb = (q0[0] + q1[0]) / 2.0
+        badge = (f'<tspan fill="{EMPH}" font-weight="bold"> ?</tspan>'
+                 if inst.cell in proposed_cells else "")
         parts.append(f'<text x="{cxb:.2f}" y="{q0[1] - 1.2:.2f}" '
                      f'text-anchor="middle">{inst.name} '
-                     f'({inst.cell})</text>')
+                     f'({inst.cell}){badge}</text>')
         for pname, pxy in inst.terms.items():
             px, py = anchor_world[inst.name][2][pname]
             parts.append(f'<circle cx="{px:.3f}" cy="{py:.3f}" r="0.45" '

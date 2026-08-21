@@ -2559,14 +2559,16 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         def done(rep):
             if self.result is not result or isinstance(rep, Exception):
                 return
+            eqs = (self.controller.equivalent_elements()
+                   if self.controller is not None else [])
             self.summary.setPlainText(view.summary_text(result)
                                       + chr(10) + chr(10)
-                                      + self._ledger_text(rep))
+                                      + self._ledger_text(rep, eqs))
 
         self._run_bg(compute, done)
 
     @staticmethod
-    def _ledger_text(rep) -> str:
+    def _ledger_text(rep, eqs=()) -> str:
         """One contract, one unit, one sentence shape -- the totals are
         measured end to end, and an over-budget total says so even when
         every step individually passed."""
@@ -2596,6 +2598,17 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                          "contract even though each step may have "
                          "passed alone — revert a step or relax the "
                          "budget")
+        # the lumped equivalents, spelled out: a Geq_net8 in H(s) is
+        # a definition the reader must be able to look up
+        if eqs:
+            lines.append("equivalent elements (exact parallel lumps at "
+                         "AC-grounded nodes):")
+            unit = {"c": "F", "g": "S", "r": "Ω"}
+            for e in eqs:
+                val = (view.eng(e["value"], unit.get(e["kind"], ""))
+                       if e["value"] is not None else "?")
+                lines.append(f"  {e['name']} = "
+                             + " + ".join(e["members"]) + f" = {val}")
         return chr(10).join(lines)
 
     def _render_expr(self):
@@ -2619,12 +2632,22 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                     if stories or deep:
                         numerals = view.numeral_tips(stories or [],
                                                      deep=deep)
-                self.exprweb.set_payload(view.expr_katex(
+                payload = view.expr_katex(
                     self.result, base=base, aliases=aliases,
                     numerals=numerals,
                     numhint="collapsed operating-point products — run "
                             "<b>Analysis → Explain the numbers</b> for the "
-                            "ranked contributors"))
+                            "ranked contributors")
+                # a lumped equivalent says what it stands for on hover
+                if self.controller is not None:
+                    for e in self.controller.equivalent_elements():
+                        n = e["name"]
+                        if n in payload["values"]:
+                            payload["values"][n] = (
+                                f"{payload['values'][n]} — exact parallel "
+                                f"lump at {e['node']}: "
+                                + " + ".join(e["members"]))
+                self.exprweb.set_payload(payload)
             except Exception:
                 pass
             return

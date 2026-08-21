@@ -24,12 +24,13 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtSvgWidgets import QGraphicsSvgItem
 from PySide6.QtWidgets import (QCheckBox, QFileDialog, QGraphicsRectItem,
                                QGraphicsScene, QGraphicsView, QHBoxLayout,
-                               QLabel, QPushButton, QToolButton,
+                               QLabel, QMenu, QPushButton, QToolButton,
                                QVBoxLayout, QWidget)
 
 from ...schematic import (ComposeError, SymbolLibrary, compose,
                           confirmed_only, load_block_symbols, load_hints,
                           page, sidecar_path)
+from ...schematic.blocks import propose, save_block_symbols
 from ...schematic.compose import (NET_ACGROUND, STYLE_LUMPED,
                                   STYLE_NUMERIC, STYLE_REMOVED,
                                   STYLE_SYMBOLIC, _xml_id)
@@ -47,6 +48,7 @@ class SchematicView(QGraphicsView):
     """Zoomable, pannable SVG with instance hit-testing."""
     instanceClicked = Signal(str, str)      # name, kind
     instanceActivated = Signal(str, str)    # double-click
+    instanceMenu = Signal(str, str, object)  # right-click: name, kind, QPoint
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -147,6 +149,13 @@ class SchematicView(QGraphicsView):
             self.instanceActivated.emit(*h)
         super().mouseDoubleClickEvent(ev)
 
+    def contextMenuEvent(self, ev):
+        h = self.hit(ev.pos())
+        if h:
+            self.instanceMenu.emit(h[0], h[1], ev.globalPos())
+            return
+        super().contextMenuEvent(ev)
+
 
 class SchematicMixin:
     """MainWindow part: the Schematic tab."""
@@ -184,19 +193,31 @@ class SchematicMixin:
         self.sch_view = SchematicView()
         self.sch_view.instanceClicked.connect(self._schematic_clicked)
         self.sch_view.instanceActivated.connect(self._schematic_activated)
+        self.sch_view.instanceMenu.connect(self._schematic_menu)
         v.addWidget(self.sch_view, 1)
         self._sch_hints = None
         self._sch_cin = None
         self._sch_lib = None
         self._sch_blocks = {}
+        self._sch_mapping = {}           # the whole sidecar, confirmed or not
+        self._sch_proposals: dict = {}   # cell -> BlockSymbol proposal
         self._sch_path: list = []        # [(instance name, defname)]
         self._sch_synced = False
         return pagew
 
     # ------------------------------------------------------------ loading
     def _schematic_library_root(self):
+        """The GUI setting, else CIN_SYMLIB, else the symbols submodule
+        of a source checkout (compose.library_root's own order)."""
+        from ...schematic.compose import library_root
+
         root = str(self._settings().value("symlib", "") or "")
-        return root or os.environ.get("CIN_SYMLIB") or None
+        if root:
+            return root
+        try:
+            return str(library_root(None))
+        except ComposeError:
+            return None
 
     def _schematic_pick_library(self):
         d = QFileDialog.getExistingDirectory(
@@ -231,15 +252,17 @@ class SchematicMixin:
         if not root:
             self._sch_status.setText(
                 "no symbol library: choose it with Library… (or set "
-                "CIN_SYMLIB)")
+                "CIN_SYMLIB; a source checkout has it as the symbols "
+                "submodule: git submodule update --init)")
             self._schematic_crumbs()
             return
         try:
             self._sch_hints = load_hints(hp)
             self._sch_cin = json.loads(Path(cin).read_text(encoding="utf-8"))
             self._sch_lib = SymbolLibrary(root)
-            self._sch_blocks = confirmed_only(
-                load_block_symbols(sidecar_path(cin)))
+            self._sch_mapping = load_block_symbols(sidecar_path(cin))
+            self._sch_blocks = confirmed_only(self._sch_mapping)
+            self._sch_proposals = {}
         except Exception as e:                   # noqa: BLE001
             self._sch_status.setText(f"schematic unavailable: {e}")
             self._schematic_crumbs()
@@ -276,7 +299,9 @@ class SchematicMixin:
             pg = page(self._sch_hints, defname)
             svg = compose(pg, devtypes, self._sch_lib, subckts=subckts,
                           block_symbols=self._sch_blocks,
-                          styles=styles, net_styles=net_styles)
+                          styles=styles, net_styles=net_styles,
+                          proposed_cells=self._schematic_proposed(pg,
+                                                                  subckts))
         except (ComposeError, KeyError, ValueError) as e:
             self._sch_status.setText(f"{defname}: {e}")
             self._schematic_crumbs()
@@ -379,6 +404,81 @@ class SchematicMixin:
             self._sch_crumb.addWidget(b)
             if not last:
                 self._sch_crumb.addWidget(QLabel("›"))
+
+    # ------------------------------------------------------ block symbols
+    def _schematic_proposed(self, pg, subckts) -> set:
+        """Cells on this page with a proposal but no confirmation."""
+        out = set()
+        for inst in pg.instances:
+            if inst.cell not in subckts or inst.cell in self._sch_blocks:
+                continue
+            if self._schematic_proposal(inst.cell, inst.terms) is not None:
+                out.add(inst.cell)
+        return out
+
+    def _schematic_proposal(self, cell: str, terms=None):
+        """The sidecar's unconfirmed entry, else a fresh proposal
+        (cached per cell), else None."""
+        if cell in self._sch_mapping:
+            return self._sch_mapping[cell]
+        if cell not in self._sch_proposals:
+            try:
+                avail = set(self._sch_lib.block_candidates())
+                self._sch_proposals[cell] = propose(self._sch_cin, cell,
+                                                    avail, terms)
+            except Exception:                     # noqa: BLE001
+                self._sch_proposals[cell] = None
+        return self._sch_proposals[cell]
+
+    def _schematic_menu(self, name: str, kind: str, gpos):
+        menu = QMenu(self)
+        if kind == "block":
+            menu.addAction("Symbol…").triggered.connect(
+                lambda: self._schematic_symbol_dialog(name))
+            menu.addAction("Descend").triggered.connect(
+                lambda: self._schematic_activated(name, "block"))
+        else:
+            menu.addAction("Select in Instances").triggered.connect(
+                lambda: self._schematic_clicked(name, kind))
+        menu.exec(gpos)
+
+    def _schematic_symbol_dialog(self, name: str):
+        """Confirm (or drop) the symbol for the block's cell; the
+        sidecar is the record, the page re-renders from it."""
+        from ..blockdialog import BlockSymbolDialog
+
+        if not self._sch_hints or self._sch_lib is None:
+            return
+        defname = self._sch_path[-1][1]
+        dd = self._sch_hints.definitions.get(defname)
+        inst = next((i for i in dd.instances if i.name == name), None) \
+            if dd else None
+        if inst is None:
+            return
+        cell = inst.cell
+        cdef = (self._sch_cin.get("definitions", {}).get(cell) or {})
+        ports = list(cdef.get("ports") or inst.terms.keys())
+        proposal = self._schematic_proposal(cell, inst.terms)
+        dlg = BlockSymbolDialog(cell, ports, self._sch_lib, proposal, self)
+        if dlg.exec() != dlg.Accepted:
+            return
+        if dlg.draw_as_box:
+            if cell in self._sch_mapping:
+                self._sch_mapping[cell].confirmed = False
+        elif dlg.result_mapping is not None:
+            self._sch_mapping[cell] = dlg.result_mapping
+        side = sidecar_path(self._cin)
+        try:
+            save_block_symbols(side, self._sch_mapping)
+        except OSError as e:
+            self._sch_status.setText(f"could not write {side.name}: {e}")
+            return
+        self._sch_blocks = confirmed_only(self._sch_mapping)
+        self._schematic_render()
+        self.statusBar().showMessage(
+            f"{cell}: " + ("drawn as a box" if dlg.draw_as_box else
+                           f"drawn as {dlg.result_mapping.symbol}")
+            + f" — saved to {side.name}")
 
     # --------------------------------------------------------- navigation
     def _schematic_up(self, k: int):

@@ -111,6 +111,10 @@ def symbol_tex(name: str, base: bool = True, aliases: dict | None = None) -> str
     for pref, (letter, sub) in _SPECIAL.items():
         if name.startswith(pref + "_"):
             return rf"{letter}_{{{sub},{_inst_sub(name[len(pref) + 1:], base, aliases)}}}"
+    if name[:4] in ("Ceq_", "Geq_", "Req_"):
+        # a reduction's lumped equivalent at a node: G_{eq,net8}, never
+        # the bare node name (the passive rule would show "net8")
+        return rf"{name[0]}_{{eq,{_inst_sub(name[4:], base, aliases)}}}"
     head, sep, rest = name.partition("_")
     if sep and head in _QTY:
         sub = _GREEK.get(head[1:], head[1:])

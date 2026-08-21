@@ -63,9 +63,15 @@ def test_strip_equations_is_balanced():
     assert '<path d="M0 0"/>' in out and '<circle r="1"/>' in out
 
 
+def _have_lib() -> bool:
+    from circuitinsight.schematic.compose import BUNDLED_SYMLIB
+    return bool(os.environ.get("CIN_SYMLIB"))         or (BUNDLED_SYMLIB / "terminals.csv").exists()
+
+
 needs_lib = pytest.mark.skipif(
-    not os.environ.get("CIN_SYMLIB"),
-    reason="CIN_SYMLIB not set (the symbol library is personal)")
+    not _have_lib(),
+    reason="no symbol library (CIN_SYMLIB unset and the symbols "
+           "submodule not checked out)")
 
 
 @needs_lib

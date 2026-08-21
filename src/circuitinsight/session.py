@@ -1158,6 +1158,10 @@ class SessionController:
             "prims_after": len(lumped),
             "dead_sources": [p.inst for p in dead],
             "lump_groups": [g.describe() for g in lrep.groups],
+            "equivalents": [{"name": g.name, "kind": g.kind,
+                             "node": g.node, "members": list(g.members),
+                             "value": g.value}
+                            for g in lrep.groups if g.value is not None],
             "symbols_saved": lrep.symbols_saved,
         }
 
@@ -1222,6 +1226,22 @@ class SessionController:
         self._analyzer = None
         self._cache.clear()
         self._op_values = None       # OP symbols changed with the circuit
+
+    def equivalent_elements(self) -> list:
+        """The active reduction's lumped equivalents: each a dict with
+        name (the symbol in H(s): Geq_I0_net8), kind, node, members
+        (the symbols it replaced, e.g. gds_I0_M10) and value. Empty
+        without a reduction. The lump is EXACT: parallel same-kind
+        elements to ground sum."""
+        if self._reduction is None:
+            return []
+        out = []
+        for e in self._reduction.get("equivalents", []):
+            d = dict(e)
+            # the members as the join keys H(s) uses (dots -> underscores)
+            d["members"] = [m.replace(".", "_") for m in e["members"]]
+            out.append(d)
+        return out
 
     def reduction_summary(self) -> dict | None:
         """The apply_reduction summary of the active reduction, or None."""

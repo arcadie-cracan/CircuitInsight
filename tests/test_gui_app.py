@@ -40,6 +40,11 @@ def _wait_bg(qapp, cond, timeout=20.0):
     return False
 
 
+def _have_symlib() -> bool:
+    from circuitinsight.schematic.compose import BUNDLED_SYMLIB
+    return bool(os.environ.get("CIN_SYMLIB"))         or (BUNDLED_SYMLIB / "terminals.csv").exists()
+
+
 @pytest.fixture(scope="module")
 def qapp():
     # QtWebEngine must be imported BEFORE the QApplication exists (it sets
@@ -1923,8 +1928,9 @@ def test_schematic_pane_reports_its_missing_pieces(qapp, tmp_path):
     win.close()
 
 
-@pytest.mark.skipif(not os.environ.get("CIN_SYMLIB"),
-                    reason="CIN_SYMLIB not set (the symbol library is personal)")
+@pytest.mark.skipif(not _have_symlib(),
+                    reason="no symbol library (CIN_SYMLIB unset, symbols "
+                           "submodule not checked out)")
 def test_schematic_pane_draws_pages_and_cross_probes(qapp, tmp_path):
     """fc ships its hints + confirmed block symbol: the tb page draws,
     a double-click on the OTA descends, a click on a device selects it
@@ -1968,8 +1974,9 @@ def test_schematic_pane_draws_pages_and_cross_probes(qapp, tmp_path):
     win.close()
 
 
-@pytest.mark.skipif(not os.environ.get("CIN_SYMLIB"),
-                    reason="CIN_SYMLIB not set (the symbol library is personal)")
+@pytest.mark.skipif(not _have_symlib(),
+                    reason="no symbol library (CIN_SYMLIB unset, symbols "
+                           "submodule not checked out)")
 def test_schematic_pane_draws_the_analysis_state(qapp, tmp_path,
                                                  monkeypatch):
     """The simplified view on the same layout: after first light the
@@ -2010,4 +2017,65 @@ def test_schematic_pane_draws_the_analysis_state(qapp, tmp_path,
     win._sch_state_chk.setChecked(False)
     assert "AC-grounded" not in win._sch_status.text()
     win.controller.revert_reduction()
+    win.close()
+
+
+@pytest.mark.skipif(not _have_symlib(),
+                    reason="no symbol library (CIN_SYMLIB unset, symbols "
+                           "submodule not checked out)")
+def test_block_symbol_dialog_round_trip(qapp, tmp_path):
+    """A block with an unconfirmed proposal wears a ? badge; the dialog
+    opens prefilled from the proposal, validates, and OK writes the
+    sidecar confirmed so the page redraws the symbol; 'Draw as box'
+    takes it back."""
+    import json
+    import shutil
+
+    from circuitinsight.gui.app import MainWindow
+    from circuitinsight.gui.blockdialog import BlockSymbolDialog
+
+    FC = Path(__file__).resolve().parent / "fixtures" / "spectre" / "fc"
+    work = tmp_path / "fc"
+    shutil.copytree(FC, work)
+    (work / "tb_fc.symbols.json").unlink()      # no mapping at all
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(work / "tb_fc.cin.json"), str(work / "psf"))
+    assert "ota_folded_cascode" not in win._sch_blocks
+    # a fresh proposal exists, so the box is badged
+    assert win._schematic_proposal("ota_folded_cascode") is not None
+    svg_boxed = win.sch_view._renderer
+    assert svg_boxed.isValid()
+
+    cdef = win._sch_cin["definitions"]["ota_folded_cascode"]
+    prop = win._schematic_proposal("ota_folded_cascode")
+    dlg = BlockSymbolDialog("ota_folded_cascode", cdef["ports"],
+                            win._sch_lib, prop)
+    assert dlg.sym_combo.currentText() == "gm.svg"
+    assert dlg._combos["vin_p"].currentText() == "in+"
+    assert dlg._combos["ib"].currentText() == "stub: auto"
+    assert dlg.ok_btn.isEnabled()
+    # a duplicate anchor is refused with the reason
+    dlg._combos["vin_n"].setCurrentText("in+")
+    assert not dlg.ok_btn.isEnabled() and "in+" in dlg.verdict.text()
+    dlg._combos["vin_n"].setCurrentText("in-")
+    assert dlg.ok_btn.isEnabled()
+    # the op-amp symbol is offered too, and re-prefills the table
+    assert dlg.sym_combo.findText("oa.svg") >= 0
+    bs = dlg.current()
+    assert bs.confirmed and bs.pins["vout"] == "out"
+
+    # apply through the pane's path (what OK does), then box it again
+    win._sch_mapping["ota_folded_cascode"] = bs
+    from circuitinsight.schematic.blocks import (confirmed_only,
+                                                 save_block_symbols,
+                                                 sidecar_path)
+    save_block_symbols(sidecar_path(win._cin), win._sch_mapping)
+    win._sch_blocks = confirmed_only(win._sch_mapping)
+    win._schematic_render()
+    side = json.loads((work / "tb_fc.symbols.json").read_text())
+    assert side["cells"]["ota_folded_cascode"]["confirmed"] is True
+    assert "block(s)" in win._sch_status.text()
     win.close()
