@@ -452,9 +452,11 @@ Expression view highlights its device in the schematic.</p>
 <p>The <b>Schematic</b> tab shows the circuit as it was drawn in
 Virtuoso, redrawn with an SVG symbol library: the original placement,
 the original wiring, one page per cell. It needs two things beside the
-CIN: the <b>layout hints</b> the harvester writes
-(<code>CInHintsExport("lib" "cell" "schematic" "&lt;stem&gt;.hints.json")</code>
-in the CIW, saved next to <code>&lt;stem&gt;.cin.json</code>) and a
+CIN: the <b>layout hints</b> (<code>&lt;stem&gt;.hints.json</code>),
+which the Virtuoso <b>Analyze</b> command harvests together with the
+netlist &ndash; for a CIN made another way, run
+<code>CInHintsExport("lib" "cell" "schematic" "&lt;stem&gt;.hints.json")</code>
+in the CIW &ndash; and a
 <b>symbol library</b> (the directory holding
 <code>terminals.csv</code>): a source checkout carries it as the
 <code>symbols/</code> submodule and finds it by itself; otherwise choose

@@ -188,6 +188,7 @@ GUI on it. If psf is nil, prompt for the ADE/Maestro results directory."
     ;; 1. capture topology (hard error inside CInExport on any unmapped device)
     (printf "CInLaunch: exporting %s/%s/%s -> %s\n" lib cell view cin)
     (CInExport lib cell view cin ?ground CInGround)
+    (CInExportHints lib cell view cin)
 
     ;; 2. resolve the psf results directory from the live ADE run for this cell.
     ;;    Pulling it from the session that just ran is what keeps the CIN and the
@@ -226,6 +227,7 @@ resolved from the one session, so they cannot come from different designs."
     (printf "CInLaunchAde: exporting %s/%s/%s -> %s\n"
             lib cell CInSchematicView cin)
     (CInExport lib cell CInSchematicView cin ?ground CInGround)
+    (CInExportHints lib cell CInSchematicView cin)
 
     (unless psf (setq psf (CInAdePsfDir sess)))
     (unless psf
@@ -237,6 +239,20 @@ resolved from the one session, so they cannot come from different designs."
     (printf "CInLaunchAde: %s\n" cmd)
     (ipcBeginProcess cmd)
     t))
+
+;; ---------------------------------------------------------- layout hints
+(defun CInExportHints (lib cell view cin)
+  "The schematic LAYOUT HINTS beside the CIN (<stem>.hints.json), harvested
+by the same Analyze that exports the netlist, so the GUI's Schematic pane
+finds them without a separate CIW command. Advisory: a harvest failure is
+printed, never allowed to block the analysis."
+  (let (hints)
+    (setq hints (strcat (substring cin 1 (difference (strlen cin)
+                                                     (strlen ".cin.json")))
+                        ".hints.json"))
+    (unless (errset (progn (CInHintsExport lib cell view hints) t))
+      (printf "CInLaunch: layout hints not harvested -- the Schematic pane will say so; the analysis continues\n"))
+    hints))
 
 ;; ------------------------------------------------------- single entry point
 (defun CInAnalyze (@key (psf nil))

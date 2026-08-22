@@ -110,3 +110,18 @@ def test_skill_files_have_balanced_parens():
             prev = ch
         assert depth == 0, f"{p.name}: {depth} unclosed parens"
         assert not in_str, f"{p.name}: unterminated string"
+
+
+def test_analyze_harvests_layout_hints_beside_the_cin():
+    """Both Analyze paths (schematic window, ADE window) export the CIN
+    AND the layout hints next to it, with the stem the GUI looks for
+    (<stem>.hints.json): otherwise the Schematic pane stays empty
+    after a perfectly good Analyze, which is what happened first."""
+    launch = skill.path("cin_launch.il").read_text(encoding="utf-8")
+    assert launch.count("(CInExportHints ") >= 2     # both launch paths
+    assert "(defun CInExportHints" in launch
+    assert '".hints.json"' in launch and '".cin.json"' in launch
+    # a failed harvest is advisory, never a blocked analysis
+    body = launch[launch.index("(defun CInExportHints"):]
+    nxt = body.find("(defun", 1)
+    assert "errset" in (body[:nxt] if nxt > 0 else body)
