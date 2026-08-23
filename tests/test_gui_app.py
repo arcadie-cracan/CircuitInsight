@@ -2261,6 +2261,9 @@ def test_solve_button_flags_a_result_from_a_previous_state(qapp, tmp_path):
     win.close()
 
 
+@pytest.mark.skipif(not _have_symlib(),
+                    reason="no symbol library (CIN_SYMLIB unset, symbols "
+                           "submodule not checked out)")
 def test_schematic_tints_matched_devices_like_the_tree(qapp, tmp_path):
     """A match group wears the same tint and number in the schematic as
     in the Instances tree: a plate behind each member's symbol and a
@@ -2643,6 +2646,9 @@ def test_impedance_port_from_trees_says_user_selected(qapp):
         win.close()
 
 
+@pytest.mark.skipif(not _have_symlib(),
+                    reason="no symbol library (CIN_SYMLIB unset, symbols "
+                           "submodule not checked out)")
 def test_schematic_highlights_a_selected_net(qapp, tmp_path):
     """Selecting a net in the Nets tree lights its wire run on the
     schematic -- the same cross-probe an instance gets -- and the two
