@@ -764,6 +764,78 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
     # a BRIDGE -- a straight stub extension from the anchor to the
     # harvested pin lane -- so the symbol never pulls a wire off its
     # column (fc PM6-NM6 drain jog, PM13/NM8 gate reroutes).
+    #
+    # The one exception to never-touch-a-wire (fc PM7 field report):
+    # when the mismatch has the OPPOSITE sign -- the harvested pin
+    # sits INSIDE our symbol, between the gate plate and the channel,
+    # because the library spaces the anchor farther out than the PDK
+    # -- the wire visibly pokes through the gate plate (a MOS symbol
+    # is open strokes; rule 5's masking has nothing there to swallow
+    # it). A wire END on such a pin is TRIMMED back to the anchor:
+    # only an end, only collinear along its last segment, and only
+    # when nothing else touches that point -- a through bus, a tap or
+    # a junction is never cut. The pin's bridge is dropped with it
+    # (the wire now ends ON the anchor).
+    def _k05(p):
+        return (round(p[0] * 2) / 2, round(p[1] * 2) / 2)
+
+    wire_pts = [[mm(p) for p in w.points] for w in flat.wires]
+    term_anchor: dict = {}            # pin key -> anchor point
+    for inst, sym, spec in placed:
+        if not sym or not spec or inst.name not in anchor_world:
+            continue
+        apts = anchor_world[inst.name][2]
+        for r, xy in inst.terms.items():
+            an = apts.get(anchor_for(spec, r))
+            if an is None:
+                continue
+            k = _k05(mm(xy))
+            # two pins on one point: ambiguous, leave alone
+            term_anchor[k] = None if k in term_anchor else an
+    end_count: dict = {}
+    segs_all = []
+    for pts_ in wire_pts:
+        for p in (pts_[0], pts_[-1]):
+            k = _k05(p)
+            end_count[k] = end_count.get(k, 0) + 1
+        segs_all += [(pts_[i], pts_[i + 1])
+                     for i in range(len(pts_) - 1)]
+
+    def _interior(p, a, b):
+        if abs(a[0] - b[0]) < 1e-6:
+            return (abs(p[0] - a[0]) < 1e-6
+                    and min(a[1], b[1]) + 1e-6 < p[1]
+                    < max(a[1], b[1]) - 1e-6)
+        if abs(a[1] - b[1]) < 1e-6:
+            return (abs(p[1] - a[1]) < 1e-6
+                    and min(a[0], b[0]) + 1e-6 < p[0]
+                    < max(a[0], b[0]) - 1e-6)
+        return False
+
+    def _between(v, lo, hi):
+        lo, hi = (lo, hi) if lo <= hi else (hi, lo)
+        return lo + 1e-6 < v < hi - 1e-6
+
+    trimmed_pins: set = set()
+    for pts_ in wire_pts:
+        if len(pts_) < 2:
+            continue
+        for idx, prv in ((len(pts_) - 1, len(pts_) - 2), (0, 1)):
+            e, pv = pts_[idx], pts_[prv]
+            k = _k05(e)
+            an = term_anchor.get(k)
+            if not an or end_count.get(k, 0) != 1:
+                continue
+            if any(_interior(e, a_, b_) for a_, b_ in segs_all):
+                continue                      # a tap on a bus lane
+            if abs(e[0] - pv[0]) < 1e-6 and abs(an[0] - e[0]) < 1e-6                     and _between(an[1], pv[1], e[1]):
+                pts_[idx] = (e[0], an[1])
+            elif abs(e[1] - pv[1]) < 1e-6 and abs(an[1] - e[1]) < 1e-6                     and _between(an[0], pv[0], e[0]):
+                pts_[idx] = (an[0], e[1])
+            else:
+                continue
+            trimmed_pins.add(k)
+
     bridges = []
     for inst, sym, spec in placed:
         if not sym or not spec or inst.name not in anchor_world:
@@ -775,7 +847,7 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
         if not pairs and "@origin" in spec.terms                 and spec.terms["@origin"] in pts:
             pairs = [(mm(inst.xy), pts[spec.terms["@origin"]])]
         for pin, an in pairs:
-            if math.dist(pin, an) < 1e-6:
+            if math.dist(pin, an) < 1e-6 or _k05(pin) in trimmed_pins:
                 continue
             dx, dy = abs(pin[0] - an[0]), abs(pin[1] - an[1])
             if dx > 1e-6 and dy > 1e-6:
@@ -836,8 +908,7 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
     segs: list = []                   # (net, (x0, y0), (x1, y1)) lanes
     wire_ends: list = []              # (net, point)
     net_wires: dict = {}              # net -> [polyline, ...] for the
-    for w in flat.wires:              # viewer's net highlight
-        pts = [mm(p) for p in w.points]
+    for w, pts in zip(flat.wires, wire_pts):   # viewer's net highlight
         net_wires.setdefault(w.net, []).append(pts)
         segs += [(w.net, pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
         wire_ends += [(w.net, pts[0]), (w.net, pts[-1])]

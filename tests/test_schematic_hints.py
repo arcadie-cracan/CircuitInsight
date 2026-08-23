@@ -336,3 +336,46 @@ def test_tex_labels_are_outlines_and_aliases_are_typeset():
     assert tex.count("<path") > plain.count("<path") + 30
     assert "🔗1" in tex                                   # badge as text
     assert 'id="inst:PM12"' in tex                        # hit-testing intact
+
+
+@needs_lib
+def test_gate_overrun_is_trimmed_to_the_anchor():
+    """fc PM7 (field report): the harvested gate pin sits INSIDE our
+    symbol -- the library spaces the gate anchor farther from the
+    channel than the PDK symbol -- so the wire, drawn exactly where
+    routed, poked through the gate plate. A wire END on such a pin is
+    trimmed back to the anchor: only an end, only collinear, and only
+    when nothing else touches the point, so a through bus or a tap is
+    never cut; the pin's bridge goes with it."""
+    import json
+    import math
+
+    from circuitinsight.schematic import SymbolLibrary, compose
+    from circuitinsight.schematic.hints import load_hints, page
+
+    fc = FIX / "spectre" / "fc"
+    h = load_hints(fc / "tb_fc.hints.json")
+    pg = page(h, "ota_folded_cascode")
+    cin = json.loads((fc / "tb_fc.cin.json").read_text(encoding="utf-8"))
+    cdef = cin["definitions"]["ota_folded_cascode"]
+    devtypes = {i["name"]: (i["device_type"],
+                            (i.get("params") or {}).get("polarity"))
+                for i in cdef["instances"] if "device_type" in i}
+    compose(pg, devtypes, SymbolLibrary())
+    mm = compose.last_mm
+    pm7 = next(i for i in pg.instances if i.name == "PM7")
+    gpin = mm(pm7.terms["G"])
+    allends = [q for pls in compose.last_net_wires.values()
+               for pl in pls for q in (pl[0], pl[-1])]
+    # the wire no longer ends ON the harvested pin...
+    assert all(math.dist(q, gpin) > 1e-6 for q in allends)
+    # ...but on the gate lane a short way out: the anchor
+    assert any(abs(q[1] - gpin[1]) < 1e-6
+               and 0.4 < abs(q[0] - gpin[0]) < 6 for q in allends)
+    # the drain wire is untouched: its end count and junctions are a
+    # bus-and-tap territory the trim must never enter -- D still has
+    # a wire touching its harvested position
+    dpin = mm(pm7.terms["D"])
+    touches = [q for pls in compose.last_net_wires.values()
+               for pl in pls for q in pl if math.dist(q, dpin) < 0.6]
+    assert touches
