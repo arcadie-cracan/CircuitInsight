@@ -11,13 +11,13 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QSettings, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QKeySequence
+from PySide6.QtGui import QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
-    QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
+    QFileDialog, QGroupBox, QHBoxLayout, QLabel, QMenu, QLineEdit, QMainWindow,
     QMessageBox,
     QPushButton, QProgressBar, QScrollArea, QSizePolicy, QSpinBox,
-    QSplitter, QTableWidget,
+    QSplitter, QSplitterHandle, QTableWidget,
     QTableWidgetItem, QTabWidget, QTextEdit, QToolBar, QVBoxLayout, QWidget,
 )
 from matplotlib.backends.backend_qtagg import (
@@ -55,6 +55,32 @@ _TOOLS = (
     ("Impedance", "Zin/Zout at a port", ""),
     ("Reduce circuit", "AC grounds, dead sources, lumping", ""),
 )
+
+
+class _RestoringHandle(QSplitterHandle):
+    """A splitter handle that brings a collapsed pane back on
+    double-click: the pane dragged to nothing is the one the handle
+    sits against, and a double-click is the gesture everyone tries."""
+
+    def mouseDoubleClickEvent(self, ev):
+        sp = self.splitter()
+        sizes = sp.sizes()
+        if sizes and 0 in sizes:
+            default = getattr(sp, "_default_sizes", None) or                 [1] * len(sizes)
+            total = sum(sizes) or sum(default)
+            share = [d / sum(default) for d in default]
+            sp.setSizes([max(1, int(total * s)) for s in share])
+            ev.accept()
+            return
+        super().mouseDoubleClickEvent(ev)
+
+
+class RestoringSplitter(QSplitter):
+    """QSplitter whose handles restore a collapsed pane on double-click;
+    `_default_sizes` holds the proportions to come back to."""
+
+    def createHandle(self):
+        return _RestoringHandle(self.orientation(), self)
 
 
 class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
@@ -97,6 +123,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.mos_model = str(self._settings().value("mos_model",
                                                     "separate"))
         self._build()
+        self._build_backend_menu()
         self._restore_settings()
 
     # --------------------------------------------------------------- layout
@@ -147,9 +174,13 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.out_combo.setMinimumWidth(130)
         # the Nets tree mirrors the in/out choice with ▶/◀ arrows
         self.in_combo.currentTextChanged.connect(
-            lambda _t: self._refresh_net_decor())
+            lambda _t: (self._refresh_net_decor(),
+                        self._refresh_solve_hint(),
+                        self._rerank_on_io()))
         self.out_combo.currentTextChanged.connect(
-            lambda _t: self._refresh_net_decor())
+            lambda _t: (self._refresh_net_decor(),
+                        self._refresh_solve_hint(),
+                        self._rerank_on_io()))
         tb = QToolBar("main")
         tb.setObjectName("main_toolbar")
         tb.setMovable(False)
@@ -184,7 +215,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self._probe_act.setVisible(False)
         self._probe2_act.setVisible(False)
         tb.addSeparator()
-        tb.addWidget(self.solve_btn)
+        self._solve_act = tb.addWidget(self.solve_btn)
         self._form_act = tb.addWidget(self.form_combo)
         self._budget_lbl = QLabel(" error budget: ")
         self._budget_lbl_act = tb.addWidget(self._budget_lbl)
@@ -245,12 +276,38 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             a.setVisible(False)
         self.toolbar = tb
 
-        left = QSplitter(Qt.Vertical)
-        left.setObjectName("left_split")
-        left.addWidget(self._devices_group())
-        left.addWidget(self._keepset_group())
-        left.addWidget(self._history_group())
-        left.setSizes([280, 340, 120])
+        # vertical room is the scarce one on a full-screen window:
+        # the left side is TWO full-height columns side by side -- the
+        # circuit (trees, the operating-point card) and, beside it, the
+        # symbols (keep table over History, both about solves) -- not
+        # three groups stacked
+        self._devices_box = self._devices_group()
+        self._keep_box = self._keepset_group()
+        self._hist_box = self._history_group()
+        keep_col = RestoringSplitter(Qt.Vertical)
+        keep_col.setObjectName("keep_col")
+        keep_col._default_sizes = [520, 140]
+        keep_col.addWidget(self._keep_box)
+        keep_col.addWidget(self._hist_box)
+        keep_col.setSizes([520, 140])
+        self._keep_col = keep_col
+        # a QGroupBox's minimumSizeHint (title + indicator) is ~214 px
+        # whatever its content needs; an explicit minimum lets the
+        # column be dragged down to a symbol name's width
+        for b in (self._keep_box, self._hist_box, self._devices_box):
+            b.setMinimumWidth(120)
+        left = RestoringSplitter(Qt.Horizontal)
+        left.setObjectName("left_cols")
+        left._default_sizes = [300, 330]
+        left.addWidget(self._devices_box)
+        left.addWidget(keep_col)
+        # the Reduce bench's candidate tables take the symbols column's
+        # slot while that bench is active (tall lists, idle column)
+        self.reduce_col = self._reduce_candidates_col()
+        self.reduce_col.setMinimumWidth(120)
+        self.reduce_col.setVisible(False)
+        left.addWidget(self.reduce_col)
+        left.setSizes([300, 330])
         self.left_split = left
 
         self.canvas = FigureCanvasQTAgg(Figure(figsize=(5.2, 4.0)))
@@ -293,11 +350,29 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.fullnames_chk.setToolTip(
             "Show the full instance hierarchy (I0.MN1) instead of the leaf (MN1)")
         self.fullnames_chk.toggled.connect(lambda _=False: self._render_expr())
+        # a reduction's lumped equivalents (G_eq,net8) are definitions;
+        # unticked they are listed under the expressions, ticked they
+        # are substituted by their member sums throughout A0, N, D,
+        # p1, z1 -- the formula in the original device symbols
+        self.expand_eq_chk = QCheckBox("Expand equivalents")
+        self.expand_eq_chk.setToolTip(
+            "Replace every lumped equivalent (G_eq, C_eq from an AC-ground "
+            "reduction) by the sum of the elements it stands for, in every "
+            "expression shown. Unticked: the equivalents are defined below "
+            "the expressions.")
+        self.expand_eq_chk.setEnabled(False)
+        self.expand_eq_chk.toggled.connect(lambda _=False: self._render_expr())
+        _hdr = QHBoxLayout()
+        _hdr.setContentsMargins(0, 0, 0, 0)
+        _hdr.addWidget(self.fullnames_chk)
+        _hdr.addWidget(self.expand_eq_chk)
+        _hdr.addStretch(1)
         expr_tab = QWidget()
+        self._expr_tab = expr_tab
         _ev = QVBoxLayout(expr_tab)
         _ev.setContentsMargins(0, 0, 0, 0)
         _ev.setSpacing(2)
-        _ev.addWidget(self.fullnames_chk)
+        _ev.addLayout(_hdr)
         _ev.addWidget(expr_surface)
         # Two overlapping Bode curves cannot show a 0.5 dB residual. The Error
         # tab is where "how good is this model" actually becomes readable.
@@ -326,12 +401,6 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         tabs.addTab(self._whatif_tab, "What-if")
         tabs.addTab(self._comp_page(), "Compensation")
         tabs.addTab(self._gft_page(), "GFT")
-        self._reduce_tab = self._reduce_page()
-        tabs.addTab(self._reduce_tab, "Reduce")
-        # the circuit as drawn: a view of the session, not of a bench,
-        # so it stays visible everywhere like Summary/Expression
-        self._schematic_tab = self._schematic_page()
-        tabs.addTab(self._schematic_tab, "Schematic")
         tabs.addTab(self.logview, "Log")
         self.tabs = tabs
 
@@ -393,17 +462,37 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.canvas.mpl_connect("draw_event",
                                 lambda _ev: self._sync_band_row())
 
-        right = QSplitter(Qt.Vertical)
+        right = RestoringSplitter(Qt.Vertical)
         right.setObjectName("right_split")
+        right._default_sizes = [500, 240]
         right.addWidget(plot_area)
         right.addWidget(tabs)
         right.setSizes([500, 240])
         self.right_split = right
 
-        split = QSplitter(Qt.Horizontal)
+        # the right column is TWO pages: the analysis view (plots + the
+        # result tabs) and the schematic, each taking the whole column.
+        # The schematic needs room to be read; a strip at the bottom
+        # could not give it that, a page beside the analysis can.
+        self._schematic_tab = self._schematic_page()
+        self.main_tabs = QTabWidget()
+        self.main_tabs.setDocumentMode(True)
+        self.main_tabs.addTab(right, "Analysis")
+        self.main_tabs.addTab(self._schematic_tab, "Schematic")
+        self.main_tabs.currentChanged.connect(self._on_main_tab)
+
+        split = RestoringSplitter(Qt.Horizontal)
         split.setObjectName("h_split")
+        split._default_sizes = [640, 900]
         split.addWidget(left)
-        split.addWidget(right)
+        split.addWidget(self.main_tabs)
+        # panes may collapse to nothing (a wide plot is worth it), so
+        # the handle must stay findable when one has: wider, and drawn
+        for sp in (split, left, keep_col):
+            sp.setHandleWidth(7)
+            sp.setStyleSheet(
+                "QSplitter::handle { background: #c8c8c8; }"
+                "QSplitter::handle:hover { background: #3a6ea5; }")
         # setSizes before show() is clobbered by the first layout pass (the
         # tables' size hints won, squeezing the plots to a sliver): stretch
         # factors carry the intent through layout, and showEvent re-applies
@@ -478,17 +567,54 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             self._splitters_restored = True
             s = self._settings()
             restored = False
-            for name, sp in (("h_split", self.h_split),
-                             ("left_split", self.left_split),
+            # new keys for the two-column left side: a state saved for
+            # the old vertical stack must not be restored into it
+            for name, sp in (("h_split2", self.h_split),
+                             ("left_cols", self.left_split),
+                             ("keep_col", self._keep_col),
                              ("right_split", self.right_split)):
                 state = s.value("splitters/" + name)
                 if state is not None:
                     sp.restoreState(state)
                     restored = True
             if not restored:
-                # first run: plots get the width the stretch factors promise
-                w = max(self.width(), 900)
-                self.h_split.setSizes([340, w - 360])
+                self._reset_layout()
+
+    def _reset_layout(self):
+        """The default proportions: two left columns, the plots wide."""
+        w = max(self.width(), 1200)
+        self.h_split.setSizes([640, w - 660])
+        self.left_split.setSizes([300, 330])
+        self._keep_col.setSizes([520, 140])
+        self.right_split.setSizes([500, 240])
+
+    def _toggle_left_panes(self):
+        """The keyboard way home: any pane dragged to nothing, in any
+        of the splitters (the keep column inside the left side too),
+        comes back at its default share; when nothing is collapsed the
+        left side collapses for a wide plot."""
+        defaults = ((self.h_split, [640, max(self.width(), 1200) - 660]),
+                    (self.left_split, [300, 330]),
+                    (self._keep_col, [520, 140]),
+                    (self.right_split, [500, 240]))
+        restored = False
+        for sp, default in defaults:
+            sizes = sp.sizes()
+            vis = [i for i in range(sp.count())
+                   if not sp.widget(i).isHidden()]
+            if vis and any(sizes[i] == 0 for i in vis):
+                total = sum(sizes[i] for i in vis) or sum(default)
+                share = [d / sum(default) for d in default]
+                new = list(sizes)
+                for i, s in zip(vis, share):
+                    new[i] = max(1, int(total * s))
+                sp.setSizes(new)
+                restored = True
+        if restored:
+            return
+        sizes = self.h_split.sizes()
+        self._left_saved = sizes[0]
+        self.h_split.setSizes([0, sum(sizes)])
 
     def eventFilter(self, obj, event):
         """Forward wheel scrolls on the (event-swallowing) expression canvas to
@@ -556,6 +682,11 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             lambda: self._load_state_file(None))
         self.a_restore_last.setEnabled(False)
         m_file.addSeparator()
+        a_tog = m_file.addAction("Restore collapsed panes / collapse &left")
+        a_tog.setShortcut("Ctrl+Shift+L")
+        a_tog.triggered.connect(self._toggle_left_panes)
+        m_file.addAction("Reset la&yout").triggered.connect(self._reset_layout)
+        m_file.addSeparator()
         m_file.addAction("&Quit").triggered.connect(self.close)
 
         m_an = mb.addMenu("&Analysis")
@@ -576,8 +707,19 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.a_rank = m_an.addAction("&Rank symbols")
         self.a_rank.setShortcut("F5")
         self.a_rank.triggered.connect(self._rank_async)
-        self.a_suggest = m_an.addAction("Suggest keep-set ≤ &budget")
-        self.a_suggest.triggered.connect(self._suggest_keep)
+        self.a_suggest = m_an.addAction("Suggest keep-set ≤ &budget…")
+        self.a_suggest.triggered.connect(self._suggest_keep_dialog)
+        self.a_split = m_an.addAction("Split ad&vice")
+        self.a_split.setToolTip("Rank the tearing cuts for this solve and, "
+                                "when none pays, name the AC ground that "
+                                "would fix it")
+        self.a_split.triggered.connect(self._split_advice)
+        # the solver backend: set once, rarely -- a radio submenu driving
+        # the (hidden) combo that holds the state
+        m_be = m_an.addMenu("Solver &backend")
+        self._backend_group = QActionGroup(self)
+        self._backend_group.setExclusive(True)
+        self._backend_actions = []
         m_an.addSeparator()
         self.a_attr = m_an.addAction("&Attribute poles")
         self.a_attr.setToolTip(
@@ -614,8 +756,35 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         m_dev.addAction("Suggest &matched pairs").triggered.connect(
             self.suggest_matches)
         m_dev.addAction("Match &selection").triggered.connect(self.match_selected)
+        m_dev.addAction("&Unmatch selection").triggered.connect(
+            self.unmatch_selected)
         m_dev.addSeparator()
         m_dev.addAction("&Clear matches").triggered.connect(self.clear_matches)
+        m_dev.addSeparator()
+        # how a match group's shared symbols get their numbers: a
+        # modelling choice set once, like the cap and MOS models below
+        m_val = m_dev.addMenu("Match &values")
+        self._policy_group = QActionGroup(self)
+        self._policy_group.setExclusive(True)
+        self._policy_actions = {}
+        for label, tip in (
+            ("representative", "one member's values stand for the group "
+             "(default: whichever the netlist reaches first; right-click "
+             "a 🔗 member to choose)"),
+            ("average", "the arithmetic mean of the members' values"),
+            ("weighted", "the mean weighted by each member's band "
+             "sensitivity — the member that shapes the response most "
+             "pulls hardest (measured best on both benches)"),
+        ):
+            a = m_val.addAction(label)
+            a.setCheckable(True)
+            a.setStatusTip(tip)
+            a.setToolTip(tip)
+            self._policy_group.addAction(a)
+            self._policy_actions[label] = a
+            a.triggered.connect(
+                lambda _c=False, label=label: self._on_matchval_changed(label))
+        self._policy_actions["weighted"].setChecked(True)
         m_dev.addSeparator()
         # cross-probe: select here, highlight in the Virtuoso schematic
         self.a_xprobe = m_dev.addAction("Cross-&probe to Virtuoso")
@@ -689,51 +858,32 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.nets_tree = devtree.NetTree()
         self.nets_tree.outputRequested.connect(self._set_output_net)
         self.nets_tree.acgroundRequested.connect(self._acg_from_net)
+        self.nets_tree.impedanceRequested.connect(self._impedance_at_nets)
+        self.devices.impedanceSeenRequested.connect(self._impedance_seen_by)
+        self.probe_combo.currentTextChanged.connect(self._on_port_text)
         self.nets_tree.connectionActivated.connect(self._goto_instance)
 
         self.dev_tabs = QTabWidget()
         self.dev_tabs.addTab(self.devices, "Instances")
         self.dev_tabs.addTab(self.nets_tree, "Nets")
 
-        sugg = QPushButton("Suggest")
-        sugg.clicked.connect(self.suggest_matches)
-        matchsel = QPushButton("Match sel.")
-        matchsel.clicked.connect(self.match_selected)
-        unmatch = QPushButton("Unmatch")
-        unmatch.setToolTip("Dissolve the match group of the selected "
-                           "device (or right-click a 🔗 member)")
-        unmatch.clicked.connect(self.unmatch_selected)
-        clr = QPushButton("Clear")
-        clr.clicked.connect(self.clear_matches)
-        row = QHBoxLayout()
-        for wdg in (sugg, matchsel, unmatch, clr):
-            row.addWidget(wdg)
-
-        self.matchval_combo = QComboBox()
-        for label, tip in (
-            ("representative", "one member's values stand for the group "
-             "(default: whichever the netlist reaches first; right-click "
-             "a 🔗 member to choose)"),
-            ("average", "the arithmetic mean of the members' values"),
-            ("weighted", "the mean weighted by each member's band "
-             "sensitivity — the member that shapes the response most "
-             "pulls hardest (measured best on both benches)"),
-        ):
-            self.matchval_combo.addItem(label)
-            self.matchval_combo.setItemData(self.matchval_combo.count() - 1,
-                                            tip, Qt.ToolTipRole)
-        self.matchval_combo.setToolTip(
-            "How a match group's shared symbols get their numeric values")
-        self.matchval_combo.currentTextChanged.connect(
-            self._on_matchval_changed)
-        mrow = QHBoxLayout()
-        mrow.addWidget(QLabel("values:"))
-        mrow.addWidget(self.matchval_combo, 1)
+        # the match verbs live in the tree's context menu and in the
+        # Devices menu (the values policy as a radio group there); a
+        # button row under the trees was a third copy of the same verbs
+        self.devices.suggestRequested.connect(self.suggest_matches)
+        self.devices.unmatchSelectionRequested.connect(self.unmatch_selected)
 
         v = QVBoxLayout()
         v.addWidget(self.dev_tabs, 1)
-        v.addLayout(row)
-        v.addLayout(mrow)
+        # the operating-point card: the selected device, read the way a
+        # designer reads it, persistent -- follows the selection from
+        # the tree, the schematic, an expression symbol, a keep row
+        from .opcard import OpCard
+        self.op_card = OpCard()
+        self.op_card.full_btn.clicked.connect(
+            lambda: self._show_device_op_for(self.op_card.name)
+            if self.op_card.name else None)
+        v.addWidget(self.op_card, 0)
         return self._collapsible(box, v)
 
     def _keepset_group(self):
@@ -742,17 +892,38 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         # 1226 px minimum and squeezed the plots to a sliver. Short title,
         # sentence in the tooltip.
         box = QGroupBox("Keep symbolic")
-        box.setToolTip("Which parameters stay as letters — exact either "
-                       "way; pick a Simplified form in the toolbar to "
-                       "trade accuracy for size")
+        # no group-wide tooltip: it covered every row with the same
+        # sentence; each symbol carries its own (dcOp, score, peak)
         self.keep_tbl = QTableWidget(0, 5)
         self.keep_tbl.setHorizontalHeaderLabels(
             ["symbol", "dcOp", "score", "peaks", "LaTeX"])
         self.keep_tbl.horizontalHeader().setStretchLastSection(True)
+        # three visible elements: the filter, the table with what the
+        # next solve needs (tick, symbol, dcOp, score), the estimate.
+        # peaks and LaTeX are a header right-click and a row right-click
+        # away; the verbs (Rank, Suggest, Split, backend, grouping) live
+        # in the Analysis menu and the context menus -- the trees above
+        # get the room
+        # a LIST with checks: only the symbol column shows, no headers;
+        # dcOp, score and peak live in each row's tooltip, and the
+        # columns come back from the header/row context menu for
+        # anyone who wants them side by side
+        for col in (1, 2, 3, 4):
+            self.keep_tbl.setColumnHidden(col, True)
+        self.keep_tbl.horizontalHeader().setVisible(False)
+        self.keep_tbl.verticalHeader().setVisible(False)
+        self.keep_tbl.setShowGrid(False)
+        self.keep_tbl.horizontalHeader().setContextMenuPolicy(
+            Qt.CustomContextMenu)
+        self.keep_tbl.horizontalHeader().customContextMenuRequested.connect(
+            self._keep_header_menu)
+        self.keep_tbl.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.keep_tbl.customContextMenuRequested.connect(self._keep_menu)
         # only the LaTeX column edits; the AllEditTriggers + per-item
         # ItemIsEditable flag (set in _fill_keep_table) confines editing there
         self.keep_tbl.setEditTriggers(QAbstractItemView.AllEditTriggers)
         self.keep_tbl.itemChanged.connect(self._on_keep_changed)
+        self.keep_tbl.itemSelectionChanged.connect(self._on_keep_row_selected)
 
         from PySide6.QtWidgets import QLineEdit
 
@@ -783,6 +954,14 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         ctl.addWidget(suggestb)
 
         self.estimate_lbl = QLabel("estimate: —")
+        # a wrapped label's sizeHint is its full text width; that was
+        # the keep column's minimum width (~370 px). Let it take the
+        # column's width and wrap instead of dictating it.
+        self.estimate_lbl.setWordWrap(True)
+        self.estimate_lbl.setMinimumWidth(1)
+        self.estimate_lbl.setSizePolicy(QSizePolicy.Ignored,
+                                        QSizePolicy.Preferred)
+        self.keep_filter.setMinimumWidth(1)
         # split advisory: whether tearing this solve pays, and which
         # AC-ground designation would make it pay (analysis/tearing.py).
         # Off by default -- it costs a graph scan plus numeric solves.
@@ -841,13 +1020,175 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         srow.addWidget(splitb)
         srow.addWidget(self.split_lbl, 1)
 
+        # the controls stay alive as STATE (the budget, the grouping,
+        # the backend, the split verdict) but out of the layout
+        for w in (rankb, suggestb, splitb, self.group_chk,
+                  self.budget_spin, self.backend_combo, self.split_lbl):
+            # parented to the WINDOW, not the box: even hidden, a child
+            # of the group counted in its minimum width (214 px)
+            w.setParent(self)
+            w.setVisible(False)
         v = QVBoxLayout()
         v.addWidget(self.keep_filter)
         v.addWidget(self.keep_tbl, 1)
-        v.addLayout(ctl)
-        v.addLayout(brow)
-        v.addLayout(srow)
+        v.addWidget(self.estimate_lbl)
         return self._collapsible(box, v)
+
+    def _z_rank_target(self):
+        """The Impedance tool's active target (marker name or user
+        spec), or None outside the tool."""
+        if self.mode_combo.currentText() != "Impedance":
+            return None
+        port = self.probe_combo.currentText()
+        spec = getattr(self, "_imp_spec", None)
+        if port == self.USER_PORT:
+            return spec
+        return port or None
+
+    def _rerank_for_z(self):
+        """The keep table's contributors follow the response on the
+        bench: in the Impedance tool they are Z's own band
+        sensitivities (probe-injected), not the transfer's. A spec
+        the probe cannot serve (between two nets) keeps the transfer
+        ranking -- better than an empty table."""
+        if self.controller is None or self._filling:
+            return
+        if not getattr(self, "_keep_ranked", False):
+            return                     # the open chain fills it first
+        t = self._z_rank_target()
+        if t is None:
+            return
+        c = self.controller
+        desc = self._imp_desc(t) if isinstance(t, dict) else f"Z({t})"
+        try:
+            io = self._io()
+        except Exception:
+            io = None
+
+        def rank():
+            try:
+                return c.rank_symbols_z(t)
+            except Exception:                     # noqa: BLE001
+                return (c.rank_symbols(*io) if io else None)
+
+        self._rerank_after_rewrite(f"ranking for {desc} …", ranker=rank)
+
+    def _rerank_on_io(self):
+        """A changed in/out pair re-ranks the table by itself (as after a
+        reduction), ticks carried over -- the table is never stale and
+        Rank needs no button."""
+        if self.controller is None or self._filling or                 getattr(self, "_io_rerank_guard", False):
+            return
+        if not getattr(self, "_keep_ranked", False):
+            return                         # nothing ranked yet: the open
+        try:                               # chain fills it
+            inp, out = self._io()
+        except Exception:
+            return
+        if not inp or not out:
+            return
+        self._io_rerank_guard = True
+        try:
+            self._rerank_after_rewrite(f"ranking for {inp} → {out} …")
+        finally:
+            self._io_rerank_guard = False
+
+    def _keep_header_menu(self, pos):
+        """View options of the keep table: the peaks column, grouping."""
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        for col, label in ((1, "Show dcOp column"), (2, "Show score column"),
+                           (3, "Show peaks column")):
+            a = menu.addAction(label)
+            a.setCheckable(True)
+            a.setChecked(not self.keep_tbl.isColumnHidden(col))
+            a.toggled.connect(
+                lambda on, col=col: self._keep_show_column(col, on))
+        g = menu.addAction("Group by device")
+        g.setCheckable(True)
+        g.setChecked(self.group_chk.isChecked())
+        g.toggled.connect(self.group_chk.setChecked)
+        menu.exec(self.keep_tbl.horizontalHeader().mapToGlobal(pos))
+
+    def _keep_show_column(self, col: int, on: bool):
+        self.keep_tbl.setColumnHidden(col, not on)
+        any_extra = any(not self.keep_tbl.isColumnHidden(c) for c in (1, 2, 3))
+        self.keep_tbl.horizontalHeader().setVisible(any_extra)
+
+    def _keep_menu(self, pos):
+        """Row verbs: the symbol's LaTeX alias, its device's alias, the
+        planner, the ranking -- what the button row used to carry."""
+        from PySide6.QtWidgets import QInputDialog, QMenu
+
+        it = self.keep_tbl.itemAt(pos)
+        menu = QMenu(self)
+        if it is not None:
+            row = it.row()
+            name = self.keep_tbl.item(row, 0).text()
+
+            def edit_alias(row=row, name=name):
+                cell = self.keep_tbl.item(row, 4)
+                cur = cell.text() if cell is not None else ""
+                text, ok = QInputDialog.getText(
+                    self, "LaTeX alias", f"LaTeX for {name} (e.g. g_{{m1}}; "
+                    f"blank = default):", text=cur)
+                if ok and cell is not None:
+                    cell.setText(text.strip())    # itemChanged does the rest
+            menu.addAction(f"LaTeX alias for {name}…", edit_alias)
+            dev = self._device_of_symbol(name)
+            if dev:
+                menu.addAction(f"LaTeX alias for device {dev}…",
+                               lambda dev=dev: self._edit_device_alias(dev))
+            menu.addSeparator()
+        menu.addAction("Rank symbols", self._rank_async)
+        menu.addAction("Suggest keep set ≤ time budget…",
+                       self._suggest_keep_dialog)
+        menu.addAction("Split advice", self._split_advice)
+        menu.addSeparator()
+        for col, label in ((1, "Show dcOp column"), (2, "Show score column"),
+                           (3, "Show peaks column")):
+            a = menu.addAction(label)
+            a.setCheckable(True)
+            a.setChecked(not self.keep_tbl.isColumnHidden(col))
+            a.toggled.connect(
+                lambda on, col=col: self._keep_show_column(col, on))
+        menu.exec(self.keep_tbl.viewport().mapToGlobal(pos))
+
+    def _device_of_symbol(self, name: str):
+        """The device a symbol belongs to (gm_I0_MN1 -> I0.MN1; a
+        passive's value symbol IS its device), or None."""
+        if self.controller is None:
+            return None
+        names = {d.name for d in self.controller.devices}
+        if name in names:
+            return name
+        for dev in names:
+            if name.endswith("_" + dev.replace(".", "_")):
+                return dev
+        return None
+
+    def _build_backend_menu(self):
+        """Analysis -> Solver backend mirrors the hidden combo both ways."""
+        menu = None
+        for m in self.menuBar().findChildren(QMenu):
+            if m.title() == "Solver &backend":
+                menu = m
+        if menu is None:
+            return
+        for i in range(self.backend_combo.count()):
+            label = self.backend_combo.itemText(i)
+            a = menu.addAction(label)
+            a.setCheckable(True)
+            a.setStatusTip(self.backend_combo.itemData(i, Qt.ToolTipRole) or "")
+            a.setChecked(i == self.backend_combo.currentIndex())
+            a.triggered.connect(
+                lambda _c=False, i=i: self.backend_combo.setCurrentIndex(i))
+            self._backend_group.addAction(a)
+            self._backend_actions.append(a)
+        self.backend_combo.currentIndexChanged.connect(
+            lambda i: self._backend_actions[i].setChecked(True)
+            if 0 <= i < len(self._backend_actions) else None)
 
     def _crumb_steps(self):
         """(label, action, done) per step. "Done" is judged by what exists,
@@ -970,6 +1311,9 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         return box
 
     def _split_advice(self):
+        self._split_advice_run()
+
+    def _split_advice_run(self):
         """Ask whether this solve is worth tearing, and show the verdict."""
         if self.controller is None:
             return
@@ -985,6 +1329,8 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             f"color: {theme.GOOD};" if best and best["pays"]
             else f"color: {theme.MUTED};")
         self.split_lbl.setText("split: " + adv.verdict())
+        # the label is hidden state now; the verdict reads in the strip
+        self._set_strip("split: " + adv.verdict(), "info")
 
     def _apply_keep_filter(self, text: str):
         text = text.strip().lower()
@@ -1053,9 +1399,71 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.msg_strip.hide()
         self.msg_strip.setText("")
 
+    USER_PORT = "user selected"
+
+    def _imp_desc(self, spec) -> str:
+        if "seen_by" in spec:
+            return f"Z seen by {spec['seen_by']}"
+        if spec.get("ref"):
+            return f"Z({spec['node']}, {spec['ref']})"
+        return f"Z({spec['node']})"
+
+    def _impedance_at_nets(self, net: str, ref: str = ""):
+        """A Nets-tree pick: one net is Z to ground, two are Z between
+        them. The port dropdown says 'user selected' so the toolbar
+        does not claim a marker port it is not using."""
+        spec = {"node": net, "ref": ref} if ref else {"node": net}
+        self._impedance_user_spec(spec)
+
+    def _impedance_seen_by(self, name: str):
+        """An Instances-tree pick on a two-terminal element: the
+        impedance the element sees at its terminals -- the element
+        removed, sources zeroed (Thevenin looking outward)."""
+        self._impedance_user_spec({"seen_by": name})
+
+    def _impedance_user_spec(self, spec):
+        if self.controller is None:
+            return
+        # mode first: entering Impedance repopulates the port combo,
+        # and that churn runs through _on_port_text -- the spec must
+        # be stored after it, or the handler wipes it
+        self.mode_combo.setCurrentText("Impedance")
+        self._imp_spec = spec
+        if self.probe_combo.findText(self.USER_PORT) < 0:
+            self.probe_combo.addItem(self.USER_PORT)
+        self.probe_combo.setCurrentText(self.USER_PORT)
+        self._rerank_for_z()
+        desc = self._imp_desc(spec)
+        keep = self.checked_keep()
+        self._launch(lambda cb: self.controller.impedance_result(
+                         spec, keep=keep),
+                     f"impedance: {desc} …")
+
+    def _on_port_text(self, text: str):
+        """Choosing a real marker port leaves the user-selected spec:
+        the sentinel entry goes, so the dropdown never lies about
+        which port the next Solve will use."""
+        if text == self.USER_PORT or getattr(self, "_imp_spec",
+                                             None) is None:
+            if text and text != self.USER_PORT:
+                self._rerank_for_z()   # a marker picked: Z's ranking
+                if self.controller is not None and \
+                        self.mode_combo.currentText() in ("Impedance",
+                                                          "Loop gain"):
+                    self._update_estimate()
+            return
+        self._imp_spec = None
+        ix = self.probe_combo.findText(self.USER_PORT)
+        if ix >= 0:
+            self.probe_combo.blockSignals(True)
+            self.probe_combo.removeItem(ix)
+            self.probe_combo.blockSignals(False)
+        self._rerank_for_z()
+
     def _on_mode_changed(self, mode: str):
         probed = mode in ("Loop gain", "Compensate", "Modes", "GFT",
                           "Impedance")
+        self._refresh_solve_hint()
         self.probe_lbl.setText(" port: " if mode == "Impedance"
                                else " probe: ")
         if self.controller is not None and probed:
@@ -1074,9 +1482,21 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         io_on = mode in ("Transfer", "GFT", "Reduce circuit")
         self.out_combo.setEnabled(io_on)
         self.in_combo.setEnabled(io_on)
-        # the result-form selector belongs to the Transfer workflow
+        # the result-form selector serves the two tools that solve a
+        # response: Transfer and Impedance (parity -- one contract
+        # ladder, wherever a response is solved)
         transfer = mode == "Transfer"
-        self._form_act.setVisible(transfer)
+        self._form_act.setVisible(
+            transfer or mode in ("Impedance", "Loop gain", "GFT"))
+        # the GFT bench is numeric: full order (expression pruning)
+        # has nothing to act on there -- the entry grays out, and a
+        # stranded selection falls back to Exact
+        fo = self.form_combo.findText("Simplified · full order")
+        it = self.form_combo.model().item(fo) if fo >= 0 else None
+        if it is not None:
+            it.setEnabled(mode != "GFT")
+        if mode == "GFT" and                 self.form_combo.currentText() == "Simplified · full order":
+            self.form_combo.setCurrentText("Exact")
         self._refresh_form_ui()
         for b in (self.a_simplify, self.a_reduce):
             b.setEnabled(transfer and self.controller is not None)
@@ -1101,27 +1521,69 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             self.tool_combo.blockSignals(False)
         # each bench shows its own views; the shared result views stay
         self._set_tab_visibility(mode)
+        # the keep ranking follows the bench's response: Z's own
+        # sensitivities inside the Impedance tool, the transfer's
+        # everywhere else (restored on the way out)
+        prev = getattr(self, "_last_mode", None)
+        self._last_mode = mode
+        if mode == "Impedance":
+            self._rerank_for_z()
+        elif prev == "Impedance":
+            self._rerank_on_io()
+        if self.controller is not None:
+            self._update_estimate()
         if mode == "Compensate":
             self.tabs.setCurrentWidget(self._comp_tab)
         if mode == "GFT":
             self.tabs.setCurrentWidget(self._gft_tab)
         if mode == "Reduce circuit":
-            self.tabs.setCurrentWidget(self._reduce_tab)
+            # the bench's own plot: as-imported vs the ticked reduction
+            if self.controller is not None:
+                self._plot_reduction(self.checked_acg_nodes())
+        elif getattr(self, "_reduce_plot_base", None) is not None:
+            # leaving the bench: the result's plot comes back
+            self._reduce_plot_base = None
+            if self.result is not None:
+                self._show(self.result, push_history=False)
+
+    def _on_main_tab(self, idx: int):
+        """Switching to the Schematic page fits it once it has a size
+        (a page first shown after the window is laid out was fitted to
+        a zero-size view)."""
+        if self.main_tabs.widget(idx) is self._schematic_tab:
+            QTimer.singleShot(0, self.sch_view.fit)
 
     def _set_tab_visibility(self, mode: str):
         """Summary/Expression/Error are views of any result and stay put;
         the bench-specific tabs appear only in their bench, which is what
-        makes 'bench' mean something."""
+        makes 'bench' mean something.
+
+        Reduce circuit is a STATE tool, not a result tool: it picks a
+        node set and applies it. Everything that neither informs nor
+        acts on that is clutter there -- the keep panel (the scans are
+        numeric, no tick changes a cost), the match controls (editing
+        matches mid-scan silently invalidates it), History, the Summary
+        and Expression views (they describe a solve), and Solve itself
+        (it was a hidden alias of Scan AC grounds). The Nets tree comes
+        to the front: it is where a net is AC-grounded by hand and
+        where the applied state shows its earth marks."""
+        reduce = mode == "Reduce circuit"
         vis = {
             self._whatif_tab: mode == "Transfer",
             self._comp_tab: mode == "Compensate",
             self._gft_tab: mode == "GFT",
-            self._reduce_tab: mode == "Reduce circuit",
+            self.summary: not reduce,
+            self._expr_tab: not reduce,
         }
         for w, on in vis.items():
             idx = self.tabs.indexOf(w)
             if idx >= 0:
                 self.tabs.setTabVisible(idx, on)
+        self._solve_act.setVisible(not reduce)
+        self._keep_col.setVisible(not reduce)     # the whole symbols column
+        self.reduce_col.setVisible(reduce)        # the candidates take over
+        if reduce:
+            self.dev_tabs.setCurrentWidget(self.nets_tree)
 
     def _on_tool_selected(self, name: str):
         if name and self.mode_combo.currentText() != name:
@@ -1469,8 +1931,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         inv = {v: k for k, v in self._POLICY_MAP.items()}
         self._filling = True
         try:
-            self.matchval_combo.setCurrentText(
-                inv.get(c.match_value_policy, "weighted"))
+            self._set_policy_label(inv.get(c.match_value_policy, "weighted"))
         finally:
             self._filling = False
         self.acg_tbl.setRowCount(0)
@@ -1623,15 +2084,22 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             def compute():
                 plan = c.suggest_keep(inp, out, self.budget_spin.value())
                 ranking = c.rank_symbols(inp, out)
+                matched = None
                 if groups:
-                    c.solve(inp, out, [])   # warms the conflicts measure
-                return plan, ranking
+                    # the matched model's own first light: it warms the
+                    # conflicts measure AND replaces the pre-match plot,
+                    # so the screen describes the circuit the matches
+                    # made (a plot from before them read as stale)
+                    matched = c.attach_template(c.solve(inp, out, []))
+                return plan, ranking, matched
 
             def land_plan(res):
                 if not live():
                     return
-                plan, ranking = res
+                plan, ranking, matched = res
                 if groups:
+                    if matched is not None and self.result is baseline:
+                        self._show(matched, push_history=False)
                     self._surface_match_conflicts(baseline=baseline)
                 if not self.keep_tbl.rowCount():
                     self._fill_keep_table(ranking,
@@ -1643,8 +2111,19 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
 
             self._run_bg(compute, land_plan)
 
-        self._launch(fl, f"first light: {inp} → {out} …",
-                     on_done=fl_done, est_s=None)
+        def start():
+            if live():
+                self._launch(fl, f"first light: {inp} → {out} …",
+                             on_done=fl_done, est_s=None)
+
+        # the launcher defers the chain past the window's first paint
+        # (a sympy-holding worker thread starves the first draw of the
+        # GIL); a programmatic open starts it at once
+        deferred = getattr(self, "_auto_deferred", None)
+        if deferred is not None:
+            deferred.append(start)
+        else:
+            start()
 
     # ------------------------------------------------------------- matches
     def _apply_matches(self):
@@ -1656,11 +2135,36 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
 
     def _refresh_matches_label(self):
         """Match sets live on the tree itself: every member wears 🔗n and
-        its group tint (devtree.set_groups)."""
-        self.devices.set_groups(self._match_groups)
+        its group tint (devtree.set_groups). Each group is passed with
+        its representative (the name bearer) first, so the tree orders
+        the group's block by that device."""
+        groups = []
+        for g in self._match_groups:
+            try:
+                lead = self.controller.name_bearer(g) if self.controller                     else g[0]
+            except Exception:                     # noqa: BLE001
+                lead = g[0]
+            groups.append((lead, *[m for m in g if m != lead]))
+        self.devices.set_groups(groups)
+        self._refresh_solve_hint()
+        try:
+            self._schematic_restyle()
+        except Exception:                         # noqa: BLE001
+            pass                                  # decoration only
 
     _POLICY_MAP = {"representative": "representative", "average": "mean",
                    "weighted": "weighted"}
+
+    def _policy_label(self) -> str:
+        for label, a in self._policy_actions.items():
+            if a.isChecked():
+                return label
+        return "weighted"
+
+    def _set_policy_label(self, label: str) -> None:
+        a = self._policy_actions.get(label)
+        if a is not None:
+            a.setChecked(True)
 
     def _on_matchval_changed(self, label: str):
         if self.controller is None or self._filling:
@@ -1696,7 +2200,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.controller.set_match_representative(name)
         self._filling = True
         try:
-            self.matchval_combo.setCurrentText("representative")
+            self._set_policy_label("representative")
         finally:
             self._filling = False
         self._surface_match_conflicts()
@@ -1796,6 +2300,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         return name.split("_", 1)[1] if "_" in name else name
 
     def _fill_keep_table(self, ranking, checked=()):
+        self._keep_ranked = True
         self._filling = True
         try:
             values = self.controller.op_values()
@@ -1821,6 +2326,8 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                     band, prev_dev = 1 - band, dev
             sym = QTableWidgetItem(name)
             sym.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            sym.setToolTip(f"{name}\n  dcOp: {opval or '—'}\n  score: "
+                           f"{score}\n  peaks: {peak or '—'}")
             sym.setCheckState(Qt.Checked if name in checked else Qt.Unchecked)
             ro = Qt.ItemIsEnabled | Qt.ItemIsSelectable
             info = [QTableWidgetItem(opval), QTableWidgetItem(score),
@@ -1866,6 +2373,10 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             self.controller.sym_aliases.pop(name, None)
         self._save_aliases()
         self._render_expr()
+        try:
+            self._schematic_restyle()             # the label is typeset
+        except Exception:                         # noqa: BLE001
+            pass
 
     def _on_group_toggled(self, _on):
         if getattr(self, "_last_ranking", None):
@@ -1880,22 +2391,84 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                 out.append(it.text())
         return out
 
+    def _circuit_key(self) -> dict:
+        """Everything the next solve depends on besides the keep ticks:
+        the working circuit (reduction), the matches, the models, the
+        in/out pair and the bench. Captured with every shown result;
+        a difference means the screen no longer describes the circuit."""
+        c = self.controller
+        summ = c.reduction_summary() if c is not None else None
+        try:
+            inp, out = self._io()
+        except Exception:
+            inp = out = None
+        return {
+            "reduction": ((tuple(summ["nodes"]),
+                           tuple(summ.get("removals") or ()))
+                          if summ else ()),
+            "matches": tuple(sorted(tuple(g) for g in self._match_groups)),
+            "cap_model": getattr(self, "cap_model", None),
+            "mos_model": getattr(self, "mos_model", None),
+            "io": (inp, out),
+            "bench": self.mode_combo.currentText(),
+        }
+
+    _KEY_WORDS = {"reduction": "the working circuit (reduction)",
+                  "matches": "the matched pairs", "cap_model": "the cap model",
+                  "mos_model": "the MOS model", "io": "the in/out pair",
+                  "bench": "the bench"}
+
     def _refresh_solve_hint(self):
-        """The keep panel is the NEXT solve's input; the plot shows the
-        LAST result. When they differ — the first-light numeric against
-        pre-ticked suggestions, a cap-model re-open, or plain tick
-        editing — the Solve button says so instead of letting the
-        mismatch pass silently."""
+        """The panel is the NEXT solve's input; the plot shows the LAST
+        result. When they differ -- keep ticks edited, a reduction
+        applied or reverted, matches changed, the in/out pair moved --
+        the Solve button turns amber and says what changed, instead of
+        letting the screen describe a circuit that no longer exists."""
         r = self.result
-        stale = False
+        reasons = []
+        if r is not None:
+            then = getattr(r, "_circuit_key", None)
+            if then is not None:
+                now = self._circuit_key()
+                for k, v in now.items():
+                    if then.get(k) != v:
+                        reasons.append(self._KEY_WORDS.get(k, k))
+        # the keep ticks are the NEXT solve's options, not the circuit's
+        # state: at start-up the numeric first light sits under an
+        # auto-ticked plan by design, and that must not read as stale.
+        # Mentioned in the tooltip, never starred or coloured.
+        ticks = ""
         if r is not None and self.mode_combo.currentText() == "Transfer":
             shown = r.keep if isinstance(r.keep, list) else None
-            if shown is not None:
-                stale = set(shown) != set(self.checked_keep())
+            if shown is not None and set(shown) != set(self.checked_keep()):
+                ticks = ("the ticked keep set differs from the result on "
+                         "screen -- Solve recomputes with the ticks")
+        stale = bool(reasons)
         self.solve_btn.setText("Solve *" if stale else "Solve")
-        self.solve_btn.setToolTip(
-            "the ticked keep set differs from the result on screen — "
-            "Solve recomputes with the ticks" if stale else "")
+        self.solve_btn.setStyleSheet(
+            f"QPushButton {{ background: #fdf3e0; color: {theme.WARN}; "
+            f"font-weight: bold; }}" if stale else "")
+        tip = ("the result on screen is from a previous circuit state -- "
+               "changed since: " + ", ".join(reasons) + " -- Solve recomputes"
+               if stale else "")
+        self.solve_btn.setToolTip((tip + "\n" if tip and ticks else tip)
+                                  + ticks)
+
+    def _on_keep_row_selected(self):
+        """A keep row names a symbol; its device goes on the card."""
+        rows = {it.row() for it in self.keep_tbl.selectedItems()}
+        if len(rows) != 1 or self.controller is None:
+            return
+        it = self.keep_tbl.item(next(iter(rows)), 0)
+        if it is None:
+            return
+        sym = it.text()
+        names = {d.name for d in self.controller.devices}
+        dev = sym if sym in names else next(
+            (d for d in names if sym.endswith("_" + d.replace(".", "_"))),
+            None)
+        if dev:
+            self._show_op_card(dev)
 
     def _on_keep_changed(self, item):
         if self._filling or self.controller is None:
@@ -1958,6 +2531,13 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         inp, out = self._io()
         keep = self.checked_keep()
         c = self.controller
+        # the label costs the response the bench will solve: the Tian
+        # hybrid at the probe (4x), the probe-injected Z, or the
+        # transfer -- one language, the right subject
+        mode = self.mode_combo.currentText()
+        probe = (self.probe_combo.currentText()
+                 if mode == "Loop gain" else None)
+        ztarget = self._z_rank_target() if mode == "Impedance" else None
         seq = getattr(self, "_est_seq", 0) + 1
         self._est_seq = seq
         self.estimate_lbl.setText("estimate: …")
@@ -1990,11 +2570,36 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
 
         def compute():
             try:
+                if probe:
+                    return c.estimate_loop(probe, keep)
+                if ztarget is not None:
+                    try:
+                        return c.estimate_z(ztarget, keep)
+                    except Exception:     # between-nets: transfer cost
+                        pass
                 return c.estimate(inp, out, keep)
             except Exception as exc:
                 return exc
 
         self._run_bg(compute, done)
+
+    def _suggest_keep_dialog(self):
+        """The menu entry: ask for the solve-time budget (the hidden spin
+        holds it), then plan. _suggest_keep itself stays non-modal for
+        programmatic callers."""
+        from PySide6.QtWidgets import QInputDialog
+
+        if self.controller is None:
+            return
+        val, ok = QInputDialog.getDouble(
+            self, "Suggest keep set", "SOLVE-TIME budget in seconds -- how "
+            "long a symbolic solve may take (unrelated to the error "
+            "budget, which is accuracy):", self.budget_spin.value(),
+            0.1, 600.0, 1)
+        if not ok:
+            return
+        self.budget_spin.setValue(val)
+        self._suggest_keep()
 
     def _suggest_keep(self):
         """Form-aware: for a lowest-order solve the right keeps are the
@@ -2043,13 +2648,19 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             return
         if self.mode_combo.currentText() == "Impedance":
             port = self.probe_combo.currentText()
-            if not port:
+            spec = getattr(self, "_imp_spec", None)
+            if port == self.USER_PORT and spec is not None:
+                target, desc = spec, self._imp_desc(spec)
+            elif port and port != self.USER_PORT:
+                target, desc = port, f"Z({port})"
+            else:
                 self.statusBar().showMessage("no port marker in this design")
                 return
             keep = self.checked_keep()
+            kw, phrase = self._impedance_form_kw()
             self._launch(lambda cb: self.controller.impedance_result(
-                             port, keep=keep),
-                         f"impedance at {port} …")
+                             target, keep=keep, progress=cb, **kw),
+                         f"impedance: {desc}{phrase} …")
             return
         if self.mode_combo.currentText() == "GFT":
             self.run_gft()
@@ -2063,9 +2674,12 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                 self.statusBar().showMessage("no loop probe in this design")
                 return
             keep = self.checked_keep()
+            kw, phrase = self._loopgain_form_kw()
+            budget = self.budget_spin.value()
             self._launch(lambda cb: self.controller.loop_gain(
-                             probe, keep=keep, progress=cb),
-                         f"loop gain at {probe} …")
+                             probe, keep=keep, progress=cb,
+                             max_seconds=budget, **kw),
+                         f"loop gain at {probe}{phrase} …")
             return
         # Transfer: ONE Solve action; the form selector picks the contract
         form = self.form_combo.currentText()
@@ -2079,6 +2693,44 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self._launch(lambda cb: self.controller.attach_template(
                          self.controller.solve(inp, out, keep, progress=cb)),
                      f"solving {inp} → {out} …")
+
+    def _loopgain_form_kw(self) -> tuple[dict, str]:
+        """The Loop-gain solve's contract from the form selector --
+        the same ladder as Transfer and Impedance. The stability
+        strategy is the loop's native contract: it gates on the
+        margins themselves."""
+        form = self.form_combo.currentText()
+        if form == "Simplified · full order":
+            mag, ph = self.mag_spin.value(), self.phase_spin.value()
+            return (dict(form="simplified", mag_db=mag, phase_deg=ph,
+                         band_fmin=1e3, band_fmax=1e9),
+                    f" (simplified, {mag} dB / {ph}°)")
+        if form == "Simplified · lowest order":
+            fl, fh = self.band_slider.values()
+            strat = self._strategy()
+            return (dict(form="lowest", strategy=strat,
+                         strategy_opts=self._strategy_opts(),
+                         band_fmin=fl, band_fmax=fh),
+                    f" (lowest order, {strat})")
+        return {}, ""
+
+    def _impedance_form_kw(self) -> tuple[dict, str]:
+        """The Impedance solve's contract from the form selector --
+        the same ladder the Transfer tool reads."""
+        form = self.form_combo.currentText()
+        if form == "Simplified · full order":
+            mag, ph = self.mag_spin.value(), self.phase_spin.value()
+            return (dict(form="simplified", mag_db=mag, phase_deg=ph,
+                         fmin=1e3, fmax=1e9),
+                    f" (simplified, {mag} dB / {ph}°)")
+        if form == "Simplified · lowest order":
+            fl, fh = self.band_slider.values()
+            strat = self._strategy()
+            return (dict(form="lowest", strategy=strat,
+                         strategy_opts=self._strategy_opts(),
+                         fmin=fl, fmax=fh),
+                    f" (lowest order, {strat})")
+        return {}, ""
 
     def _on_form_changed(self, form: str):
         self._refresh_form_ui()
@@ -2095,9 +2747,9 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                                       region of the reduced model.
         """
         mode = self.mode_combo.currentText()
-        transfer = mode == "Transfer"
+        formmode = mode in ("Transfer", "Impedance", "Loop gain", "GFT")
         form = self.form_combo.currentText()
-        budgeted = transfer and form.startswith("Simplified")
+        budgeted = formmode and form.startswith("Simplified")
         lowest = budgeted and "lowest" in form
         strat = self._strategy()
         # the CONTRACT surface (strategy dropdown, its budget spins, the
@@ -2158,7 +2810,10 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         the doublet caveat. Computed OFF the GUI thread — the first
         call costs a numeric sweep (~1 s) that used to stall the drag."""
         if (self.controller is None
-                or not self.band_row.isVisibleTo(self)):
+                or not self.band_row.isVisibleTo(self)
+                or self.mode_combo.currentText() == "Reduce circuit"):
+            # the order verdict belongs to the lowest-order solve; the
+            # Reduce bench shows the band for its own scans
             self.cert_lbl.setText("")
             self.cert_lbl.setVisible(False)
             return
@@ -2198,6 +2853,12 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         budgeted = (self.mode_combo.currentText() == "Transfer"
                     and form.startswith("Simplified"))
         r = self.result
+        if self.mode_combo.currentText() == "Reduce circuit":
+            # the comparison plot: the tube hugs the as-imported
+            # response, the ticked reduction must stay inside it
+            r = getattr(self, "_reduce_plot_base", None)
+            budgeted = r is not None
+            form = "Simplified · lowest order"
         axes = self.canvas.figure.axes
         if not budgeted or r is None or not axes:
             self.canvas.draw_idle()
@@ -2393,15 +3054,16 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             self.controller.solve(inp, out, self.checked_keep())))
         return self.result
 
-    def impedance_sync(self, port):
+    def impedance_sync(self, port, **kw):
         self._show(self.controller.impedance_result(
-            port, keep=self.checked_keep()))
+            port, keep=self.checked_keep(), **kw))
         return self.result
 
-    def loop_gain_sync(self, probe=None):
+    def loop_gain_sync(self, probe=None, **kw):
         probe = probe or self.probe_combo.currentText()
         self._show(self.controller.loop_gain(probe,
-                                             keep=self.checked_keep()))
+                                             keep=self.checked_keep(),
+                                             **kw))
         return self.result
 
     def simplify_sync(self):
@@ -2496,6 +3158,13 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
 
     def _show(self, result, overlays=(), push_history=True):
         self.result = result
+        card = getattr(self, "op_card", None)
+        if card is not None and card.name:
+            self._show_op_card(card.name)
+        try:
+            object.__setattr__(result, "_circuit_key", self._circuit_key())
+        except Exception:                         # noqa: BLE001
+            pass
         try:
             self._schematic_restyle()
         except Exception:                         # noqa: BLE001
@@ -2619,6 +3288,26 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             return
         base = not self.fullnames_chk.isChecked()
         aliases = self.controller.sym_aliases if self.controller else None
+        # the lumped equivalents: defined below the expressions, or
+        # expanded into them when asked
+        defs = (self.controller.equivalent_definitions()
+                if self.controller is not None else [])
+        # only the equivalents that actually appear in the shown H(s):
+        # a reduction lumps many nodes, the formula mentions a few
+        try:
+            present = {str(s) for s in self.result.tf.expr.free_symbols}
+            defs = [d for d in defs if d[0] in present]
+        except Exception:                         # noqa: BLE001
+            pass
+        self.expand_eq_chk.setEnabled(bool(defs))
+        shown = self.result
+        if defs and self.expand_eq_chk.isChecked():
+            try:
+                shown = self.controller.expand_equivalents(self.result)
+            except Exception as exc:                  # noqa: BLE001
+                self.log(f"expand equivalents failed: {exc}")
+                shown = self.result
+            defs = []
         if self.exprweb is not None:                      # KaTeX web view
             try:
                 numerals = {}
@@ -2633,11 +3322,12 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                         numerals = view.numeral_tips(stories or [],
                                                      deep=deep)
                 payload = view.expr_katex(
-                    self.result, base=base, aliases=aliases,
+                    shown, base=base, aliases=aliases,
                     numerals=numerals,
                     numhint="collapsed operating-point products — run "
                             "<b>Analysis → Explain the numbers</b> for the "
-                            "ranked contributors")
+                            "ranked contributors",
+                    equivalents=defs)
                 # a lumped equivalent says what it stands for on hover
                 if self.controller is not None:
                     for e in self.controller.equivalent_elements():
@@ -2652,11 +3342,11 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                 pass
             return
         try:                                              # matplotlib fallback
-            n = len(view._expr_lines(self.result, base=base))
+            n = len(view._expr_lines(shown, base=base))
             # size the canvas to the content and let the scroll area handle the
             # overflow — rather than squeezing N lines into a fixed short panel
             self.expr_canvas.setMinimumHeight(int(34 * n + 24))
-            view.expr_figure(self.result, self.expr_canvas.figure,
+            view.expr_figure(shown, self.expr_canvas.figure,
                              base=base, aliases=aliases)
             theme.style_figure(self.expr_canvas.figure)
             self.expr_canvas.draw()                       # parse mathtext now
@@ -2831,10 +3521,29 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         dlg.show()
 
     def _on_devices_selected(self):
-        """Selecting devices in the tree cross-probes them as a set."""
+        """Selecting devices in the tree cross-probes them as a set and
+        shows the first one's operating point on the card."""
+        names = self.devices.selected_names()
+        self._show_op_card(names[0] if names else None)
         if self._xprobe is None:
             return
-        self.xprobe_instances(self.devices.selected_names())
+        self.xprobe_instances(names)
+
+    def _show_op_card(self, name):
+        """The card for `name` (a device), or cleared for None."""
+        card = getattr(self, "op_card", None)
+        if card is None:
+            return
+        if not name or self.controller is None:
+            card.clear()
+            return
+        from .opcard import op_card_rows
+        try:
+            rows = op_card_rows(self.controller, name, self.result,
+                                self._match_groups, self._policy_label())
+        except Exception as exc:                  # noqa: BLE001
+            rows = [("device", [("card unavailable", str(exc), "")])]
+        card.show_sections(name, rows)
 
 
 def build_window(cin=None, psf=None, probe=None,

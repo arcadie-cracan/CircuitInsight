@@ -18,6 +18,9 @@ from dataclasses import dataclass
 class SymbolSpec:
     file: str                 # svg file name inside the library root
     terms: dict               # CIN terminal -> library anchor name
+    #: the symbol has no canonical size (a balun, a block): fit it to
+    #: the harvested pin pitch like a block, orientation by residual
+    scalable: bool = False
 
 
 _MOS_N = SymbolSpec("nmos-4t.svg", {"g": "G", "d": "D", "s": "S", "b": "B"})
@@ -35,10 +38,18 @@ SYMBOLS = {
     ("vsource", None): SymbolSpec("vsrc.svg", {"p": "+", "n": "-"}),
     ("isource", None): SymbolSpec("isrc.svg", {"p": "+", "n": "-"}),
     ("vccs", None): SymbolSpec("ccs.svg", {"p": "+", "n": "-"}),
+    # analogLib ideal_balun: d = the single-ended differential port
+    # (the library's primary p), c = the centre tap (scom), p/n = the
+    # balanced pair (s+/s-); the harvest puts c,d left and p,n right,
+    # as the symbol does
     ("balun", None): SymbolSpec("ideal-balun.svg",
-                                {"d": "d", "c": "c", "p": "p", "n": "n"}),
+                                {"d": "p", "c": "scom", "p": "s+",
+                                 "n": "s-"}, scalable=True),
+    # sp1tswitch: the exporter maps its CDF terminals positionally,
+    # t0 -> p (drawn on the right), t1 -> n (left); the library's
+    # anchors are 1 (left) and 2 (right)
     ("switch", None): SymbolSpec("switch-closed.svg",
-                                 {"p": "t1", "n": "t2"}),
+                                 {"p": "2", "n": "1"}),
 }
 
 
@@ -63,7 +74,8 @@ CELL_SYMBOLS = {
 #: harvested (Virtuoso pin) names -> CIN canonical terminal names. The
 #: CIN adapter canonicalizes on export; the hints carry the raw names.
 RAW_TERMS = {"PLUS": "p", "MINUS": "n", "D": "d", "G": "g", "S": "s",
-             "B": "b", "C": "c", "E": "e"}
+             "B": "b", "C": "c", "E": "e",
+             "t0": "p", "t1": "n"}          # sp1tswitch, positional
 
 
 def anchor_for(spec: SymbolSpec, raw_term: str):

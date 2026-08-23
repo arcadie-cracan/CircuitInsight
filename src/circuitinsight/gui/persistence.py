@@ -67,8 +67,9 @@ class PersistenceMixin:
         self._autosave_state()          # the last-state survives the close
         s = self._settings()
         s.setValue("geometry", self.saveGeometry())
-        for name, sp in (("h_split", self.h_split),
-                         ("left_split", self.left_split),
+        for name, sp in (("h_split2", self.h_split),
+                         ("left_cols", self.left_split),
+                         ("keep_col", self._keep_col),
                          ("right_split", self.right_split)):
             s.setValue("splitters/" + name, sp.saveState())
         s.setValue("budget/mag", self.mag_spin.value())

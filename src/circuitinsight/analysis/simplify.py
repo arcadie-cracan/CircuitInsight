@@ -257,6 +257,57 @@ def _subset_response(data: dict, sel: dict, W: np.ndarray) -> np.ndarray:
     return out
 
 
+def leading_coefficient(tf) -> float | None:
+    """The numeric factor in front of the DC gain's symbol form: for
+    A0 = c * gm5 gm13 / (gds5 (gds10 + ...)) this is c. 1.0 when the
+    form carries none, None when there is no DC gain to speak of."""
+    try:
+        dc = sp.together(tf.dc_gain())
+    except Exception:
+        return None
+    if dc is sp.zoo or dc is sp.nan or dc == 0:
+        return None
+    c, _rest = dc.as_coeff_Mul()
+    try:
+        return float(c)
+    except (TypeError, ValueError):
+        return None
+
+
+def snap_unity(tf, criterion, freqs, h_full):
+    """Scale the simplified form so its DC-gain coefficient is exactly 1
+    -- the whiteboard form carries no 0.98 -- provided the SNAPPED form
+    still satisfies the criterion against the full response (score <= 1,
+    measured, never summed). Returns (tf, factor, err_db): the input
+    untouched with factor 1.0 and err None when there is nothing to snap
+    or the budget does not cover it.
+
+    The factor is a collapsed ratio of unkept parameters on the signal
+    path (on fc: the PMOS cascode's gm and its mirror's gds); dividing it
+    out is a uniform gain scaling by 20 log10(k) dB, which the lowest-
+    order contract prices like any other pruning."""
+    k = leading_coefficient(tf)
+    if k is None or k <= 0 or abs(k - 1.0) < 1e-9:
+        return tf, 1.0, None
+    snapped = SimplifiedTF(expr=tf.expr / sp.Float(k, 17),
+                           values=dict(tf.values), symbols=dict(tf.symbols),
+                           s=tf.s, original=tf.original,
+                           achieved_mag_err_db=tf.achieved_mag_err_db,
+                           achieved_phase_err_deg=tf.achieved_phase_err_deg,
+                           band_hz=tf.band_hz)
+    f = np.asarray(freqs, dtype=float)
+    try:
+        h_snap = snapped.numeric(f)
+        score = float(criterion.score(f, np.asarray(h_full), h_snap))
+    except Exception:
+        return tf, 1.0, None
+    if not np.isfinite(score) or score > 1.0:
+        return tf, 1.0, None
+    err = abs(20.0 * np.log10(k))
+    snapped.achieved_mag_err_db = max(float(tf.achieved_mag_err_db), err)
+    return snapped, k, err
+
+
 def simplify_tf(
     tf: TransferFunction,
     mag_tol_db: float = 1.0,

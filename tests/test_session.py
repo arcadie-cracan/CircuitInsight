@@ -432,7 +432,10 @@ def test_approximation_ledger_measures_not_sums(miller):
             strategy_opts={"gain_db": 1.0, "phase_deg": 5.0},
             fmin=1e3, fmax=1e8)
         steps = {e["step"].split(" ")[0] for e in led["entries"]}
-        assert "matches" in steps and "AC-ground" in steps
+        assert "matches" in steps and "reduction" in steps
+        red = next(e["step"] for e in led["entries"]
+                   if e["step"].startswith("reduction"))
+        assert "grounded" in red
         assert all(e["score"] <= 1.0 for e in led["entries"]
                    if not e["exact"])
         # the total is a measurement of the composed circuit, within
@@ -472,3 +475,437 @@ def test_equivalent_elements_are_spelled_out():
     assert "net" not in symbol_tex("Geq_I0_net8").replace("net8", "")
     c.revert_reduction()
     assert c.equivalent_elements() == []
+
+
+def test_matched_symbols_are_named_after_the_member_on_the_signal_path():
+    """A match group's shared symbols carry ONE member's name. It used
+    to be whichever came first in the group tuple, so the cascode
+    NM5's transconductance showed as g_m,NM3 -- its mirror twin, off
+    the signal path. The name bearer is now the member whose
+    parameters shape the in->out response most (band sensitivity)."""
+    import warnings
+
+    from circuitinsight.session import SessionController
+
+    fc = FIX / "fc"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(fc / "tb_fc.cin.json", fc / "psf")
+        groups = [tuple(g) for g in c.suggest_matches()]
+        c.set_matches(*groups)
+        g = next(g for g in groups if "I0.NM5" in g)
+        assert "I0.NM3" in g and g[0] != "I0.NM5"     # tuple order alone
+        assert c.name_bearer(g) == "I0.NM5"
+        r = c.solve("VIND", "vout", ["gm_I0_NM5"])
+    names = {str(s) for s in r.tf.expr.free_symbols}
+    assert "gm_I0_NM5" in names and "gm_I0_NM3" not in names
+    # a user-chosen representative overrides the heuristic
+    c.set_match_representative("I0.NM3")
+    assert c.name_bearer(g) == "I0.NM3"
+
+
+def test_snap_unity_divides_out_a_covered_leading_numeral():
+    """The DC-gain coefficient snap, tested at the unit: a lowest-order
+    form with a clean leading numeral (a collapsed ratio of unkept
+    parameters) is divided down to 1 when the contract covers the
+    shift, left alone when it does not, and left alone when the
+    numeral sits inside a sum (no single coefficient to divide out).
+    This used to be an fc end-to-end test; the common-node and
+    running-mean match commits changed fc's suggested groups, and the
+    surviving lowest-order numerator is now gm*(0.999*gm + 6e-5) --
+    a sum, nothing to snap -- so the fixture no longer exercises the
+    feature."""
+    import numpy as np
+    import sympy as sp
+
+    from circuitinsight.analysis.criteria import PlainCriterion
+    from circuitinsight.analysis.simplify import (SimplifiedTF,
+                                                  leading_coefficient,
+                                                  snap_unity)
+
+    a, c, s = sp.symbols("a c s", positive=True)
+    freqs = np.logspace(1, 6, 40)
+
+    def tf_with(k):
+        return SimplifiedTF(expr=sp.Float(k, 17) * a / (1 + s * c / a),
+                            values={"a": 1e-3, "c": 1e-9},
+                            symbols={"a": a, "c": c}, s=s)
+
+    # 0.98 costs 0.18 dB: a 1 dB contract covers it, the form snaps
+    tf = tf_with(0.98)
+    h_full = tf.numeric(freqs)
+    snapped, k, err = snap_unity(tf, PlainCriterion(gain_db=1.0),
+                                 freqs, h_full)
+    assert abs(k - 0.98) < 1e-12
+    assert abs(leading_coefficient(snapped) - 1.0) < 1e-9
+    # the recorded shift is measured: 20 log10(0.98)
+    assert abs(err - abs(20 * np.log10(0.98))) < 1e-9
+
+    # 0.5 costs 6 dB: the same contract does not cover it, no snap
+    tf = tf_with(0.5)
+    kept, k, err = snap_unity(tf, PlainCriterion(gain_db=1.0),
+                              freqs, tf.numeric(freqs))
+    assert k == 1.0 and err is None
+    assert abs(leading_coefficient(kept) - 0.5) < 1e-12
+
+    # a numeral inside a sum is not a leading coefficient
+    b = sp.Symbol("b", positive=True)
+    tf = SimplifiedTF(expr=(sp.Float(0.98) * a * b + sp.Float(6e-5) * b)
+                      / (1 + s * c / a),
+                      values={"a": 1e-3, "b": 1e-3, "c": 1e-9},
+                      symbols={"a": a, "b": b, "c": c}, s=s)
+    kept, k, err = snap_unity(tf, PlainCriterion(gain_db=10.0),
+                              freqs, tf.numeric(freqs))
+    assert k == 1.0 and err is None
+
+
+def test_suggest_matches_requires_a_common_node(tmp_path):
+    """One more structural criterion: a suggested set shares at least
+    one NET (gate, source, drain -- a mirror's common gate, a pair's
+    common source). Ground and global supplies do not count (every
+    bulk ties to gnd!). A device identical in type and parameters but
+    living on unrelated nets is not suggested."""
+    import json
+    import shutil
+    import warnings
+
+    fx = FIX / "ota5t"
+    raw = json.loads((fx / "tb_ota5t.cin.json").read_text(encoding="utf-8"))
+    ota = raw["definitions"]["ota5t"]
+    mn0 = next(i for i in ota["instances"] if i["name"] == "MN0")
+    clone = dict(mn0)
+    clone["name"] = "MN9"
+    clone["sim_name"] = mn0.get("sim_name", "MN0")   # same OP record
+    clone["terminals"] = {"d": "zz1", "g": "zz2", "s": "zz3", "b": "vss"}
+    ota["instances"] = list(ota["instances"]) + [clone]
+    work = tmp_path / "cin.json"
+    work.write_text(json.dumps(raw), encoding="utf-8")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        from circuitinsight.session import SessionController
+        c = SessionController.open(work, fx / "psf")
+        groups = [tuple(g) for g in c.suggest_matches()]
+    members = {m for g in groups for m in g}
+    assert "I0.MN9" not in members, groups
+    # the true pair is still found
+    assert any({"I0.MN0", "I0.MN1"} <= set(g) for g in groups)
+
+
+def test_suggest_refines_against_the_running_mean():
+    """Membership must not depend on netlist order: fc's cascode NM4
+    differed 2.8% in gm from the fixed head NM3 (out, at a 2%
+    tolerance) but 0.9% from NM5. Against the subgroup's running mean
+    all four cascodes group; NM2 (gm 4x off) stays out."""
+    import warnings
+
+    from circuitinsight.session import SessionController
+
+    fc = FIX / "fc"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(fc / "tb_fc.cin.json", fc / "psf")
+        groups = [set(g) for g in c.suggest_matches()]
+    assert {"I0.NM1", "I0.NM3", "I0.NM4", "I0.NM5"} in groups
+    assert not any("I0.NM2" in g for g in groups)
+
+
+def test_mirror_gm_budget_admits_the_third_leg():
+    """A 1:1:1 mirror (gates tied, V_GS and V_TH identical, currents
+    equal to within the budget) earns a gm tolerance of 2% plus its
+    own measured lambda term (dVds*gds/Id, capped at 10%): fc's PM3
+    sat 2.1% from the (M24, PM4) mean with a 2.4% predicted Vds
+    effect, so all three legs group. The strict 2% stays for
+    everything else: no other bench's suggestions moved, and the
+    cascodes (common gate but 20 mV of V_GS spread, gds apart by 2x)
+    never see the budget."""
+    import warnings
+
+    from circuitinsight.session import SessionController
+
+    fc = FIX / "fc"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(fc / "tb_fc.cin.json", fc / "psf")
+        groups = [set(g) for g in c.suggest_matches()]
+    assert {"I0.M24", "I0.PM3", "I0.PM4"} in groups
+    # the cascodes (gate-tied but sources apart: V_GS differs by mV)
+    # still needed the running mean, not the mirror budget -- and NM2
+    # (4x off) stays out of everything
+    assert {"I0.NM1", "I0.NM3", "I0.NM4", "I0.NM5"} in groups
+    assert not any("I0.NM2" in g for g in groups)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c5 = SessionController.open(FIX / "ota5t" / "tb_ota5t.cin.json",
+                                    FIX / "ota5t" / "psf")
+        g5 = [set(g) for g in c5.suggest_matches()]
+    assert g5 == [{"I0.MN0", "I0.MN1"}, {"I0.MP0", "I0.MP1"}]
+
+
+def test_apply_reduction_deletes_ticked_removals():
+    """Option 1 of the removal story: the scan's price becomes an
+    action. apply_reduction takes `removals` -- instance names from the
+    removal scan -- deletes them from the working circuit, records what
+    was actually removed, and the banner figure is measured on the
+    rewritten circuit (it agrees with the scan's rank-one price). The
+    rewrite replays deterministically on an analyzer rebuild, and a
+    name absent from the circuit deletes nothing."""
+    import warnings
+
+    from circuitinsight.session import SessionController
+
+    d = FIX / "miller"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(d / "tb_ota2s.cin.json", d / "psf")
+        rep = c.scan_removals("VIND", "vout")
+        assert [x.inst for x in rep.candidates]
+        summ = c.apply_reduction([], inp="VIND", out="vout",
+                                 removals=["CL"])
+    assert summ["removed"] == ["CL"]
+    assert summ["prims_after"] == summ["prims_before"] - 1
+    cl = next(x for x in rep.candidates if x.inst == "CL")
+    assert abs(summ["worst_db"] - cl.worst_db) < 0.1
+    # deterministic replay through a rebuilt analyzer
+    c._analyzer = None
+    assert all(p.inst != "CL" for p in c._analyzer_ready().primitives)
+    # the ledger names the deletion
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        led = c.approximation_report("VIND", "vout")
+    assert any("removed CL" in e["step"] for e in led["entries"])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c.revert_reduction()
+        s2 = c.apply_reduction([], inp="VIND", out="vout",
+                               removals=["nope"])
+    assert s2["removed"] == [] and \
+        s2["prims_after"] == s2["prims_before"]
+
+
+def test_removals_compose_with_the_grounding_chain():
+    """The GUI flow on fc: ground the recommended bias nets, scan the
+    REDUCED circuit (the candidates now include the lumped Geq/Ceq
+    equivalents), then apply grounds and deletions together -- the
+    replay chains ground -> lump -> delete, and the joint price is
+    measured on exactly that circuit."""
+    import warnings
+
+    from circuitinsight.session import SessionController
+
+    fc = FIX / "fc"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(fc / "tb_fc.cin.json", fc / "psf")
+        c.set_matches(*[tuple(g) for g in c.suggest_matches()])
+        rep = c.scan_ac_grounds("VIND", "vout")
+        nodes = [x.node for x in rep.candidates if x.within_budget]
+        assert nodes
+        c.apply_reduction(nodes, inp="VIND", out="vout")
+        rep2 = c.scan_removals("VIND", "vout", budget_db=10.0)
+        rms = [x.inst for x in rep2.candidates if x.within_budget][:3]
+        assert rms
+        assert any(x.startswith(("Geq_", "Ceq_")) for x in rms), \
+            "the reduced circuit's equivalents are candidates"
+        summ = c.apply_reduction(nodes, inp="VIND", out="vout",
+                                 removals=rms)
+    assert set(summ["removed"]) == set(rms)
+    an = c._analyzer_ready()
+    assert not ({p.inst for p in an.primitives} & set(rms))
+    jm = c.reduction_joint("VIND", "vout", nodes, rms)
+    assert jm["worst_db"] >= 0 and jm["worst_deg"] >= 0
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        r = c.solve("VIND", "vout", [])
+    assert r.h is not None
+
+
+def test_impedance_specs_nets_and_seen_by():
+    """impedance_result takes more than a marker: {"node"} is Z to
+    ground, {"node","ref"} between two nets, {"seen_by"} what a
+    two-terminal element sees (element removed, sources zeroed) --
+    at high f, CL removed reads a different impedance than Z(vout)
+    with CL in circuit. A net the applied reduction AC-grounds is
+    refused with the reason, not 'node not found'."""
+    import warnings
+
+    import pytest
+
+    from circuitinsight.engine.mna import MnaError
+    from circuitinsight.session import SessionController
+
+    d = FIX / "miller"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(d / "tb_ota2s.cin.json", d / "psf")
+        r_node = c.impedance_result({"node": "vout"})
+        r_seen = c.impedance_result({"seen_by": "CL"})
+        r_pair = c.impedance_result({"node": "vout", "ref": "vin_p"})
+        r_mark = c.impedance_result("VIND")          # legacy marker
+    assert r_node.out == "Z(vout)"
+    assert r_seen.out == "Z seen by CL"
+    assert r_pair.out == "Z(vout, vin_p)"
+    assert r_mark.out == "Z(VIND)"
+    # Thevenin looking outward: with CL removed the high-f impedance
+    # is the amplifier's own, several times the CL-shunted value
+    assert abs(r_seen.h[-1]) > 3 * abs(r_node.h[-1])
+    # and at low f, where CL is invisible, the two agree
+    assert abs(abs(r_seen.h[0]) / abs(r_node.h[0]) - 1) < 0.01
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c.apply_reduction(["vin_p"], inp="VIND", out="vout")
+    with pytest.raises(MnaError, match="AC-grounded by the applied"):
+        c.impedance_result({"node": "vin_p"})
+    with pytest.raises(MnaError, match="AC-grounded by the applied"):
+        c.impedance_result({"node": "vout", "ref": "vin_p"})
+
+
+def test_impedance_forms_have_transfer_parity():
+    """The Impedance tool climbs the same contract ladder as Transfer:
+    exact, simplified (full order, term pruning within a budget), and
+    lowest order (a unit probe isource makes Z an ordinary transfer
+    function; the reactance pursuit, collapse, snap and certificate
+    run unchanged). Miller's Z(vout) reduces to the textbook Cc + CL
+    second order; a between-two-nets spec refuses the lowest form with
+    the reason; a series marker that cannot meet the contract at the
+    order cap says NOT MET instead of pretending."""
+    import warnings
+
+    import pytest
+    import sympy as sp
+
+    from circuitinsight.engine.mna import MnaError
+    from circuitinsight.session import SessionController
+
+    d = FIX / "miller"
+    plain = {"gain_db": 1.0, "phase_deg": 5.0}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(d / "tb_ota2s.cin.json", d / "psf")
+        ex = c.impedance_result({"node": "vout"})
+        fo = c.impedance_result({"node": "vout"}, form="simplified")
+        lo = c.impedance_result({"node": "vout"}, form="lowest",
+                                strategy="plain", strategy_opts=plain,
+                                fmin=1e3, fmax=1e7)
+    assert not getattr(ex, "simplified", False)
+    assert fo.simplified and not getattr(fo, "reduced_order", False)
+    assert abs(abs(fo.h[0]) / abs(ex.h[0]) - 1) < 0.05
+    assert lo.simplified and lo.reduced_order
+    # any simplified Z carries the exact solution as its reference
+    import numpy as np
+    for r in (fo, lo):
+        assert r.ref_label == "exact Z" and r.h_ref is not None
+        dev = np.abs(np.asarray(r.h)) / np.abs(np.asarray(r.h_ref))
+        assert np.nanmax(np.abs(20 * np.log10(dev))) < 1.5
+    s = sp.Symbol("s")
+    assert sp.degree(sp.fraction(sp.together(lo.tf.expr))[1], s) == 2
+    assert lo.warnings and "reduced to 2 reactance" in lo.warnings[0]
+    assert getattr(lo, "band_score", None) is not None
+    assert lo.band_score <= 1.0
+    assert abs(abs(lo.h[0]) / abs(ex.h[0]) - 1) < 0.15
+    with pytest.raises(MnaError, match="ground-referenced"):
+        c.impedance_result({"node": "vout", "ref": "vin_p"},
+                           form="lowest")
+    # honesty at the cap: the series input port's Z needs more order
+    # than the contract allows, and the headline says so
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        lp = c.impedance_result("VIND", form="lowest",
+                                strategy="plain", strategy_opts=plain,
+                                fmin=1e3, fmax=1e7)
+    assert "NOT MET" in lp.warnings[0]
+
+
+def test_loop_gain_forms_have_transfer_parity():
+    """The Loop-gain tool climbs the same contract ladder: exact,
+    simplified (term pruning on T), lowest order. The lowest form uses
+    BACKWARD elimination -- an AC-coupled loop (nmc3's stb rig) is
+    identically zero with every reactance removed, so the transfer
+    tool's from-zero add-back can never climb; starting full, each
+    removal is priced against the margins contract. Under a 15-degree
+    PM budget the loop keeps exactly the textbook set: CL and the two
+    Miller caps."""
+    import glob
+    import warnings
+
+    from circuitinsight.session import SessionController
+
+    d = FIX / "nmc3"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(glob.glob(str(d / "*.cin.json"))[0],
+                                   d / "psf")
+        probe = c.probes[0]
+        ex = c.loop_gain(probe)
+        fo = c.loop_gain(probe, form="simplified", band_fmin=1e3,
+                         band_fmax=1e8)
+        lo = c.loop_gain(probe, form="lowest", strategy="stability",
+                         strategy_opts={"pm_deg": 15.0, "gm_db": 6.0,
+                                        "fc_rel": 0.3},
+                         band_fmin=1e4, band_fmax=1e8)
+    assert not getattr(ex, "simplified", False)
+    assert fo.simplified and not getattr(fo, "reduced_order", False)
+    assert fo.n_terms < ex.n_terms
+    assert abs(fo.pm_deg - ex.pm_deg) < 0.5
+    assert lo.simplified and lo.reduced_order
+    assert "reduced to 3 reactance(s)" in lo.warnings[0]
+    assert "[CL, CM1, CM2]" in lo.warnings[0]
+    assert "PM" in lo.warnings[0]           # the stability grammar
+    # the margins on screen are the simplified T's own, and the cached
+    # exact is untouched
+    assert c.loop_gain(probe).n_terms == ex.n_terms
+
+
+def test_impedance_ranking_reflects_z_contributors():
+    """The keep table's contributors must belong to the response on
+    the bench: Z at fc's bias node I0.net3 is built on NM9's gm (the
+    diode branch), while the transfer's ranking leads with the signal
+    path's gm_PM13 -- the field report showed the latter offered for
+    the former. rank_symbols_z ranks on the probe-injected system."""
+    import warnings
+
+    from circuitinsight.session import SessionController
+
+    fc = FIX / "fc"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(fc / "tb_fc.cin.json", fc / "psf")
+        c.set_matches(*[tuple(g) for g in c.suggest_matches()])
+        tr = [n for n, _, _ in c.rank_symbols("VIND", "vout")]
+        zr = [n for n, _, _ in c.rank_symbols_z({"node": "I0.net3"})]
+    assert tr[0] == "gm_I0_PM13"          # the transfer's lead
+    assert zr[0] == "gm_I0_NM9"           # Z's own lead
+    assert set(zr[:5]) != set(tr[:5])
+
+
+def test_loop_gain_cost_gate():
+    """The keep plan budgets the TRANSFER solve; the Tian hybrid costs
+    ~4x with the same ticks and nothing gated it -- on a fast machine
+    the auto plan's set froze the bench for minutes (field report,
+    2026-08-23). loop_gain now takes max_seconds and refuses over
+    budget with the estimate and the way out, instantly; numeric T is
+    the fast path and is never gated."""
+    import time
+    import warnings
+
+    import pytest
+
+    from circuitinsight.session import SessionController, SolveTooLarge
+
+    d = FIX / "miller"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(d / "tb_ota2s_stb.cin.json",
+                                   d / "psf_stb")
+        big = [n for n, _, _ in c.rank_symbols("VIND", "vout")][:11]
+        est = c.estimate_loop("IPRB0", big)
+    assert est.seconds is not None and est.seconds > 5.0
+    assert est.n_dets % 4 == 0            # four rational solves
+    t0 = time.time()
+    with pytest.raises(SolveTooLarge, match="Tian hybrid"):
+        c.loop_gain("IPRB0", keep=big, max_seconds=5.0)
+    assert time.time() - t0 < 5.0         # a gate, not a hang
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        r = c.loop_gain("IPRB0", max_seconds=5.0)
+    assert r.pm_deg is not None           # numeric: never gated

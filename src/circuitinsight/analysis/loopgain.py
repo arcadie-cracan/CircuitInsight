@@ -39,6 +39,8 @@ from __future__ import annotations
 
 import dataclasses
 
+import numpy as np
+
 import sympy as sp
 
 from ..engine.mna import (MnaError, MnaSystem, TransferFunction, _det,
@@ -138,6 +140,130 @@ def loop_gain(system: MnaSystem, probe: str, keep=(),
 
     return TransferFunction(expr=expr, values=dict(system.values),
                             symbols=dict(system.symbols))
+
+
+def reduced_loop_gain(analyzer, probe: str, keep=(), *,
+                      tol_db: float = 0.5,
+                      fmin: float = 1e3, fmax: float = 1e7,
+                      max_elements=None, phase_tol_deg=None,
+                      strategy=None, strategy_opts=None,
+                      progress=None, note=None):
+    """Reduced-ORDER Tian loop gain: keep only the reactances that
+    shape T(s) over the band under the tolerance strategy, zero the
+    rest, then solve T on the pruned system. The transfer pursuit's
+    exact greedy runs unchanged -- only the response evaluator
+    differs: T is the Eq.-30 combination of two per-frequency solves
+    (series-voltage and p-side current injections), so removing a
+    reactance is the same stamp subtraction from Q.
+
+    Returns (TransferFunction, ReactanceReduction)."""
+    import math
+
+    from ..engine.mna import S
+    from .criteria import make_criterion
+    from .sensitivity import (ReactanceReduction, _greedy_elimination,
+                              _reactive_symbols, _stamp_derivatives)
+
+    system = analyzer.system(probe)
+    if probe not in system.branch_index:
+        raise MnaError(
+            f"probe {probe!r} is not a voltage-defined branch")
+    ib = system.branch_index[probe]
+    p, q = _probe_nodes(system, probe)
+
+    subs, missing = {}, []
+    for name, symb in system.symbols.items():
+        v = system.values.get(name)
+        (missing.append(name) if v is None
+         else subs.__setitem__(symb, sp.Rational(repr(v))))
+    if missing:
+        raise MnaError(
+            f"reduced loop gain: no numeric value for {sorted(missing)}")
+    A_v = system.A.xreplace(subs)
+    P = np.array(A_v.xreplace({S: sp.Integer(0)}).tolist(), dtype=complex)
+    Q = np.array(A_v.diff(S).tolist(), dtype=complex)
+    z_v = np.array(system.z.T.tolist()[0], dtype=complex)
+    z_i = np.zeros_like(z_v)
+    z_i[p] = 1.0
+
+    ndec = max(1.0, math.log10(fmax / fmin))
+    freqs = np.logspace(math.log10(fmin), math.log10(fmax),
+                        int(8 * ndec) + 1)
+    w = 2j * np.pi * freqs
+
+    def T_of(Q_eff: np.ndarray) -> np.ndarray:
+        out = np.empty(len(freqs), dtype=complex)
+        for j, wj in enumerate(w):
+            An = P + wj * Q_eff
+            try:
+                xv = np.linalg.solve(An, z_v)
+                yi = np.linalg.solve(An, z_i)
+            except np.linalg.LinAlgError:
+                out[j] = np.nan
+                continue
+            Bv, Dv = -xv[ib], xv[p]
+            Ai, Ci = -yi[ib], yi[q]
+            den = 2 * (Bv * Ci - Ai * Dv) + Ai - Dv + 1
+            out[j] = (-(2 * (Ai * Dv - Bv * Ci) - Ai + Dv) / den
+                      if den != 0 else np.nan)
+        return out
+
+    params = _stamp_derivatives(system, subs)
+    stamps = {name: (x0, BP, BQ) for name, x0, BP, BQ in params}
+    react = sorted(n for n in _reactive_symbols(analyzer) if n in stamps)
+    contrib = {c: stamps[c][0] * stamps[c][2] for c in react}
+
+    T_full = T_of(Q)
+    m = np.isfinite(T_full) & (np.abs(T_full) > 0)
+    mag_full = np.abs(T_full)
+    crit = make_criterion(strategy=strategy,
+                          strategy_opts=dict(strategy_opts or {}),
+                          eps=None, tol_db=tol_db,
+                          phase_tol_deg=phase_tol_deg)
+    sig = crit.window(freqs, mag_full, m, T_full)
+    if not sig.any():
+        sig = m
+    crit.prepare(freqs, T_full, sig)
+
+    def err(Tr: np.ndarray) -> float:
+        return crit.error(freqs, T_full, mag_full, Tr, sig)
+
+    if crit.cap is not None and max_elements is None:
+        max_elements = crit.cap
+    # BACKWARD elimination, not the transfer tool's add-back: an
+    # AC-coupled loop (the common DC-closed/AC-open stb rig) is
+    # identically zero with every reactance removed, so a from-zero
+    # greedy faces an infinite baseline no single restoration can
+    # improve. Starting full, the contract holds by construction and
+    # each removal is priced against it.
+    selected, errors, Tr = _greedy_elimination(
+        T_of, err, contrib, react, Q, crit.tol, crit.unit,
+        note, progress)
+    baseline = float(err(Tr))
+    final = errors[-1] if errors else baseline
+    met = bool(final <= crit.tol + 1e-12) and         (max_elements is None or len(selected) <= max_elements)
+    if note is not None and not met and             max_elements is not None and len(selected) > max_elements:
+        note(f"{len(selected)} reactance(s) remain above the order "
+             f"cap {max_elements}: the loop needs them to hold the "
+             f"contract")
+    red = ReactanceReduction(
+        selected=selected, errors_db=errors, baseline_db=baseline,
+        tol_db=tol_db, freqs=freqs, metric="complex",
+        sig_lo=float(freqs[sig].min()), sig_hi=float(freqs[sig].max()),
+        strategy=strategy, met=met,
+        metrics=crit.metrics(freqs, Tr, sig))
+
+    from ..keep import norm_keep_list
+
+    keepl = norm_keep_list(keep)
+    keep_set = set(() if is_all(keepl) else keepl)
+    vals = dict(system.values)
+    for n in react:
+        if n not in set(selected) | keep_set and n in vals:
+            vals[n] = 0.0
+    T = loop_gain(dataclasses.replace(system, values=vals), probe,
+                  keepl, progress=progress)
+    return T, red
 
 
 def return_ratio(system: MnaSystem, source: str,

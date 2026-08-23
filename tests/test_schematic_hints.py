@@ -253,3 +253,86 @@ def test_t_junction_gets_a_dot_without_a_wire_split():
     compose(tb, devtypes, SymbolLibrary(), subckts={"ota5t"})
     x, y = _c.last_mm((1.1, 2.5))
     assert (round(x * 2) / 2, round(y * 2) / 2) in _c.last_dots
+
+
+@needs_lib
+def test_balun_and_switch_register_on_their_pins():
+    """The library balun (p / s+ / scom / s-) and switch (1 / 2) carry
+    anchors named unlike Cadence's d/c/p/n and t0/t1: with the wrong
+    map neither registered and both were parked on their bbox centre
+    (fc: the balun on top of S0). The switch maps t0 -> p -> 2 (right)
+    and t1 -> n -> 1 (left); the balun is SCALABLE and fits its 8 mm
+    footprint instead of keeping its 14 mm library size."""
+    import json
+
+    from circuitinsight.schematic import SymbolLibrary, compose, page
+    from circuitinsight.schematic.compose import compose as _c
+    from circuitinsight.schematic.symmap import anchor_for, resolve
+
+    assert anchor_for(resolve("switch"), "t0") == "2"
+    assert anchor_for(resolve("switch"), "t1") == "1"
+    assert resolve("balun").scalable
+    fc = FIX / "spectre" / "fc"
+    h = load_hints(fc / "tb_fc.hints.json")
+    cin = json.loads((fc / "tb_fc.cin.json").read_text(encoding="utf-8"))
+    cdef = cin["definitions"]["tb_ota_folded_cascode"]
+    dt = {i["name"]: (i["device_type"], (i.get("params") or {}).get("polarity"))
+          for i in cdef["instances"] if "device_type" in i}
+    compose(page(h, "tb_ota_folded_cascode"), dt, SymbolLibrary(),
+            subckts=frozenset(cin["definitions"]))
+    res = _c.last_residuals
+    assert res["S0"] < 2.0 and res["S1"] < 2.0
+    assert res["I5"] < 6.0        # fitted; the centre tap bridges
+
+
+@needs_lib
+def test_designator_spot_comes_from_the_library_placeholder():
+    """The library author placed a designator placeholder in every
+    symbol (lib:role=equation); the loader reads its spot through the
+    nested transforms, and the composer offers it as the first label
+    candidate (VSUP beside its circle, not at the canvas edge)."""
+    from circuitinsight.schematic import SymbolLibrary
+
+    lib = SymbolLibrary()
+    v = lib.load("vsrc.svg")
+    assert v.label_spot is not None
+    x, y, anchor = v.label_spot
+    assert anchor == "end"
+    # to the right of the pin column, at mid height, inside the canvas
+    assert v.local("+")[0] < x - v.origin[0] <= v.w + 0.5
+    assert abs(y - v.h / 2) < 1.5
+    n = lib.load("nmos-4t.svg")
+    assert n.label_spot is not None and n.label_spot[2] == "start"
+    assert lib.load("gnd.svg").label_spot is None      # glyph: none
+
+
+@needs_lib
+def test_tex_labels_are_outlines_and_aliases_are_typeset():
+    """With tex_labels the labels are mathtext outlines (STIX paths,
+    viewer-independent, no tofu), a device alias is typeset as math,
+    the badges stay text (mathtext has no emoji), and the plain-text
+    mode is unchanged."""
+    import json
+
+    from circuitinsight.schematic import SymbolLibrary, compose, page
+    from circuitinsight.schematic.mathtext import render, tex_alias, tex_name
+
+    d, w, asc, desc = render(tex_alias("M_1"), 3.0)
+    assert d.startswith("M") and 2.0 < w < 5.0 and asc > 1.5 and desc > 0
+    assert render(tex_name("vin_p"), 2.5)[1] > 4.0      # underscore escaped
+    fc = FIX / "spectre" / "fc"
+    h = load_hints(fc / "tb_fc.hints.json")
+    cin = json.loads((fc / "tb_fc.cin.json").read_text(encoding="utf-8"))
+    cdef = cin["definitions"]["ota_folded_cascode"]
+    dt = {i["name"]: (i["device_type"], (i.get("params") or {}).get("polarity"))
+          for i in cdef["instances"] if "device_type" in i}
+    pg = page(h, "ota_folded_cascode")
+    plain = compose(pg, dt, SymbolLibrary(), subckts=frozenset(cin["definitions"]))
+    tex = compose(pg, dt, SymbolLibrary(), subckts=frozenset(cin["definitions"]),
+                  tex_labels=True, aliases={"PM12": "M_{1}"},
+                  tints={"PM13": ("#dbe9f6", "🔗1")})
+    assert ">PM12<" in plain and ">vin_p<" in plain
+    assert ">PM12<" not in tex and ">vin_p<" not in tex    # outlines now
+    assert tex.count("<path") > plain.count("<path") + 30
+    assert "🔗1" in tex                                   # badge as text
+    assert 'id="inst:PM12"' in tex                        # hit-testing intact

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "circuitinsight"
-version = "0.0.1"
+version = "0.1.0"
 description = "Symbolic small-signal circuit analyzer driven by simulator operating-point data"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -28,7 +28,8 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Operating System :: OS Independent",
 ]
-dependencies = ["sympy>=1.12", "numpy>=1.26", "gmpy2>=2.1"]
+dependencies = ["sympy>=1.12", "numpy>=1.26", "gmpy2>=2.1",
+                "python-flint>=0.6"]
 
 [project.optional-dependencies]
 dev = ["pytest", "jsonschema"]

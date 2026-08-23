@@ -103,6 +103,10 @@ class FlatCircuit:
     devices: tuple[FlatDevice, ...]
     nets: frozenset[str]
     ground: tuple[str, ...]
+    #: global supply nets (vdd! ...): not ground, but shared by
+    #: everything -- consumers that reason about connectivity (the
+    #: match suggester's common-node rule) must not count them
+    global_nets: tuple[str, ...] = ()
 
 
 def load_cin(path: str | Path) -> CinDoc:
@@ -350,4 +354,5 @@ def flatten(doc: CinDoc) -> FlatCircuit:
                 expand(child, ipath, isim, bound)
 
     expand(doc.definitions[doc.top], "", "", {})
-    return FlatCircuit(devices=tuple(devices), nets=frozenset(nets), ground=doc.ground)
+    return FlatCircuit(devices=tuple(devices), nets=frozenset(nets),
+                       ground=doc.ground, global_nets=doc.global_nets)

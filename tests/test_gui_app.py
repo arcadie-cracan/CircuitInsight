@@ -509,8 +509,11 @@ def test_solve_form_selector_dispatches_and_shows_budget(qapp, tmp_path):
         win.reduce()
         assert win.form_combo.currentText() == "Simplified · lowest order"
 
-        # outside Transfer the selector hides entirely
+        # the selector shows wherever a response is solved (Transfer,
+        # Impedance, Loop gain) and hides elsewhere
         win.mode_combo.setCurrentText("Loop gain")
+        assert win._form_act.isVisible()
+        win.mode_combo.setCurrentText("Modes")
         assert not win._form_act.isVisible()
         assert not win._mag_act.isVisible()
         win.mode_combo.setCurrentText("Transfer")
@@ -583,7 +586,7 @@ def test_reduce_bench_scan_apply_revert(qapp):
         win.out_combo.setCurrentText("vout")
     try:
         win.mode_combo.setCurrentText("Reduce circuit")
-        assert win.tabs.currentWidget() is win._reduce_tab
+        assert win.reduce_col.isVisibleTo(win)
 
         # no local budget knob: the scan gates under the toolbar
         # contract (strategy + budgets + band), like every approximation
@@ -609,13 +612,25 @@ def test_reduce_bench_scan_apply_revert(qapp):
             summ = win.controller.apply_reduction(
                 win.checked_acg_nodes(), inp="VIND", out="vout")
             win._on_reduction_applied(summ)
-        assert "REDUCED" in win.red_banner.text()
+        # the headline carries the applied state and its cost, once
+        assert win.red_banner.text().startswith("applied: 2 net(s)")
+        assert "measured end to end" in win.red_banner.text()
         assert win.acg_revert.isEnabled()
-        assert "measured" in win.msg_strip.text()
-        # the rewrite invalidates the ranking: lumped/removed symbols
-        # made a stale-tick solve fail with "matched no symbol"
-        assert win.keep_tbl.rowCount() == 0
-        assert "re-Rank" in win.estimate_lbl.text()
+        assert "circuit reduced" in win.logview.toPlainText()
+        # the rewrite invalidates the old ranking (lumped/removed
+        # symbols made a stale-tick solve fail), so the table re-ranks
+        # the reduced circuit by itself: the reduced symbol set, with
+        # the lumped equivalents in it and no vanished symbol
+        assert "ranking the reduced" in win.estimate_lbl.text()
+        assert _wait_bg(qapp, lambda: win.keep_tbl.rowCount() > 0,
+                        timeout=60)
+        names = {win.keep_tbl.item(i, 0).text()
+                 for i in range(win.keep_tbl.rowCount())}
+        eq_names = {e["name"] for e in summ.get("equivalents", [])}
+        assert eq_names & names, "lumped equivalents are rankable symbols"
+        absorbed = {m.replace(".", "_") for e in summ.get("equivalents", [])
+                    for m in e["members"]}
+        assert not (absorbed & names), "absorbed members are gone"
         # the Nets tree tells the reduction truth: grounded nets wear ⏚
         from circuitinsight.gui.devtree import EARTH
         for node in summ["nodes"]:
@@ -632,7 +647,7 @@ def test_reduce_bench_scan_apply_revert(qapp):
             win.history.count() - 1).text()
 
         win.revert_reduction()
-        assert win.red_banner.text() == "circuit: as imported"
+        assert win.red_banner.text().startswith("applied: none")
         assert not win.acg_revert.isEnabled()
         assert not any(EARTH in win.nets_tree.item_for(n).text(0)
                        for n in summ["nodes"])
@@ -777,16 +792,21 @@ def test_bench_tabs_show_only_their_own_views(qapp, tmp_path):
         win.mode_combo.setCurrentText("Transfer")
         assert visible(win._whatif_tab)
         assert not visible(win._comp_tab) and not visible(win._gft_tab)
-        assert not visible(win._reduce_tab)
+        assert not win.reduce_col.isVisibleTo(win)
 
         win.mode_combo.setCurrentText("Compensate")
         assert visible(win._comp_tab) and not visible(win._whatif_tab)
         assert win.tabs.currentWidget() is win._comp_tab
 
         win.mode_combo.setCurrentText("Reduce circuit")
-        assert visible(win._reduce_tab) and not visible(win._comp_tab)
-        # the shared views never disappear
-        assert win.tabs.isTabVisible(0)          # Summary
+        assert win.reduce_col.isVisibleTo(win)
+        assert not visible(win._comp_tab)
+        # Reduce is a state tool: Summary/Expression (views of a solve)
+        # step aside there; Error and Log stay
+        assert not win.tabs.isTabVisible(0)      # Summary
+        assert visible(win.logview)
+        win.mode_combo.setCurrentText("Transfer")
+        assert win.tabs.isTabVisible(0)          # and come back
     finally:
         win.close()
 
@@ -922,12 +942,13 @@ def test_match_value_policy_controls(qapp, monkeypatch):
     try:
         # weighted is the DEFAULT: it found the load-bearing member on
         # both benches (0.039 / 0.347 dB vs-sim)
-        assert win.matchval_combo.currentText() == "weighted"
+        assert win._policy_label() == "weighted"
         assert win.controller.match_value_policy == "weighted"
 
-        win.matchval_combo.setCurrentText("weighted")
+        # the policy is a radio group in the Devices menu now
+        win._policy_actions["weighted"].trigger()
         assert win.controller.match_value_policy == "weighted"
-        win.matchval_combo.setCurrentText("average")
+        win._policy_actions["average"].trigger()
         assert win.controller.match_value_policy == "mean"
 
         group = win._match_groups[0]
@@ -937,14 +958,14 @@ def test_match_value_policy_controls(qapp, monkeypatch):
         win._pick_representative(0)
         assert win.controller.match_representative(group) == group[1]
         assert win.controller.match_value_policy == "representative"
-        assert win.matchval_combo.currentText() == "representative"
+        assert win._policy_label() == "representative"
     finally:
         win.close()
 
 
 def test_advisors_surface_in_the_gui(qapp):
     """S-E tail, GUI side: the removal scan lands in the Reduce bench's
-    preview pane; Attribute poles (Analysis menu) appends the verified
+    tick table; Attribute poles (Analysis menu) appends the verified
     attribution to the Summary."""
     from circuitinsight.gui.app import build_window
 
@@ -957,7 +978,8 @@ def test_advisors_surface_in_the_gui(qapp):
     try:
         rep = win.controller.scan_removals("VIND", "vout", budget_db=0.1)
         win._on_removal_scan_done(rep)
-        assert "removal scan" in win.acg_preview.toPlainText()
+        assert win.rm_tbl.rowCount() == len(rep.candidates)
+        assert "removal scan" in win.statusBar().currentMessage()
 
         atts = win.controller.pole_attribution("VIND", n_poles=2)
         before = win.summary.toPlainText()
@@ -1322,9 +1344,11 @@ def test_log_tab_records_the_run(qapp, tmp_path):
         win._est_s = 4.0
         win._run_est = 4.0          # what _launch records
         win._t0 = _t.monotonic() - 8.0
-        win._set_phase("evaluating", 5, 10)              # a phase change
+        win._set_phase("preparing")                      # silent: first phase
+        win._set_phase("evaluating", 5, 10)              # a TRANSITION logs
         win._log_finish("DONE")
         txt = win.logview.toPlainText()
+        assert "phase: preparing" not in txt
         assert "phase: evaluating" in txt
         assert "DONE after 8" in txt and "2.0x" in txt   # vs the estimate
         assert txt.count("[") >= 2                       # timestamped lines
@@ -1614,11 +1638,11 @@ def test_cap_toggle_keeps_the_result_and_ticks_correlated(qapp, tmp_path):
         survivors = [t for t in ticks if t in new_names]
         assert win.checked_keep() == survivors
 
-        # the Solve button marks the display/panel divergence until the
-        # re-solve lands (the same marker covers first light and plain
-        # tick edits)
+        # the previous result stays on screen until the re-solve lands,
+        # and it IS from the other cap model: the star says so, by name
         win._refresh_solve_hint()
         assert win.solve_btn.text() == "Solve *"
+        assert "cap model" in win.solve_btn.toolTip()
     finally:
         win.close()
 
@@ -1920,7 +1944,8 @@ def test_schematic_pane_reports_its_missing_pieces(qapp, tmp_path):
 
     MainWindow.settings_path = str(tmp_path / "s.ini")
     win = MainWindow()
-    assert win.tabs.indexOf(win._schematic_tab) >= 0
+    assert win.main_tabs.indexOf(win._schematic_tab) >= 0
+    assert win.tabs.indexOf(win._schematic_tab) < 0   # not a strip tab
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
         win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"))
@@ -1968,6 +1993,10 @@ def test_schematic_pane_draws_pages_and_cross_probes(qapp, tmp_path):
     sp = win.sch_view._item.mapToScene(r.center())
     vp = win.sch_view.mapFromScene(sp)
     assert win.sch_view.hit(QPoint(vp.x(), vp.y()))[0] == "PM13"
+    # a click on the background clears both selections
+    win._schematic_deselect()
+    assert win.sch_view._hl is None
+    assert win.devices.selected_names() == []
     # crumb back to the top
     win._schematic_up(0)
     assert win._sch_status.text().startswith("tb_ota_folded_cascode:")
@@ -2011,6 +2040,21 @@ def test_schematic_pane_draws_the_analysis_state(qapp, tmp_path,
     win._refresh_reduction_banner()
     styles, nets = win._schematic_styles()
     assert nets == {"net1": "acground"}
+    # nothing is faded as removed (gds and caps always remain); a device
+    # whose gm died is a load, one that lost only gmbs keeps its look
+    assert "removed" not in styles.values()
+    summ = win.controller.reduction_summary()
+    assert summ["devices_silenced"] == []
+    for prim in summ["dead_primitives"]:
+        kind, dev = prim.split("_", 1)
+        if not dev.startswith("I0."):
+            continue                      # not on the page shown
+        local = dev.split(".", 1)[1]
+        if kind == "gm":
+            assert styles.get(local) == "passive"
+        elif kind == "gmbs":
+            assert styles.get(local) != "passive" or any(
+                p2 == "gm_" + dev for p2 in summ["dead_primitives"])
     assert "acground" in win._sch_status.text() or \
         "AC-grounded" in win._sch_status.text()
     # the toggle gives the plain drawing back
@@ -2067,15 +2111,732 @@ def test_block_symbol_dialog_round_trip(qapp, tmp_path):
     bs = dlg.current()
     assert bs.confirmed and bs.pins["vout"] == "out"
 
-    # apply through the pane's path (what OK does), then box it again
-    win._sch_mapping["ota_folded_cascode"] = bs
-    from circuitinsight.schematic.blocks import (confirmed_only,
-                                                 save_block_symbols,
-                                                 sidecar_path)
-    save_block_symbols(sidecar_path(win._cin), win._sch_mapping)
-    win._sch_blocks = confirmed_only(win._sch_mapping)
-    win._schematic_render()
+    # the pane's OK path, with the dialog replaced by a double that
+    # behaves as the real one after OK (result_mapping set): the real
+    # handler once compared exec()'s int with a DialogCode enum and
+    # read every OK as Cancel
+    class _Accepting:
+        def __init__(self, *a, **k):
+            self.result_mapping = bs
+            self.draw_as_box = False
+
+        def exec(self):
+            return 1
+
+    win._schematic_symbol_dialog("I0", dialog_cls=_Accepting)
     side = json.loads((work / "tb_fc.symbols.json").read_text())
     assert side["cells"]["ota_folded_cascode"]["confirmed"] is True
+    assert "ota_folded_cascode" in win._sch_blocks
     assert "block(s)" in win._sch_status.text()
+
+    class _Boxing(_Accepting):
+        def __init__(self, *a, **k):
+            self.result_mapping = None
+            self.draw_as_box = True
+
+    win._schematic_symbol_dialog("I0", dialog_cls=_Boxing)
+    side = json.loads((work / "tb_fc.symbols.json").read_text())
+    assert side["cells"]["ota_folded_cascode"]["confirmed"] is False
+    assert "ota_folded_cascode" not in win._sch_blocks
     win.close()
+
+
+def test_launcher_defers_the_open_chain_past_the_first_paint(qapp, tmp_path):
+    """With _auto_deferred set (the launcher's path) the async open
+    queues the first-light start instead of launching it, so the worker
+    cannot hold the GIL while the window paints for the first time;
+    firing the thunk launches it. A programmatic open still starts at
+    once."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    win._auto_deferred = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"),
+                         async_open=True)
+    assert len(win._auto_deferred) == 1
+    assert win._thread is None or not win._thread.isRunning()
+    win._auto_deferred.pop()()
+    assert win._thread is not None
+    assert _wait_bg(qapp, lambda: win.result is not None, timeout=60)
+    win.close()
+
+
+def test_expression_defines_and_expands_the_equivalents(qapp, tmp_path):
+    """After an AC-ground reduction the lumped equivalents are DEFINED
+    under the expressions (G_eq,net = sum of members = value); ticking
+    Expand equivalents substitutes them into H(s) so A0 reads in the
+    original device symbols, and the member values join the hover map."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"))
+        win.in_combo.setCurrentText("VIND")
+        win.out_combo.setCurrentText("vout")
+        assert not win.expand_eq_chk.isEnabled()      # nothing to expand
+        # grounding the mirror node lumps Geq_I0_net3 = gds_MN0 + gds_MN2
+        win.controller.apply_reduction(["I0.net1"], inp="VIND", out="vout")
+        r = win.controller.attach_template(win.controller.solve(
+            "VIND", "vout", ["gm_I0_MN1", "Geq_I0_net3"]))
+    win._show(r, push_history=False)
+    assert win.expand_eq_chk.isEnabled()
+    from circuitinsight.gui import view
+    defs = win.controller.equivalent_definitions()
+    assert any(n == "Geq_I0_net3" for n, _, _ in defs)
+    # the view lists only the equivalents the shown H(s) mentions
+    win._render_expr()
+    present = {str(s) for s in r.tf.expr.free_symbols}
+    listed = [n for n, _, _ in defs if n in present]
+    assert listed == ["Geq_I0_net3"] and len(defs) > 1
+    payload = view.expr_katex(r, equivalents=defs)
+    joined = " ".join(payload["lines"])
+    assert "G_{eq," in joined and r"\mathrm{uS}" in joined
+    # expanded: the equivalent is gone from H(s), its members are in
+    x = win.controller.expand_equivalents(r)
+    names = {str(s) for s in x.tf.expr.free_symbols}
+    assert "Geq_I0_net3" not in names
+    members = {m for n, e, _ in defs if n == "Geq_I0_net3"
+               for m in map(str, e.free_symbols)}
+    assert members and members <= names
+    assert members <= set(x.tf.values)             # hover values present
+    win.expand_eq_chk.setChecked(True)             # re-renders, no error
+    win.close()
+
+
+def test_solve_button_flags_a_result_from_a_previous_state(qapp, tmp_path):
+    """The result on screen describes the circuit it was solved on. When
+    the working circuit changes under it -- a reduction applied, the
+    matches changed, the in/out pair moved, keep ticks edited -- the
+    Solve button turns amber and names what changed; a fresh solve
+    clears it."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"))
+        win.in_combo.setCurrentText("VIND")
+        win.out_combo.setCurrentText("vout")
+        win.solve_sync()
+    # a solve with the current ticks: current. And at start-up the
+    # numeric first light under an auto-ticked plan is NOT stale: the
+    # ticks are options, the plot does describe the circuit
+    win._refresh_solve_hint()
+    assert win.solve_btn.text() == "Solve"
+    assert not win.solve_btn.styleSheet()
+    # a reduction applied under it: stale, and the reason is named
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.controller.apply_reduction(["I0.net1"], inp="VIND", out="vout")
+    win._refresh_reduction_banner()
+    assert win.solve_btn.text() == "Solve *"
+    assert "reduction" in win.solve_btn.toolTip()
+    assert win.solve_btn.styleSheet()
+    # a new solve on the reduced circuit: current again. The bench's
+    # own Apply re-ranks the table and carries ticks onto survivors;
+    # this test drove the controller directly, so the auto plan's
+    # ticks may name symbols the rewrite lumped away -- untick them:
+    # the subject here is the button, not tick survival
+    from PySide6.QtCore import Qt
+    for i in range(win.keep_tbl.rowCount()):
+        it = win.keep_tbl.item(i, 0)
+        if it is not None:
+            it.setCheckState(Qt.Unchecked)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.solve_sync()
+    win._refresh_solve_hint()
+    assert win.solve_btn.text() == "Solve"
+    # the in/out pair moved: stale
+    win.in_combo.setCurrentText("VINC")
+    assert win.solve_btn.text() == "Solve *"
+    assert "in/out" in win.solve_btn.toolTip()
+    win.controller.revert_reduction()
+    win.close()
+
+
+def test_schematic_tints_matched_devices_like_the_tree(qapp, tmp_path):
+    """A match group wears the same tint and number in the schematic as
+    in the Instances tree: a plate behind each member's symbol and a
+    link badge after its name."""
+    from circuitinsight.gui.app import MainWindow
+    from circuitinsight.gui.devtree import GROUP_TINTS
+
+    FC = Path(__file__).resolve().parent / "fixtures" / "spectre" / "fc"
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FC / "tb_fc.cin.json"), str(FC / "psf"))
+    win._match_groups = [("I0.PM12", "I0.PM13")]
+    win.controller.set_matches(("I0.PM12", "I0.PM13"))
+    win._refresh_matches_label()
+    win._schematic_activated("I0", "block")
+    tints = win._schematic_tints()
+    assert tints == {"PM12": (GROUP_TINTS[0], "🔗1"),
+                     "PM13": (GROUP_TINTS[0], "🔗1")}
+    win.close()
+
+
+def test_async_open_ends_with_a_current_result(qapp, tmp_path):
+    """The launcher's chain: first light, then the suggested matches.
+    The plot must end up describing the MATCHED circuit (the matched
+    numeric first light replaces the pre-match one), so the Solve
+    button is plain at the end of start-up -- a starred Solve on a
+    screen the user has not touched reads as a bug."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"),
+                         async_open=True)
+        assert _wait_bg(qapp, lambda: win.keep_tbl.rowCount() > 0
+                        and win.result is not None
+                        and getattr(win.result, "_circuit_key", {}).get(
+                            "matches") == tuple(sorted(
+                                tuple(g) for g in win._match_groups)),
+                        timeout=120), "the matched first light lands"
+    assert win._match_groups                       # ota5t has suggestions
+    win._refresh_solve_hint()
+    assert win.solve_btn.text() == "Solve"
+    assert not win.solve_btn.styleSheet()
+    win.close()
+
+
+def test_reduce_bench_shows_only_what_it_uses(qapp, tmp_path):
+    """Reduce circuit is a state tool: the keep panel, History, the
+    match controls, Summary/Expression and the toolbar's Solve are
+    irrelevant to picking and applying a node set and are hidden; the
+    Nets tree comes to the front; the plot is the as-imported vs
+    ticked comparison and returns to the result on leaving."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"))
+        win.in_combo.setCurrentText("VIND")
+        win.out_combo.setCurrentText("vout")
+        win.solve_sync()
+    win.show()
+    qapp.processEvents()
+    assert win._solve_act.isVisible() and win._keep_box.isVisible()
+    win.mode_combo.setCurrentText("Reduce circuit")
+    qapp.processEvents()
+    assert not win._solve_act.isVisible()
+    assert not win._keep_col.isVisible()           # the symbols column
+    assert win.reduce_col.isVisible()              # the candidates column
+    assert not hasattr(win, "_match_bar")          # no button row anywhere
+    assert win.dev_tabs.currentWidget() is win.nets_tree
+    for w in (win.summary, win._expr_tab):
+        assert not win.tabs.isTabVisible(win.tabs.indexOf(w))
+    assert win.tabs.isTabVisible(win.tabs.indexOf(win.logview))
+    assert win.band_row.isVisibleTo(win)          # the contract stays
+    # the comparison plot lands: as imported, no overlay yet
+    assert _wait_bg(qapp, lambda: win._reduce_plot_base is not None,
+                    timeout=60)
+    labels = [l.get_label() for ax in win.canvas.figure.axes
+              for l in ax.get_lines()]
+    assert "as imported" in labels
+    win.mode_combo.setCurrentText("Transfer")
+    qapp.processEvents()
+    assert win._solve_act.isVisible() and win._keep_box.isVisible()
+    assert not win.reduce_col.isVisible()
+    assert win._reduce_plot_base is None
+    labels = [l.get_label() for ax in win.canvas.figure.axes
+              for l in ax.get_lines()]
+    assert "model" in labels                       # the result's plot is back
+    win.close()
+
+
+def test_op_card_follows_the_selection(qapp, tmp_path):
+    """The operating-point card under the trees shows the selected
+    device the way a designer reads it -- region with its margins,
+    bias, small-signal with the derived figures, and what the working
+    model uses per symbol -- and follows the selection from the tree
+    and from a keep-table row."""
+    from circuitinsight.gui.app import MainWindow
+    from circuitinsight.gui.opcard import op_card_rows
+
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"))
+        win.in_combo.setCurrentText("VIND")
+        win.out_combo.setCurrentText("vout")
+    assert win.op_card.name is None and not win.op_card.copy_btn.isEnabled()
+    assert not win.op_card.isChecked()             # collapsed by default
+    it = win.devices.item_for("I0.MN1")
+    win.devices.setCurrentItem(it)
+    assert win.op_card.name == "I0.MN1"
+    assert win.op_card.title().startswith("Operating point — I0.MN1")
+    html = win.op_card.body.text()
+    for frag in ("region", "V_DS − V_DSAT", "g_m / I_D",
+                 "r_o = 1/g_ds", "f_T", "as the model sees it", "gm_I0_MN1"):
+        assert frag in html, frag
+    win.op_card.setChecked(True)                   # open it: buttons live
+    assert win.op_card.copy_btn.isEnabled()
+    # the pure data: derived figures are there and sensible
+    rows = dict(op_card_rows(win.controller, "I0.MN1", win.result,
+                             win._match_groups, "weighted"))
+    ss = {lab: val for lab, val, _ in rows["small-signal"]}
+    assert float(ss["g_m / g_ds"].split()[0]) > 1.0
+    assert "Hz" in ss["f_T ≈ g_m/2π(c_gs+c_gd)"]
+    # a passive shows its own value, not "no live primitive" (ota5t has
+    # no explicit passive: the Miller bench's CL)
+    from circuitinsight.session import SessionController
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        cm = SessionController.open(MILLER / "tb_ota2s.cin.json",
+                                    MILLER / "psf")
+    crow = dict(op_card_rows(cm, "CL", None, (), ""))
+    assert crow["as the model sees it"][0][0] == "CL"
+    assert "5" in crow["as the model sees it"][0][1]
+    assert not any("no live" in r[0] for r in crow["as the model sees it"])
+    # a keep row selects its device on the card (the open chain ranked
+    # the table; no symbolic solve needed)
+    assert win.keep_tbl.rowCount() > 0
+    sym = win.keep_tbl.item(0, 0).text()
+    win.keep_tbl.selectRow(0)
+    assert win.op_card.name and sym.endswith(
+        "_" + win.op_card.name.replace(".", "_"))
+    win.close()
+
+
+def test_collapsed_left_panes_come_back(qapp, tmp_path):
+    """Panes may be dragged to zero width (a wide plot is worth it),
+    but there must be a way home: Toggle left panes (Ctrl+Shift+L)
+    restores them, Reset layout restores the default proportions."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    win.resize(1500, 900)
+    win.show()
+    qapp.processEvents()
+    total = sum(win.h_split.sizes())
+    win.h_split.setSizes([0, total])              # the drag that hid them
+    qapp.processEvents()
+    assert win.h_split.sizes()[0] == 0
+    win._toggle_left_panes()
+    assert win.h_split.sizes()[0] > 300
+    win._toggle_left_panes()
+    assert win.h_split.sizes()[0] == 0
+    win._toggle_left_panes()
+    # the keep column collapsed INSIDE the left side comes back too
+    tot = sum(win.left_split.sizes())
+    win.left_split.setSizes([tot, 0])
+    qapp.processEvents()
+    assert win.left_split.sizes()[1] == 0
+    win._toggle_left_panes()
+    assert win.left_split.sizes()[1] > 100
+    # and a double-click on the handle does the same
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    win.left_split.setSizes([tot, 0])
+    qapp.processEvents()
+    assert win.left_split.sizes()[1] == 0
+    handle = win.left_split.handle(1)
+    ev = QMouseEvent(QEvent.MouseButtonDblClick, QPointF(2, 2),
+                     Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+    handle.mouseDoubleClickEvent(ev)
+    assert win.left_split.sizes()[1] > 100
+    win._reset_layout()
+    assert win.h_split.sizes()[0] >= 600
+    # every VISIBLE child has room (the bench-swapped candidates
+    # column is hidden outside Reduce and rightly reads 0)
+    sizes = win.left_split.sizes()
+    assert all(sizes[i] > 0 for i in range(win.left_split.count())
+               if not win.left_split.widget(i).isHidden())
+    win.close()
+
+
+def test_keep_column_can_go_narrow(qapp, tmp_path):
+    """The estimate line's text width was the keep column's minimum
+    width; the column must shrink well below it (the label wraps)."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    win.resize(1500, 900)
+    win.show()
+    qapp.processEvents()
+    win.estimate_lbl.setText("estimate: ~43.4s (grid 864, s-deg 18, "
+                             "34560 dets, parallel)")
+    qapp.processEvents()
+    assert win._keep_col.minimumSizeHint().width() < 200
+    win.close()
+
+
+def test_instances_tree_is_alphabetical_with_grouped_blocks(qapp, tmp_path):
+    """Within each level the tree is alphabetical (natural: NM5 before
+    NM10), device instances first and compound instances (subcircuits)
+    after them, and a match group travels as a block placed at its
+    representative's alphabetical spot, members adjacent behind it."""
+    from circuitinsight.gui.app import MainWindow
+
+    FC = Path(__file__).resolve().parent / "fixtures" / "spectre" / "fc"
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FC / "tb_fc.cin.json"), str(FC / "psf"))
+        win.in_combo.setCurrentText("VIND")
+        win.out_combo.setCurrentText("vout")
+
+    def kids(it):
+        return [it.child(i) for i in range(it.childCount())]
+
+    root = win.devices.invisibleRootItem()
+    top_items = kids(root)
+    leaf = [c.text(0) for c in top_items if c.childCount() == 0]
+    subs = [c.text(0) for c in top_items if c.childCount() > 0]
+    # devices first, compound instances after, each run alphabetical
+    assert [c.text(0) for c in top_items] == leaf + subs
+    assert leaf == sorted(leaf, key=win.devices._natkey)
+    assert subs == sorted(subs, key=win.devices._natkey)
+    assert "I0" in subs
+    i0 = next(c for c in kids(root) if c.text(0) == "I0")
+    names = [c.text(0).split(" ")[0] for c in kids(i0)]
+    # a group sits as one block anchored at its alphabetically-first
+    # member, purely alphabetical inside (NM1..NM5 before NM2's slot)
+    grp = sorted((m.split(".")[-1] for m in next(
+        g for g in win._match_groups if "I0.NM5" in g)),
+        key=win.devices._natkey)
+    i = names.index(grp[0])
+    assert names[i:i + len(grp)] == grp
+    assert names.index("NM0") < i               # anchored at NM1's slot
+    # ungrouped neighbours are alphabetical around the blocks
+    assert names.index("M26") < names.index("NM0") < names.index("NM2")
+    win.close()
+
+
+def test_removal_scan_fills_a_tick_table_and_apply_deletes(qapp):
+    """Scan removals is no longer advisory: it fills its own tick
+    table (the left column's Device-removals tab), ticking prices the
+    joint rewrite and previews the deletions, Apply carries them into
+    the working circuit -- the banner then names the removed elements,
+    and the applied rows wear the green 'applied' mark."""
+    from circuitinsight.gui.app import MainWindow
+
+    win = MainWindow()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(MILLER / "tb_ota2s.cin.json"),
+                         str(MILLER / "psf"))
+        win.in_combo.setCurrentText("VIND")
+        win.out_combo.setCurrentText("vout")
+    try:
+        win.mode_combo.setCurrentText("Reduce circuit")
+        # the candidates live in the left column, two labelled tabs
+        assert win.reduce_col.isVisibleTo(win)
+        assert not win._keep_col.isVisibleTo(win)
+        assert [win.reduce_tabs.tabText(i)
+                for i in range(win.reduce_tabs.count())] ==             ["AC grounds", "Device removals"]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            rep = win.controller.scan_removals(
+                "VIND", "vout", **win._contract_kw())
+            win._on_removal_scan_done(rep)
+        assert win.rm_tbl.rowCount() == len(rep.candidates)
+        # miller's CL and Cc are both load-bearing: nothing pre-ticked,
+        # Apply stays disabled until the user decides
+        assert win.checked_removals() == list(rep.recommended)
+        # the user forces one: the joint price and the preview follow
+        from PySide6.QtCore import Qt
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win.rm_tbl.item(0, 0).setCheckState(Qt.Checked)
+        picked = win.rm_tbl.item(0, 0).text()
+        assert win.checked_removals() == [picked]
+        assert win.acg_apply.isEnabled()
+        assert "together" in win.acg_joint_lbl.text()
+        assert "deleted outright" in win.acg_preview.toPlainText()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            summ = win.controller.apply_reduction(
+                [], inp="VIND", out="vout", removals=[picked])
+            win._on_reduction_applied(summ)
+        assert f"1 element(s) removed ({picked})" in win.red_banner.text()
+        assert "measured end to end" in win.red_banner.text()
+        assert win.acg_revert.isEnabled()
+        # the row's tick is now in force: it says so instead of
+        # reading like a pending suggestion
+        from circuitinsight.gui import theme as _theme
+        it = win.rm_tbl.item(0, 0)
+        assert "applied" in it.toolTip()
+        assert it.foreground().color().name() == _theme.GOOD.lower()
+        # ticked = applied: the joint line stops double-quoting the cost
+        win._refresh_acg_choice()
+        assert win.acg_joint_lbl.text().startswith("ticked = applied")
+        # revert clears the marks
+        win.revert_reduction()
+        assert win.rm_tbl.item(0, 0).toolTip() == ""
+    finally:
+        win.close()
+
+
+def test_impedance_port_from_trees_says_user_selected(qapp):
+    """A tree-picked impedance spec -- one net, two nets, or 'seen by'
+    a two-terminal instance -- switches to the Impedance tool, solves,
+    and the port dropdown reads 'user selected' instead of claiming a
+    marker port it is not using; picking a real marker clears it."""
+    from circuitinsight.gui.app import MainWindow
+
+    win = MainWindow()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(MILLER / "tb_ota2s.cin.json"),
+                         str(MILLER / "psf"))
+        win.in_combo.setCurrentText("VIND")
+        win.out_combo.setCurrentText("vout")
+    try:
+        # the keep ranking follows the response: entering the tool
+        # with a target re-ranks for Z (the transfer ranking comes
+        # back on the way out)
+        assert _wait_bg(qapp, lambda: win.keep_tbl.rowCount() > 0,
+                        timeout=60)
+        tr_top = win.keep_tbl.item(0, 0).text()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win._impedance_at_nets("vout", "")
+        assert win.mode_combo.currentText() == "Impedance"
+        assert win.probe_combo.currentText() == "user selected"
+        assert win._imp_spec == {"node": "vout"}
+        assert _wait_bg(qapp, lambda: win.keep_tbl.rowCount() > 0,
+                        timeout=60)
+        z_top = win.keep_tbl.item(0, 0).text()
+        assert z_top == [n for n, _, _ in
+                         win.controller.rank_symbols_z(
+                             {"node": "vout"})][0]
+        assert _wait_bg(qapp, lambda: win.result is not None
+                        and win.result.out == "Z(vout)", timeout=60)
+        # seen-by, via the Instances-tree signal
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win._impedance_seen_by("CL")
+        assert win.probe_combo.currentText() == "user selected"
+        assert _wait_bg(qapp, lambda: win.result is not None
+                        and win.result.out == "Z seen by CL", timeout=60)
+        # the Instances tree offers the verb only on two-terminal
+        # elements: CL qualifies, a mosfet does not
+        it = win.devices.item_for("CL")
+        assert it is not None
+        assert len(dict.fromkeys(
+            (win.devices.info(it).get("terminals") or {}).values())) == 2
+        # picking a real marker port clears the user spec and the
+        # sentinel entry
+        win.probe_combo.setCurrentText("VIND")
+        assert win._imp_spec is None
+        assert win.probe_combo.findText("user selected") < 0
+    finally:
+        win.close()
+
+
+def test_schematic_highlights_a_selected_net(qapp, tmp_path):
+    """Selecting a net in the Nets tree lights its wire run on the
+    schematic -- the same cross-probe an instance gets -- and the two
+    highlights displace each other; background deselect clears both
+    trees and both marks."""
+    from circuitinsight.gui.app import MainWindow
+
+    FC = Path(__file__).resolve().parent / "fixtures" / "spectre" / "fc"
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    win.resize(1400, 900)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FC / "tb_fc.cin.json"), str(FC / "psf"))
+    try:
+        it = win.nets_tree.item_for("vout")
+        assert it is not None
+        win.nets_tree.setCurrentItem(it)
+        assert win.sch_view._net_hl is not None
+        assert win.sch_view._hl is None
+        # a device selection displaces the net highlight
+        win._schematic_clicked("I0", "block")
+        assert win.sch_view._hl is not None
+        assert win.sch_view._net_hl is None
+        # descend: the page's local nets highlight by their full name
+        win._schematic_activated("I0", "block")
+        win.nets_tree.setCurrentItem(win.nets_tree.item_for("I0.net8"))
+        assert win.sch_view._net_hl is not None
+        # a supply net is never prefixed and matches on any page
+        win.nets_tree.setCurrentItem(win.nets_tree.item_for("vdd!"))
+        assert win.sch_view._net_hl is not None
+        # background deselect clears both trees and both marks
+        win._schematic_deselect()
+        assert win.sch_view._net_hl is None and win.sch_view._hl is None
+        assert win.nets_tree.selected_nets() == []
+        # the reverse probe: a click on a wire finds its net and
+        # selects it in the Nets tree, which lights the run
+        from PySide6.QtCore import QPoint
+        polys = win.sch_view._net_wires["net8"]
+        ax, ay = polys[0][0]
+        bx, by = polys[0][1]
+        mx, my = ((ax + bx) / 2, (ay + by) / 2)
+        vb = win.sch_view._renderer.viewBoxF()
+        ip = ((mx - vb.x()) * win.sch_view._sx,
+              (my - vb.y()) * win.sch_view._sy)
+        sp = win.sch_view._item.mapToScene(*ip)
+        vp = win.sch_view.mapFromScene(sp)
+        assert win.sch_view.hit_net(QPoint(vp.x(), vp.y())) == "net8"
+        win._schematic_net_clicked("net8")
+        assert win.nets_tree.selected_nets() == ["I0.net8"]
+        assert win.sch_view._net_hl is not None
+        # the wire carries the Nets tree's own verbs; ground gets none
+        labels = [l for l, _ in
+                  win._schematic_net_actions("I0.net8", "net8")]
+        assert labels == ["Set as output", "AC ground (measure cost)…",
+                          "Impedance at net8"]
+        assert win._schematic_net_actions("gnd!", "gnd!") == []
+        # the impedance verb routes to the user-selected spec flow
+        # (the launcher is stubbed: the wiring is the point, not a
+        # minute of Z(net8) on fc)
+        launched = []
+        win._launch = lambda *a, **k: launched.append(a)
+        dict(win._schematic_net_actions("I0.net8", "net8"))[
+            "Impedance at net8"]()
+        assert launched
+        assert win._imp_spec == {"node": "I0.net8"}
+        assert win.probe_combo.currentText() == "user selected"
+        # a net selected beforehand adds the two-net verb: Z between
+        # the pair (click one wire, right-click the other)
+        acts = dict(win._schematic_net_actions("I0.net8", "net8",
+                                               others=["vout"]))
+        assert "Impedance between net8 and vout" in acts
+        acts["Impedance between net8 and vout"]()
+        assert win._imp_spec == {"node": "I0.net8", "ref": "vout"}
+        # ground never joins a pair
+        labels = [l for l, _ in win._schematic_net_actions(
+            "I0.net8", "net8", others=["gnd!"])]
+        assert not any(l.startswith("Impedance between")
+                       for l in labels)
+    finally:
+        win.close()
+
+
+def test_impedance_tool_offers_the_form_ladder(qapp):
+    """Parity with Transfer: the result-form selector shows in the
+    Impedance tool, the two simplified forms map to the session's
+    contract kwargs, and a lowest-order Z solve lands with the
+    reduced-order flags."""
+    from circuitinsight.gui.app import MainWindow
+
+    win = MainWindow()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(MILLER / "tb_ota2s.cin.json"),
+                         str(MILLER / "psf"))
+        win.in_combo.setCurrentText("VIND")
+        win.out_combo.setCurrentText("vout")
+    try:
+        win.mode_combo.setCurrentText("Impedance")
+        assert win._form_act.isVisible()
+        win.form_combo.setCurrentText("Simplified · full order")
+        kw, _ = win._impedance_form_kw()
+        assert kw["form"] == "simplified" and "mag_db" in kw
+        win.form_combo.setCurrentText("Simplified · lowest order")
+        kw, _ = win._impedance_form_kw()
+        assert kw["form"] == "lowest" and kw["strategy"] == "plain"
+        # the contract surface follows: band slider visible on lowest
+        assert win.band_row.isVisibleTo(win)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            r = win.impedance_sync({"node": "vout"}, **kw)
+        assert r.reduced_order and r.out == "Z(vout)"
+        assert "reduced to" in r.warnings[0]
+        win.form_combo.setCurrentText("Exact")
+        kw, phrase = win._impedance_form_kw()
+        assert kw == {} and phrase == ""
+    finally:
+        win.close()
+
+
+def test_loop_gain_tool_offers_the_form_ladder(qapp):
+    """Parity: the result-form selector shows in the Loop-gain tool,
+    maps to the session contract, and a lowest-order T lands with the
+    reduced flags and the stability headline."""
+    from circuitinsight.gui.app import MainWindow
+
+    NMC = Path(__file__).resolve().parent / "fixtures" / "spectre" / "nmc3"
+    win = MainWindow()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(next(NMC.glob("*.cin.json"))),
+                         str(NMC / "psf"))
+    try:
+        win.mode_combo.setCurrentText("Loop gain")
+        assert win._form_act.isVisible()
+        win.form_combo.setCurrentText("Simplified · lowest order")
+        win.strategy_combo.setCurrentText("Stability (margins)")
+        kw, phrase = win._loopgain_form_kw()
+        assert kw["form"] == "lowest" and kw["strategy"] == "stability"
+        assert "lowest order" in phrase
+        kw["strategy_opts"] = {"pm_deg": 15.0, "gm_db": 6.0,
+                               "fc_rel": 0.3}
+        kw["band_fmin"], kw["band_fmax"] = 1e4, 1e8
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            r = win.loop_gain_sync(win.probe_combo.currentText(), **kw)
+        assert r.reduced_order and r.out.startswith("T@")
+        assert "reduced to" in r.warnings[0]
+    finally:
+        win.close()
+
+
+def test_loop_gain_dispatch_hands_over_the_budget(qapp):
+    """The Solve dispatch passes the keep pane's budget into
+    loop_gain as max_seconds -- the session's gate then refuses a
+    runaway Tian hybrid instead of freezing the bench -- and the
+    estimate label costs the loop solve, not the transfer."""
+    from circuitinsight.gui.app import MainWindow
+
+    win = MainWindow()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(MILLER / "tb_ota2s_stb.cin.json"),
+                         str(MILLER / "psf_stb"))
+        win.in_combo.setCurrentText("VIND")
+        win.out_combo.setCurrentText("vout")
+    try:
+        win.mode_combo.setCurrentText("Loop gain")
+        rec = {}
+
+        def fake_loop_gain(probe, **kw):
+            rec.update(kw, probe=probe)
+            raise RuntimeError("stop here")
+
+        win.controller.loop_gain = fake_loop_gain
+        # run the launched fn synchronously: the wiring is the point
+        win._launch = lambda fn, *a, **k: fn(lambda *aa: None)
+        try:
+            win.solve()
+        except RuntimeError:
+            pass
+        assert rec["probe"] == "IPRB0"
+        assert rec["max_seconds"] == win.budget_spin.value()
+        # the label costs the loop solve
+        est_rec = {}
+        real = win.controller.estimate_loop
+
+        def fake_est(probe, keep=()):
+            est_rec["probe"] = probe
+            return real(probe, keep)
+
+        win.controller.estimate_loop = fake_est
+        win._update_estimate()
+        assert _wait_bg(qapp, lambda: est_rec.get("probe") == "IPRB0",
+                        timeout=30)
+    finally:
+        win.close()

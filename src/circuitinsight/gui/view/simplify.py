@@ -374,8 +374,30 @@ def expr_value_map(result) -> dict:
     present = {str(x) for x in result.tf.expr.free_symbols}
     return {n: eng(v, op_unit(n)) for n, v in vals.items() if n in present}
 
+def equivalent_lines(defs, base: bool = True, wrap: bool = False,
+                     aliases: dict | None = None) -> list:
+    """(label, latex) lines defining each lumped equivalent in its
+    member symbols, with its value: G_{eq,net8} = g_{ds,NM6} + g_{ds,PM6}
+    = 1.21 uS. Appended to the Expression view so the equivalent that
+    appears in A0 is a definition the reader can look up."""
+    from .format import eng, latex_eng, op_unit, symbol_tex
+
+    lines = []
+    for name, expr, val in defs:
+        head = symbol_tex(name, base, aliases) + " = "
+        body = latex_eng(expr, base, wrap, aliases)
+        if val is not None:
+            num = eng(val, op_unit(name)).replace(" ", " ").replace(
+                "µ", "u")
+            body += r"\quad= " + r"\,".join(
+                rf"\mathrm{{{part}}}" for part in num.split())
+        lines.append((head, body))
+    return lines
+
+
 def expr_katex(result, base: bool = True, aliases: dict | None = None,
-               numerals: dict | None = None, numhint: str = "") -> dict:
+               numerals: dict | None = None, numhint: str = "",
+               equivalents=None) -> dict:
     """Payload for the KaTeX web view: the readable expression lines with every
     device symbol identity-tagged (hover/click handles), plus the value map.
     ``numerals`` maps a numeral tag (num:k / den:k / A0 / p1 / z1) to its
@@ -386,6 +408,9 @@ def expr_katex(result, base: bool = True, aliases: dict | None = None,
     lines = [f"{label}{tex}"
              for label, tex in _expr_lines(result, base=base, wrap=True,
                                            aliases=aliases)]
+    if equivalents:
+        lines += [f"{label}{tex}" for label, tex in equivalent_lines(
+            equivalents, base=base, wrap=True, aliases=aliases)]
     return {"lines": lines, "values": expr_value_map(result),
             "numerals": numerals or {}, "numhint": numhint}
 

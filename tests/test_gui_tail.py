@@ -93,10 +93,12 @@ def test_match_decorations_unmatch_and_tint(qapp, tmp_path):
                      if it.background(0).color().name() != "#000000")
         assert tinted == len(linked)              # and the group tint
         n0 = len(w._match_groups)
+        # the name BEFORE unmatching: set_groups rebuilds the tree (the
+        # alphabetical ordering re-sorts), so held items do not survive
+        member = w.devices.device_name(linked[0])
         w.devices.setCurrentItem(linked[0])       # select one member
         w.unmatch_selected()
         assert len(w._match_groups) == n0 - 1
-        member = w.devices.device_name(linked[0])
         assert all(member not in g for g in w._match_groups)
     finally:
         w.close()
@@ -132,6 +134,16 @@ def test_session_report_accumulates(qapp, tmp_path):
             warnings.simplefilter("ignore", UserWarning)
             w.in_combo.setCurrentText("VIND")
             w.out_combo.setCurrentText("vout")
+            # the auto plan budgets the TRANSFER solve; on a fast
+            # machine it ticks enough symbols (cap-matrix k-terms
+            # included) that the unbudgeted hybrid Tian loop gain
+            # below runs away. This test is about the report, so it
+            # runs numeric: untick everything, deterministically
+            from PySide6.QtCore import Qt
+            for i in range(w.keep_tbl.rowCount()):
+                it = w.keep_tbl.item(i, 0)
+                if it is not None:
+                    it.setCheckState(Qt.Unchecked)
             w.solve_sync()
             w.add_to_report()
             w.loop_gain_sync("IPRB0")
@@ -223,13 +235,14 @@ def test_impedance_bench_with_xf_truth(qapp, tmp_path):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             r = w.impedance_sync("IPORT")
-        # re-pinned for the weighted match-value default: its sensitivity
-        # weights are computed for the SUGGESTED TRANSFER, and one session
-        # has one working circuit -- an impedance is a different response
-        # with a different load-bearing member, so it tracks xf a little
-        # less tightly (0.074 dB vs 0.006 under first-wins; measured
-        # 2026-07-30, the recorded price of the flip)
-        assert abs(r.dc_gain) == pytest.approx(978.4, abs=1.0)
+        # re-pinned twice: first for the weighted match-value default
+        # (978.4, measured 2026-07-30 -- the price of the suggested
+        # match overwriting the follower's devices), then for the
+        # common-node structural rule (2026-08-23), which rightly
+        # suggests NO matches on this bench -- the followers share no
+        # net -- so Z tracks xf at DC to 8e-5 dB again
+        assert w.controller.suggest_matches() == []
+        assert abs(r.dc_gain) == pytest.approx(986.8, abs=1.0)
         assert r.h_ref is not None and "xf" in r.ref_label
         err = np.max(np.abs(20 * np.log10(np.abs(r.h) / np.abs(r.h_ref))))
         assert err < 0.1
@@ -431,3 +444,40 @@ def test_cap_model_toggle_reopens_and_persists(qapp, tmp_path):
             w2.close()
     finally:
         MainWindow.settings_path = None
+
+
+def test_gft_bench_reduced_quartet(qapp, tmp_path):
+    """The GFT flavor of the form ladder: the lowest order computes
+    the quartet OF THE REDUCED MODEL -- reactances chosen under the
+    toolbar contract on H, zeroed in both systems -- so the identity
+    stays exact-rational on that model and the strip prices the one
+    approximation. The numeric bench has nothing for full order to
+    prune, so that entry is disabled in this mode."""
+    w = _win(tmp_path, FIX / "miller" / "tb_ota2s_stb.cin.json",
+             FIX / "miller" / "psf_stb")
+    try:
+        w.mode_combo.setCurrentText("GFT")
+        assert w._form_act.isVisible()
+        fo = w.form_combo.findText("Simplified · full order")
+        assert not w.form_combo.model().item(fo).isEnabled()
+        w.in_combo.setCurrentText("VIND")
+        w.out_combo.setCurrentText("vout")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            payload = w.gft_sync(
+                "IPRB0", "VIND", "vout", "vin_p", -1,
+                reduce_kw=dict(strategy="plain",
+                               strategy_opts={"gain_db": 1.0,
+                                              "phase_deg": 5.0},
+                               fmin=1e3, fmax=1e7))
+        assert payload["residual"] == 0.0        # exact on the reduced
+        assert payload["headline"].startswith("quartet of the REDUCED")
+        assert "reduced to" in payload["headline"]
+        assert "REDUCED" in w.msg_strip.text()
+        assert "EXACT" in w.msg_strip.text()
+        # leaving GFT re-enables the full-order entry
+        w.mode_combo.setCurrentText("Transfer")
+        assert w.form_combo.model().item(fo).isEnabled()
+    finally:
+        w.close()
+        type(w).settings_path = None

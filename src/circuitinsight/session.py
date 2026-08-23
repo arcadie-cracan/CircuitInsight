@@ -114,6 +114,8 @@ class Result:
     anchor: float | None = None
     details: list = field(default_factory=list)
     certificate: object = None
+    # lowest-order: the DC-gain coefficient divided out (1.0 = none)
+    snap_factor: float = 1.0
 
 
 def _n_terms(tf) -> int:
@@ -543,9 +545,54 @@ class SessionController:
             if p.param and p.value is not None:
                 by_inst.setdefault(p.inst, {})[p.param] = p.value
 
-        def _tol(param):
-            if param == "gm":
+        # gm's 2% is the strict default (it kept the fd bench's input
+        # pair from fusing with its CMFB pair). A MIRROR earns more: when
+        # the set shares its gate net and V_GS and V_TH agree within
+        # 1 mV (source-tied legs give exact equality), and the legs
+        # carry the same current, the only gm difference left is
+        # channel-length modulation, and its size is
+        # predictable from the set's own operating point:
+        # dgm/gm ~ dId/Id = gds*dVds/Id. The budget is 2% plus that
+        # measured term, capped at 10% -- a tight-Vds mirror gets almost
+        # no slack, a wide one gets what its physics justifies, and
+        # gate-independent lookalikes never qualify.
+        terms_by = {d.name: dict(d.terminals)
+                    for d in self._run.flat.devices}
+
+        def _op(name):
+            try:
+                return self.device_op(name) or {}
+            except Exception:
+                return {}
+
+        def _gm_tol(members, cand):
+            allm = list(members) + [cand]
+            if len({terms_by.get(m, {}).get("g") for m in allm}) != 1:
                 return 0.02
+            ops = [_op(m) for m in allm]
+            vgs = [o.get("vgs") for o in ops]
+            vth = [o.get("vth") for o in ops]
+            if any(v is None for v in vgs + vth):
+                return 0.02
+            if max(vgs) - min(vgs) > 1e-3 or max(vth) - min(vth) > 1e-3:
+                return 0.02
+            vds = [o.get("vds") for o in ops]
+            gds = [o.get("gds") for o in ops]
+            ids = [abs(o.get("ids") or 0.0) for o in ops]
+            if any(v is None for v in vds + gds) or not all(ids):
+                return 0.02
+            dvds = max(abs(v) for v in vds) - min(abs(v) for v in vds)
+            budget = 0.02 + dvds * (sum(gds) / len(gds))                 / (sum(ids) / len(ids))
+            budget = min(budget, 0.10)
+            # the currents must agree to within the same budget: a
+            # ratioed or differently loaded leg is not this mirror
+            if max(ids) / min(ids) - 1.0 > budget:
+                return 0.02
+            return budget
+
+        def _tol(param, members=(), cand=None):
+            if param == "gm":
+                return _gm_tol(members, cand) if cand else 0.02
             if param.startswith("g"):
                 return 0.25
             return 0.50
@@ -558,57 +605,133 @@ class SessionController:
         # (c*/k*) against the largest cap.
         sig = _significance_floors(by_inst)
 
-        def compatible(head, cand):
-            pa, pb = by_inst.get(head), by_inst.get(cand)
-            if not pa or not pb:
+        def compatible(members, cand):
+            """cand against the RUNNING MEAN of the subgroup so far --
+            a fixed head made membership depend on netlist order: the
+            fc cascode NM4 differed 2.8% in gm from head NM3 (out, at
+            a 2% tolerance) but 0.9% from NM5; against the group mean
+            it belongs. Genuinely different devices stay out (NM2's gm
+            is 4x off any mean)."""
+            pb = by_inst.get(cand)
+            withop = [m for m in members if by_inst.get(m)]
+            if not pb or not withop:
                 return True                    # no OP data: keep old behavior
-            for param, va in pa.items():
+            params = set().union(*(by_inst[m].keys() for m in withop))
+            for param in params:
+                vals = [by_inst[m][param] for m in withop
+                        if param in by_inst[m]]
                 vb = pb.get(param)
-                if vb is None or va == 0 or vb == 0:
+                if not vals or vb is None or vb == 0:
+                    continue
+                va = sum(vals) / len(vals)
+                if va == 0:
                     continue
                 kind = "g" if param.startswith("g") else "c"
-                floor = min(sig[head][kind], sig[cand][kind])
+                floor = min([sig[m][kind] for m in withop]
+                            + [sig[cand][kind]])
                 if abs(va) < floor and abs(vb) < floor:
                     continue                   # both insignificant: skip
                 r = abs(vb / va)
                 r = max(r, 1.0 / r) if r > 0 else float("inf")
-                if r - 1.0 > _tol(param):
+                if r - 1.0 > _tol(param, withop, cand):
                     return False
             return True
 
         def gm_of(name):
             return opv.get("gm_" + name.replace(".", "_"))
 
+        # one more STRUCTURAL criterion: a matched set shares at least
+        # one net. A true pair touches at gate, source or drain (the
+        # input pair's common source, a mirror's common gate); two
+        # same-sized devices in unrelated branches do not, and only the
+        # bias plane distinguishes them. Ground and global nets do not
+        # count -- every bulk ties to gnd!, which would connect
+        # everything. Connectivity components via union-find.
+        skip_nets = set(self.ground) |             set(getattr(self._run.flat, "global_nets", ()) or ())
+        terms_of = {d.name: {n for n in d.terminals.values()
+                             if n not in skip_nets}
+                    for d in self._run.flat.devices}
+
+        def _components(members):
+            parent = {m: m for m in members}
+
+            def find(x):
+                while parent[x] != x:
+                    parent[x] = parent[parent[x]]
+                    x = parent[x]
+                return x
+
+            by_net: dict = {}
+            for m in members:
+                for n in terms_of.get(m, ()):
+                    by_net.setdefault(n, []).append(m)
+            for ms in by_net.values():
+                for other in ms[1:]:
+                    ra, rb = find(ms[0]), find(other)
+                    if ra != rb:
+                        parent[rb] = ra
+            comps: dict = {}
+            for m in members:
+                comps.setdefault(find(m), []).append(m)
+            return [c for c in comps.values()]
+
         refined: list[tuple[str, ...]] = []
         for k in order:
-            members = groups[k]
-            if len(members) < 2:
-                continue
-            # greedy clustering against each subgroup's head, gm-sorted so
-            # near-identical devices are adjacent
-            members = sorted(members, key=lambda n: (gm_of(n) is None,
-                                                     gm_of(n) or 0.0))
-            remaining = list(members)
-            while remaining:
-                head = remaining.pop(0)
-                sub = [head]
-                still = []
-                for cand in remaining:
-                    if compatible(head, cand):
-                        sub.append(cand)
-                    else:
-                        still.append(cand)
-                remaining = still
-                if len(sub) >= 2:
-                    refined.append(tuple(sub))
+            for members in _components(groups[k]):
+                if len(members) < 2:
+                    continue
+                self._refine_members(members, gm_of, compatible, refined)
         return refined
+
+    @staticmethod
+    def _refine_members(members, gm_of, compatible, refined):
+        # greedy clustering against each subgroup's head, gm-sorted so
+        # near-identical devices are adjacent
+        members = sorted(members, key=lambda n: (gm_of(n) is None,
+                                                 gm_of(n) or 0.0))
+        remaining = list(members)
+        while remaining:
+            head = remaining.pop(0)
+            sub = [head]
+            still = []
+            for cand in remaining:
+                if compatible(sub, cand):
+                    sub.append(cand)          # the mean now includes cand
+                else:
+                    still.append(cand)
+            remaining = still
+            if len(sub) >= 2:
+                refined.append(tuple(sub))
+
+    def name_bearer(self, group) -> str:
+        """The member whose NAME labels the group's shared symbols: the
+        one whose parameters shape the in->out response most (band
+        sensitivity, the weighted policy's own numbers), so the formula
+        reads g_m,NM5 for the cascode on the signal path rather than
+        g_m,NM3 for its mirror twin. A user-chosen representative wins;
+        ties and a missing context fall back to the group order."""
+        rep = self._match_reps.get(frozenset(group))
+        if rep is not None and rep in group:
+            return rep
+        w = self._sens_weights(None)
+        if not w:
+            return group[0]
+
+        def score(m):
+            key = m.replace(".", "_")
+            return sum(v for n, v in w.items() if n.endswith("_" + key))
+        best = max(group, key=score)
+        return best if score(best) > 0 else group[0]
 
     def _analyzer_ready(self):
         if self._analyzer is None:
             an = self._run.analyzer(cap_model=self.cap_model,
                                     mos_model=self.mos_model)
             for group in self._matches:
-                an.match(*group)
+                # the name bearer first: analyzer.match names the
+                # shared symbols after its first argument
+                lead = self.name_bearer(group)
+                an.match(lead, *[m for m in group if m != lead])
             # capture pre-policy values FIRST: conflict reports must compare
             # against reality, not against what the policy already wrote
             self._match_orig = {}
@@ -621,7 +744,8 @@ class SessionController:
                 # rebuild (e.g. matches changed) re-applies it from its
                 # recorded node set, so it cannot silently evaporate
                 an.primitives = self._reduced_primitives(
-                    an, self._reduction["nodes"])
+                    an, self._reduction["nodes"],
+                    self._reduction.get("removals", ()))
             self._analyzer = an
         return self._analyzer
 
@@ -629,6 +753,69 @@ class SessionController:
     def estimate(self, inp: str, out: str, keep=ALL):
         """SolveEstimate for tf(inp, out, keep) — gate a solve on predicted cost."""
         return self._analyzer_ready().estimate_solve_time(inp, out, keep)
+
+    def estimate_loop(self, probe: str, keep=()):
+        """SolveEstimate for loop_gain(probe, keep): the Tian hybrid is
+        FOUR rational solves on the probe system, so the estimate is
+        one solve's with n_dets and seconds scaled by 4. The keep
+        plan budgets the TRANSFER solve; this is what the same ticks
+        actually cost at the probe."""
+        import dataclasses
+
+        from .analysis.loopgain import _probe_nodes
+
+        an = self._analyzer_ready()
+        system = an.system(probe)
+        p, _q = _probe_nodes(system, probe)
+        est = an.estimate_solve_time(probe, system.unknowns[p], keep)
+        return dataclasses.replace(
+            est, n_dets=est.n_dets * 4,
+            seconds=(est.seconds * 4 if est.seconds is not None
+                     else None))
+
+    def estimate_z(self, spec, keep=()):
+        """SolveEstimate for impedance_result(spec, keep): one solve on
+        the probe-injected system. Raises for between-two-nets specs
+        (two numerator solves, no single-probe system) -- callers fall
+        back to the transfer estimate."""
+        an2, probe, node = self._z_probe_analyzer(spec)
+        return an2.estimate_solve_time(probe, node, keep)
+
+    def _guard_loop_cost(self, probe, keep, max_seconds) -> None:
+        """The loop-gain twin of _guard_cost: ticks budgeted for the
+        transfer can cost ~4x at the probe (field report: a fast
+        machine's auto plan froze the bench for minutes -- the plan
+        gates tf(), nothing gated T). ALL is refused on grid size; a
+        hybrid is gated only when a budget is given."""
+        keep = norm_keep_list(keep)
+        if max_seconds is None and not is_all(keep):
+            return
+        if not is_all(keep) and not keep:
+            return                      # numeric: the fast path, never gated
+        try:
+            est = self.estimate_loop(probe, keep)
+        except Exception:
+            return                      # an estimate is a courtesy
+        if is_all(keep):
+            if est.grid_size <= _SYMBOLIC_GRID_LIMIT:
+                return
+            raise SolveTooLarge(
+                f"loop gain at {probe}, fully symbolic (keep=ALL): "
+                f"{len(est.kept_names)} symbols, symbol space "
+                f"{est.grid_size:.3g}. The symbolic determinant is "
+                f"intractable at this size — it will not finish.\n"
+                f"Tick a keep set, keep=[] for a numeric T, or "
+                f"max_seconds=None to insist.")
+        if est.seconds is None or est.seconds <= max_seconds:
+            return
+        raise SolveTooLarge(
+            f"loop gain at {probe}, keep={list(keep)}: estimated "
+            f"{est.seconds:.0f} s for the Tian hybrid (four rational "
+            f"solves, grid {est.grid_size:,}), over the "
+            f"{max_seconds:.0f} s budget.\nThe keep plan budgeted the "
+            f"TRANSFER solve — T costs ~4x with the same ticks. Untick "
+            f"symbols, solve numeric (no ticks), or pass "
+            f"max_seconds=None to insist.")
 
     def suggest_keep(self, inp: str, out: str, budget_s: float):
         """Largest band-ranked keep-set whose solve fits `budget_s` (KeepPlan)."""
@@ -800,32 +987,292 @@ class SessionController:
         except Exception:
             return []
 
-    def impedance_result(self, port: str, keep=()) -> Result:
-        """Driving-point impedance at a port marker, packaged as a Result.
-        When the run carries an xf result with this port's transfer, it is
-        the overlay -- the simulator truth for Z; absent, the model stands
-        alone (never a show-stopper). Cached."""
-        key = self._key("impedance", port, norm_keep(keep))
+    def impedance_result(self, spec, keep=(), form: str = "exact", *,
+                          tol_db: float = 0.5, mag_db: float = 1.0,
+                          phase_deg: float = 5.0, strategy=None,
+                          strategy_opts=None, fmin=None, fmax=None,
+                          points: int = 400, max_elements=None,
+                          progress=None, note=None) -> Result:
+        """Driving-point impedance packaged as a Result. `spec` is a
+        port-marker instance name (isource = parallel port, vsource =
+        series port), or a dict: {"node": n} for Z(n -> ground),
+        {"node": n, "ref": m} for the impedance between two nets,
+        {"seen_by": inst} for what a two-terminal element sees at its
+        terminals -- the element removed, sources zeroed (Thevenin
+        looking outward).
+
+        `form` gives the tool the Transfer solve's three contracts:
+        "exact" (default), "simplified" (full order: prune coefficient
+        terms within mag_db/phase_deg over [fmin, fmax]), "lowest"
+        (reduced order under the tolerance strategy). The lowest form
+        works by injecting a unit probe isource at the port -- Z
+        becomes an ordinary transfer function and the reactance
+        pursuit, the collapse, the snap and the certificate run
+        exactly as they do for the Transfer tool. It needs a
+        ground-referenced port; between-two-nets specs offer exact
+        and full order.
+
+        When the run carries an xf result with a marker port's
+        transfer, the exact form overlays it as the simulator truth;
+        everything else plots the model alone (never a show-stopper).
+        Cached."""
+        from .engine.mna import MnaError
+
+        spec, node, ref, disable, label, terms_of = self._resolve_z(spec)
+        # the applied reduction rewired its grounded nets onto ground:
+        # Z there is 0 by construction and the MNA row is gone -- say
+        # so instead of 'node not found'
+        red_nodes = set((self._reduction or {}).get("nodes") or ())
+        involved = ([n for n in (node, ref) if n] if node is not None
+                    else list(terms_of.get(spec.get("port"), {}).values()))
+        hit = sorted(set(involved) & red_nodes)
+        if hit:
+            raise MnaError(
+                f"impedance: {', '.join(hit)} is AC-grounded by the "
+                f"applied reduction -- Z there is 0 by construction. "
+                f"Untick the net in the Reduce bench and Apply, or "
+                f"Revert, to measure it.")
+
+        opts = dict(strategy_opts or {})
+        key = self._key("impedance", tuple(sorted(spec.items())),
+                        norm_keep(keep), form, tol_db, mag_db, phase_deg,
+                        strategy, tuple(sorted(opts.items())), fmin, fmax)
         if key in self._cache:
             return self._cache[key]
         an = self._analyzer_ready()
-        tf = an.impedance(port=port, keep=keep)
-        r = self._assemble(tf, port, f"Z({port})", keep, reference=False,
-                           fmin=1e3, fmax=1e9, points=400)
-        try:
-            import warnings as _w
+        lo = float(fmin) if fmin is not None else 1e3
+        hi = float(fmax) if fmax is not None else             (1e7 if form == "lowest" else 1e9)
+        if disable and all(p.inst != disable[0] for p in an.primitives):
+            raise MnaError(
+                f"impedance: {disable[0]} is not in the working "
+                f"circuit (lumped or removed by the applied "
+                f"reduction) -- Revert to look from its terminals.")
+        if form == "lowest":
+            r = self._impedance_lowest(
+                spec, keep, an, node, ref, disable, label,
+                tol_db=tol_db, mag_db=mag_db, phase_deg=phase_deg,
+                strategy=strategy, opts=opts, fmin=lo, fmax=hi,
+                points=points, max_elements=max_elements,
+                progress=progress, note=note)
+            self._cache[key] = r
+            return r
+        if "port" in spec:
+            tf = an.impedance(port=spec["port"], keep=keep)
+        else:
+            tf = an.impedance(node=node, ref=ref, keep=keep,
+                              disable=disable)
+        if form == "simplified":
+            H = tf
+            tf = H.simplify(mag_tol_db=mag_db, phase_tol_deg=phase_deg,
+                            fmin=lo, fmax=hi)
+        r = self._assemble(tf, spec.get("port") or node, label, keep,
+                           reference=False,
+                           fmin=(lo if form == "simplified" else 1e3),
+                           fmax=(hi if form == "simplified" else 1e9),
+                           points=points)
+        if form == "simplified":
+            r.simplified = True
+            r.mag_err_db = float(tf.achieved_mag_err_db)
+            r.phase_err_deg = float(tf.achieved_phase_err_deg)
+            r.n_terms_full = _n_terms(H)
+            r.band_fmin, r.band_fmax = lo, hi
+            # a simplified Z is judged against the exact one: the
+            # reference curve IS the exact solution, on this grid
+            try:
+                full = self.impedance_result(dict(spec), keep=())
+                r.h_ref = np.asarray(full.tf.numeric(r.freqs))
+                r.ref_label = "exact Z"
+            except Exception:                     # noqa: BLE001
+                pass
+        if "port" in spec and form == "exact":
+            port = spec["port"]
+            try:
+                import warnings as _w
 
-            with _w.catch_warnings():
-                _w.simplefilter("ignore")
-                xf = self._run.xf()
-            if port in xf.transfers:
-                r.freqs = np.asarray(xf.freq, dtype=float)
-                r.h = np.asarray(tf.numeric(r.freqs))
-                r.h_ref = np.asarray(xf.tf(port))
-                r.ref_label = f"xf sim  Z via {port}"
-        except Exception:
-            pass                          # no xf truth in this run -- fine
+                with _w.catch_warnings():
+                    _w.simplefilter("ignore")
+                    xf = self._run.xf()
+                if port in xf.transfers:
+                    r.freqs = np.asarray(xf.freq, dtype=float)
+                    r.h = np.asarray(tf.numeric(r.freqs))
+                    r.h_ref = np.asarray(xf.tf(port))
+                    r.ref_label = f"xf sim  Z via {port}"
+            except Exception:
+                pass                  # no xf truth in this run -- fine
         self._cache[key] = r
+        return r
+
+    def _resolve_z(self, spec):
+        """One resolution for every Z consumer -- the solve, the
+        pursuit, the ranking: (spec, node, ref, disable, label,
+        terms_of). A marker port resolves node/ref lazily (the
+        analyzer owns _port_nets); node stays None for it here."""
+        from .engine.mna import MnaError
+
+        if isinstance(spec, str):
+            spec = {"port": spec}
+        gnd = set(self.ground) | {"0"}
+        terms_of = {d.name: dict(d.terminals)
+                    for d in self._run.flat.devices}
+        disable: tuple = ()
+        node = ref = None
+        if "seen_by" in spec:
+            inst = spec["seen_by"]
+            terms = terms_of.get(inst)
+            if terms is None:
+                raise MnaError(f"impedance: unknown instance {inst!r}")
+            nets = list(dict.fromkeys(terms.values()))
+            if len(nets) != 2:
+                raise MnaError(f"impedance: {inst} is not a two-terminal "
+                               f"element")
+            a, b = nets
+            if a in gnd:
+                a, b = b, a
+            if a in gnd:
+                raise MnaError(f"impedance: both terminals of {inst} "
+                               f"are ground")
+            node, ref = a, (None if b in gnd else b)
+            disable = (inst,)
+            label = f"Z seen by {inst}"
+        elif "node" in spec:
+            node = spec["node"]
+            ref = spec.get("ref") or None
+            if ref in gnd:
+                ref = None
+            if node in gnd:
+                raise MnaError("impedance: the node is ground")
+            label = f"Z({node})" if ref is None else f"Z({node}, {ref})"
+        else:
+            label = f"Z({spec['port']})"
+        return spec, node, ref, disable, label, terms_of
+
+    def _z_probe_analyzer(self, spec, an=None):
+        """(an2, probe, node): the working analyzer with a unit probe
+        isource at the spec's port -- the ground-referenced form the
+        single-node Z machinery (pursuit, ranking) shares. Raises for
+        between-two-nets specs."""
+        import copy
+
+        from .engine.mna import MnaError
+        from .engine.primitives import Primitive
+
+        an = an if an is not None else self._analyzer_ready()
+        spec, node, ref, disable, _label, _t = self._resolve_z(spec)
+        if "port" in spec:
+            node, ref, series = an._port_nets(spec["port"])
+            disable = (spec["port"],) if series else ()
+        if node is None or ref is not None:
+            raise MnaError(
+                "impedance: this needs a ground-referenced port -- "
+                "between-two-nets impedance offers Exact and "
+                "Simplified · full order.")
+        off = set(disable)
+        probe = "ZPROBE"
+        prims = [p for p in an.primitives if p.inst not in off]
+        prims.append(Primitive(inst=probe, param="", kind="isrc",
+                               nodes=(an.flat.ground[0], node)))
+        an2 = copy.copy(an)
+        an2.primitives = prims
+        return an2, probe, node
+
+    def rank_symbols_z(self, spec, *, metric: str = "complex",
+                       fmin: float | None = None,
+                       fmax: float | None = None):
+        """Band-sensitivity ranking for an IMPEDANCE response: the
+        keep table's contributors must be Z's, not the transfer's --
+        Z at a bias node is shaped by a different set than the
+        VIND->vout path (field report: the ranking led with the
+        transfer's gm while Z(net3) was built on another device).
+        Same probe injection as the lowest-order solve; same list
+        shape as rank_symbols."""
+        an2, probe, node = self._z_probe_analyzer(spec)
+        bs = an2.band_sensitivities(probe, node, metric=metric,
+                                    fmin=fmin, fmax=fmax)
+        return [(name, float(score), float(bs.peak_frequency(name)))
+                for name, score in bs.rank(fmin, fmax)]
+
+    def _impedance_lowest(self, spec, keep, an, node, ref, disable,
+                          label, *, tol_db, mag_db, phase_deg, strategy,
+                          opts, fmin, fmax, points, max_elements,
+                          progress, note) -> Result:
+        """Lowest-order Z: a unit probe isource at the port makes Z an
+        ordinary transfer function -- the same MNA system, the same
+        z-vector impedance() builds -- so the reactance pursuit, the
+        coefficient collapse, the snap and the order certificate run
+        exactly as for the Transfer tool. Ground-referenced ports
+        only: the pursuit reads one output node."""
+        import copy
+
+        from .analysis.criteria import make_criterion
+        from .analysis.simplify import snap_unity
+        from .engine.mna import MnaError
+        from .engine.primitives import Primitive
+
+        an2, probe, node = self._z_probe_analyzer(spec, an)
+
+        crit = make_criterion(strategy=strategy, strategy_opts=opts,
+                              eps=None, tol_db=tol_db)
+        if max_elements is not None and crit.cap is not None:
+            crit.cap = max_elements
+        if crit.name:
+            mag_db, phase_deg = crit.collapse_budgets()
+        H, red = an2.reduced_tf(probe, node, keep, tol_db=tol_db,
+                                fmin=fmin, fmax=fmax,
+                                max_elements=max_elements,
+                                phase_tol_deg=phase_deg,
+                                strategy=strategy, strategy_opts=opts,
+                                progress=progress, note=note)
+        Hs = H.simplify(mag_tol_db=mag_db, phase_tol_deg=phase_deg,
+                        fmin=fmin, fmax=fmax)
+        full = self.impedance_result(dict(spec), keep=())
+        Hs, snap_k, snap_err = snap_unity(Hs, crit, full.freqs, full.h)
+        r = self._assemble(Hs, probe, label, keep, reference=False,
+                           fmin=fmin, fmax=fmax, points=points)
+        # the reference curve IS the exact solution, on this grid --
+        # the reduced model is read against the truth it approximates
+        try:
+            r.h_ref = np.asarray(full.tf.numeric(r.freqs))
+            r.ref_label = "exact Z"
+        except Exception:                         # noqa: BLE001
+            pass
+        r.snap_factor = float(snap_k)
+        band_err = float(red.errors_db[-1]) if red.errors_db else             float(red.baseline_db)
+        r.simplified = True
+        r.reduced_order = True
+        score, s_unit, mag_err = crit.score_fields(
+            band_err, float(Hs.achieved_mag_err_db))
+        if score is not None:
+            r.band_score, r.band_score_unit = score, s_unit
+        r.mag_err_db = float(mag_err)
+        r.phase_err_deg = float(Hs.achieved_phase_err_deg)
+        r.n_terms_full = _n_terms(H)
+        r.band_fmin, r.band_fmax = float(fmin), float(fmax)
+        if strategy is not None:
+            r.strategy = strategy
+        r.enforced_fmin, r.enforced_fmax = float(fmin), float(fmax)
+        r.warnings.insert(0, crit.headline(red, band_err, fmin, fmax,
+                                           tol_db=tol_db)
+                          if not crit.name
+                          else crit.headline(red, band_err, fmin, fmax))
+        det = crit.details(red, band_err, fmin, fmax) if crit.name else []
+        try:
+            from .analysis.certificate import order_certificate as _cert
+
+            cert = _cert(full.freqs, full.h, fmin, fmax,
+                         poles_hz=full.poles_hz, zeros_hz=full.zeros_hz)
+            det += self._certificate_details(
+                r, None, None, fmin, fmax, crit.eps_equivalent(),
+                len(red.selected), cert=cert)
+        except Exception:                             # noqa: BLE001
+            pass                        # advisory, never a show-stopper
+        if snap_err is not None:
+            det.append(
+                f"coefficient snap: the DC gain's leading numeral "
+                f"{snap_k:.4g} (a collapsed ratio of unkept parameters "
+                f"on the path) divided out -- a uniform {snap_err:.3g} "
+                f"dB shift, measured within the budget against the full "
+                f"response")
+        r.details = det
         return r
 
     def stb_probe(self) -> str | None:
@@ -889,21 +1336,74 @@ class SessionController:
 
     def loop_gain(self, probe: str, keep=(), *, reference: bool = True,
                   fmin: float = 1.0, fmax: float = 1e10,
-                  points: int = 600, progress=None) -> Result:
+                  points: int = 600, form: str = "exact",
+                  tol_db: float = 0.5, mag_db: float = 1.0,
+                  phase_deg: float = 5.0, strategy=None,
+                  strategy_opts=None, band_fmin=None, band_fmax=None,
+                  max_elements=None, note=None,
+                  max_seconds: float | None = None,
+                  progress=None) -> Result:
         """Tian loop gain at `probe` packaged as a Result: Bode of T with
         the run's Spectre stb overlay when available, phase/gain margins in
         the stb convention, and stability advisories. Cached.
 
+        `form` climbs the same ladder as the Transfer tool: "exact"
+        (default), "simplified" (full order: prune T's coefficient
+        terms within mag_db/phase_deg over [band_fmin, band_fmax]),
+        "lowest" (reduced order under the tolerance strategy; the
+        stability strategy gates on the margins themselves). Margins
+        and advisories are then those of the simplified T -- the
+        honest readout of the form on screen.
+
         The default band starts at 1 Hz so the +180-deg DC phase reference
         unwraps correctly even for sub-kHz dominant poles."""
+        opts = dict(strategy_opts or {})
         key = self._key("loopgain", probe, norm_keep(keep),
                         float(fmin), float(fmax), int(points),
-                        self.ac_loop_gain)
+                        self.ac_loop_gain, form, tol_db, mag_db,
+                        phase_deg, strategy,
+                        tuple(sorted(opts.items())),
+                        band_fmin, band_fmax)
         if key in self._cache:
             return self._cache[key]
+        # gated for EVERY form: the lowest order zeroes reactance
+        # VALUES but keeps the ticked symbols symbolic, so its final
+        # Tian solve carries the same grid as the exact hybrid
+        self._guard_loop_cost(probe, keep, max_seconds)
 
-        T = self._analyzer_ready().loop_gain(probe, keep=keep,
-                                             progress=progress)
+        lo = float(band_fmin) if band_fmin is not None else 1e3
+        hi = float(band_fmax) if band_fmax is not None else 1e7
+        red = crit = None
+        n_terms_full = None
+        if form == "lowest":
+            from .analysis.criteria import make_criterion
+            from .analysis.loopgain import reduced_loop_gain
+
+            crit = make_criterion(strategy=strategy, strategy_opts=opts,
+                                  eps=None, tol_db=tol_db)
+            if max_elements is not None and crit.cap is not None:
+                crit.cap = max_elements
+            cmag, cph = (crit.collapse_budgets() if crit.name
+                         else (mag_db, phase_deg))
+            T, red = reduced_loop_gain(self._analyzer_ready(), probe,
+                                       keep=keep, tol_db=tol_db,
+                                       fmin=lo, fmax=hi,
+                                       max_elements=max_elements,
+                                       phase_tol_deg=cph,
+                                       strategy=strategy,
+                                       strategy_opts=opts,
+                                       progress=progress, note=note)
+            n_terms_full = _n_terms(T)
+            T = T.simplify(mag_tol_db=cmag, phase_tol_deg=cph,
+                           fmin=lo, fmax=hi)
+        else:
+            T = self._analyzer_ready().loop_gain(probe, keep=keep,
+                                                 progress=progress)
+            if form == "simplified":
+                H0 = T
+                n_terms_full = _n_terms(H0)
+                T = T.simplify(mag_tol_db=mag_db, phase_tol_deg=phase_deg,
+                               fmin=lo, fmax=hi)
         freqs = np.logspace(math.log10(fmin), math.log10(fmax), points)
         h_ref = ref_label = None
         stb_obj = None
@@ -940,7 +1440,7 @@ class SessionController:
 
         dc = _numeric_dc(T)
         dc_db = db(dc)
-        self._cache[key] = Result(
+        r = Result(
             inp=probe, out=f"T@{probe}",
             keep=norm_keep_list(keep),
             dc_gain=dc, dc_gain_db=dc_db,
@@ -950,7 +1450,30 @@ class SessionController:
             warnings=warns, tf=T,
             pm_deg=pm, pm_freq_hz=fpm, gm_db=gm, gm_freq_hz=fgm,
         )
-        return self._cache[key]
+        if form != "exact":
+            r.simplified = True
+            r.mag_err_db = float(T.achieved_mag_err_db)
+            r.phase_err_deg = float(T.achieved_phase_err_deg)
+            r.n_terms_full = n_terms_full
+            r.band_fmin, r.band_fmax = lo, hi
+        if red is not None:
+            r.reduced_order = True
+            band_err = float(red.errors_db[-1]) if red.errors_db else                 float(red.baseline_db)
+            score, s_unit, mag_err = crit.score_fields(
+                band_err, float(T.achieved_mag_err_db))
+            if score is not None:
+                r.band_score, r.band_score_unit = score, s_unit
+            r.mag_err_db = float(mag_err)
+            if strategy is not None:
+                r.strategy = strategy
+            r.enforced_fmin, r.enforced_fmax = lo, hi
+            r.warnings.insert(
+                0, crit.headline(red, band_err, lo, hi) if crit.name
+                else crit.headline(red, band_err, lo, hi, tol_db=tol_db))
+            if crit.name:
+                r.details = crit.details(red, band_err, lo, hi)
+        self._cache[key] = r
+        return r
 
     def assess_probe(self, probe: str, **kw):
         """Grade a designated stb probe (docs/loopgain-plan.md Sec. 9):
@@ -1111,17 +1634,49 @@ class SessionController:
                              nodes, alias=an._alias, freqs=freqs,
                              criterion=crit)
 
-    def _reduced_primitives(self, an, nodes) -> list:
+    def reduction_joint(self, inp: str, out: str, nodes, removals=(), *,
+                        strategy=None, strategy_opts=None,
+                        fmin=None, fmax=None) -> dict:
+        """Price the ticked rewrite -- groundings AND deletions --
+        TOGETHER, by re-solving the rewritten circuit (no rank-one
+        shortcut composes across both rewrites). Returns {"worst_db",
+        "worst_deg", "score"}; the score is x-budget under the given
+        contract, None without one."""
+        crit, bandf = self._band_criterion(strategy, strategy_opts,
+                                           fmin, fmax)
+        f = (np.asarray(bandf, dtype=float) if bandf is not None
+             else np.geomspace(1.0, 1e10, 41))
+        hb, hr = self.reduction_responses(nodes, inp, out, f,
+                                          removals=removals)
+        hb = np.asarray(hb, dtype=complex)
+        hr = np.asarray(hr, dtype=complex)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = hr / hb
+            db = 20 * np.log10(np.abs(ratio))
+            deg = np.degrees(np.angle(ratio))
+        out_d = {"worst_db": float(np.nanmax(np.abs(db))),
+                 "worst_deg": float(np.nanmax(np.abs(deg))),
+                 "score": None}
+        if crit is not None:
+            out_d["score"] = float(crit.score(f, hb, hr))
+        return out_d
+
+    def _reduced_primitives(self, an, nodes, removals=()) -> list:
         """The reduction chain on `an`'s primitives: ground -> deactivate
-        -> lump. Deterministic, so a rebuilt analyzer re-derives the same
-        working circuit from the recorded node set."""
+        -> lump -> delete. Deterministic, so a rebuilt analyzer re-derives
+        the same working circuit from the recorded node and removal sets.
+        Removals are keyed by instance name AFTER the chain -- the removal
+        scan priced them on exactly that circuit, lumped equivalents
+        included."""
         from .analysis import tearing
         from .analysis.lumping import deactivate, lump_to_ground
 
         gnd = an.flat.ground
-        grounded = tearing.ac_ground(an.primitives, gnd, nodes)
-        live, _dead = deactivate(grounded, gnd)
-        lumped, _rep = lump_to_ground(live, gnd)
+        lumped = an.primitives
+        if nodes:
+            grounded = tearing.ac_ground(an.primitives, gnd, nodes)
+            live, _dead = deactivate(grounded, gnd)
+            lumped, _rep = lump_to_ground(live, gnd)
         if self.mos_model == "lumped-gmb":
             # the COMPOSITION: ac_ground rewired the chosen nets to the
             # ground node, so gates that sat on internal bias nets now
@@ -1135,11 +1690,15 @@ class SessionController:
             lumped = lump_gmb_primitives(lumped, dc_nets(an.flat),
                                          an.lumped_gmb,
                                          tag="lumped (reduced)")
+        if removals:
+            rm = set(removals)
+            lumped = [p for p in lumped if p.inst not in rm]
         return lumped
 
-    def preview_reduction(self, nodes) -> dict:
+    def preview_reduction(self, nodes, removals=()) -> dict:
         """What WOULD the chain do, without changing any state: primitive
-        counts, the dead sources, the lump groups. Pure inspection."""
+        counts, the dead sources, the lump groups, the outright deletions.
+        Pure inspection."""
         from .analysis import tearing
         from .analysis.lumping import deactivate, lump_report, lump_to_ground
 
@@ -1148,43 +1707,117 @@ class SessionController:
         for group in self._matches:
             base.match(*group)
         gnd = base.flat.ground
-        grounded = tearing.ac_ground(base.primitives, gnd, list(nodes))
-        live, dead = deactivate(grounded, gnd)
-        lrep = lump_report(live, gnd)
-        lumped, _ = lump_to_ground(live, gnd)
+        nodes = list(nodes)
+        if nodes:
+            grounded = tearing.ac_ground(base.primitives, gnd, nodes)
+            live, dead = deactivate(grounded, gnd)
+            lrep = lump_report(live, gnd)
+            lumped, _ = lump_to_ground(live, gnd)
+        else:
+            dead, live = [], list(base.primitives)
+            lumped = live
+            lrep = lump_report([], gnd)
+        # deletions act on the chained circuit -- the removal scan priced
+        # them there; a name that no longer exists deletes nothing
+        rm = set(removals)
+        removed = sorted({p.inst for p in lumped if p.inst in rm})
+        lumped = [p for p in lumped if p.inst not in rm]
+        pvals = {f"{p.param or p.kind}_{p.inst}": p.value
+                 for p in base.primitives
+                 if isinstance(p.value, (int, float))}
         return {
-            "nodes": list(nodes),
+            "nodes": nodes,
+            "removals": list(removals),
+            "removed": removed,
             "prims_before": len(base.primitives),
             "prims_after": len(lumped),
             "dead_sources": [p.inst for p in dead],
+            # per device: what died and what lives on. A device whose
+            # gm died but whose gds and capacitances remain is a load,
+            # not a removal; only a device with nothing live is gone
+            "dead_primitives": [f"{p.param or p.kind}_{p.inst}"
+                                for p in dead],
+            "devices_silenced": sorted(
+                {p.inst for p in dead}
+                - {p.inst for p in live}),
+            "devices_passive": sorted(
+                {p.inst for p in dead}
+                & {p.inst for p in live}),
             "lump_groups": [g.describe() for g in lrep.groups],
             "equivalents": [{"name": g.name, "kind": g.kind,
                              "node": g.node, "members": list(g.members),
-                             "value": g.value}
+                             "value": g.value,
+                             # each member's own value, from the
+                             # UNREDUCED circuit: op_values() describes
+                             # the reduced one, where they are gone
+                             "member_values": {
+                                 m: pvals[m] for m in g.members
+                                 if m in pvals}}
                             for g in lrep.groups if g.value is not None],
             "symbols_saved": lrep.symbols_saved,
         }
 
+    def reduction_responses(self, nodes, inp: str, out: str, freqs,
+                            removals=()):
+        """(H_as_imported, H_reduced) over `freqs`: the numeric in->out
+        response of the as-imported circuit (matches applied, no
+        reduction) and of the circuit with `nodes` AC-grounded, dead
+        sources removed, parallels lumped and the `removals` deleted --
+        exactly what Apply would make the working circuit. What the
+        Reduce bench PLOTS so a ticked set's cost is a curve inside the
+        tolerance tube, not only a number. Both sets empty: both curves
+        are the as-imported response."""
+        from .analysis import tearing
+        from .analysis.lumping import deactivate, lump_to_ground
+
+        base = self._run.analyzer(cap_model=self.cap_model,
+                                  mos_model=self.mos_model)
+        for group in self._matches:
+            lead = self.name_bearer(group)
+            base.match(lead, *[m for m in group if m != lead])
+        gnd = base.flat.ground
+        f = np.asarray(freqs, dtype=float)
+        h_base = tearing._numeric_response(base.primitives, gnd, inp, out,
+                                           f, base._alias)
+        nodes = list(nodes)
+        removals = list(removals)
+        if not nodes and not removals:
+            return h_base, h_base
+        prims = base.primitives
+        if nodes:
+            grounded = tearing.ac_ground(prims, gnd, nodes)
+            live, _dead = deactivate(grounded, gnd)
+            prims, _ = lump_to_ground(live, gnd)
+        if removals:
+            rm = set(removals)
+            prims = [p for p in prims if p.inst not in rm]
+        h_red = tearing._numeric_response(prims, gnd, inp, out, f,
+                                          base._alias)
+        return h_base, h_red
+
     def apply_reduction(self, nodes, *, inp: str, out: str,
-                        strategy=None, strategy_opts=None,
+                        removals=(), strategy=None, strategy_opts=None,
                         fmin=None, fmax=None) -> dict:
         """Make the reduced circuit THE working circuit for every analysis
-        that follows, and measure what the grounding cost end to end —
-        full vs reduced numeric response over a wide grid, not the scan's
-        estimate. Returns the summary the GUI banners."""
+        that follows, and measure what the rewrite cost end to end — full
+        vs reduced numeric response over a wide grid, not the scans'
+        estimates. `nodes` are AC-grounded, `removals` (instance names
+        from the removal scan, lumped equivalents included) are deleted
+        outright. Returns the summary the GUI banners."""
         from .analysis import tearing
 
         nodes = list(nodes)
-        if not nodes:
-            raise ValueError("apply_reduction: empty node set")
+        removals = list(removals)
+        if not nodes and not removals:
+            raise ValueError("apply_reduction: nothing to apply")
         base = self._run.analyzer(cap_model=self.cap_model,
                                     mos_model=self.mos_model)
         for group in self._matches:
             base.match(*group)
         gnd = base.flat.ground
-        summary = self.preview_reduction(nodes)
+        summary = self.preview_reduction(nodes, removals)
 
-        self._reduction = {"nodes": nodes}
+        self._reduction = {"nodes": nodes, "removals": removals}
         self._analyzer = None
         self._cache.clear()
         self._op_values = None       # OP symbols changed with the circuit
@@ -1240,8 +1873,80 @@ class SessionController:
             d = dict(e)
             # the members as the join keys H(s) uses (dots -> underscores)
             d["members"] = [m.replace(".", "_") for m in e["members"]]
+            d["member_values"] = {m.replace(".", "_"): v for m, v in
+                                  (e.get("member_values") or {}).items()}
             out.append(d)
         return out
+
+    def equivalent_definitions(self) -> list:
+        """[(name, sympy expr over the member symbols, value)] for the
+        active reduction's lumped equivalents: a G/C equivalent is the
+        SUM of its members, an R equivalent the parallel combination.
+        The member symbols are the engine's (positive=True), so the
+        expression substitutes cleanly into a result's H(s)."""
+        import sympy as sp
+
+        out = []
+        for e in self.equivalent_elements():
+            syms = [sp.Symbol(m, positive=True) for m in e["members"]]
+            if e["kind"] == "r":
+                expr = 1 / sum(1 / s_ for s_ in syms)
+            else:
+                expr = sum(syms)
+            out.append((e["name"], expr, e["value"]))
+        return out
+
+    def expand_equivalents(self, result):
+        """A derived Result whose H(s) has every lumped equivalent
+        replaced by its member expression, so A0, N(s), D(s), p1, z1
+        read in the original device symbols. The member values join
+        the value map (hover). Cached on the result; the result itself
+        is returned when there is nothing to expand."""
+        import sympy as sp
+        from dataclasses import replace as _replace
+
+        defs = self.equivalent_definitions()
+        tf = getattr(result, "tf", None)
+        if not defs or tf is None or not hasattr(tf, "expr"):
+            return result
+        cached = getattr(result, "_expanded_result", None)
+        if cached is not None and cached[0] == [d[0] for d in defs]:
+            return cached[1]
+        by_name = {str(s_): s_ for s_ in tf.expr.free_symbols}
+        subs = {}
+        for name, expr, _val in defs:
+            if name in by_name:
+                subs[by_name[name]] = expr
+        if not subs:
+            return result
+        new_expr = tf.expr.xreplace(subs)
+        values = dict(getattr(tf, "values", {}) or {})
+        symbols = dict(getattr(tf, "symbols", {}) or {})
+        mvals = {}
+        for e in self.equivalent_elements():
+            mvals.update(e.get("member_values") or {})
+        for name, expr, _val in defs:
+            for s_ in expr.free_symbols:
+                n = str(s_)
+                symbols.setdefault(n, s_)
+                if n in mvals and n not in values:
+                    values[n] = float(mvals[n])
+        try:
+            new_tf = _replace(tf, expr=new_expr, values=values,
+                              symbols=symbols)
+        except TypeError:
+            # a TransferFunction subclass without dataclass fields for
+            # these: fall back to a plain TransferFunction
+            from .engine.mna import TransferFunction
+            new_tf = TransferFunction(expr=new_expr, values=values,
+                                      symbols=symbols)
+        new_result = _replace(result, tf=new_tf)
+        try:
+            object.__setattr__(result, "_expanded_result",
+                               ([d[0] for d in defs], new_result))
+        except Exception:                        # noqa: BLE001
+            pass
+        return new_result
 
     def reduction_summary(self) -> dict | None:
         """The apply_reduction summary of the active reduction, or None."""
@@ -1298,9 +2003,15 @@ class SessionController:
         else:
             h_matched = h_pristine
         if self._reduction is not None:
+            bits = []
+            if self._reduction["nodes"]:
+                bits.append("grounded "
+                            + ", ".join(self._reduction["nodes"]))
+            if self._reduction.get("removals"):
+                bits.append("removed "
+                            + ", ".join(self._reduction["removals"]))
             entries.append({
-                "step": ("AC-ground reduction ["
-                         + ", ".join(self._reduction["nodes"]) + "]"),
+                "step": "reduction [" + "; ".join(bits) + "]",
                 "score": float(crit.score(freqs, h_matched, h_working)),
                 "exact": False})
         lump = working.lumped_gmb
@@ -1621,12 +2332,14 @@ class SessionController:
                      poles_hz=base.poles_hz, zeros_hz=base.zeros_hz)
 
     def _certificate_details(self, r, inp, out, fmin, fmax, eps_eq,
-                             n_sel, label="") -> list[str]:
+                             n_sel, label="", cert=None) -> list[str]:
         """The order-certificate verdict + doublet caveat, shared by the
-        anchored and strategy reduce reports. Advisory: a certificate
-        failure never breaks the solve that earned it."""
+        anchored and strategy reduce reports (and the impedance lowest
+        order, which brings its own certificate). Advisory: a
+        certificate failure never breaks the solve that earned it."""
         try:
-            cert = self.order_certificate(inp, out, fmin, fmax)
+            if cert is None:
+                cert = self.order_certificate(inp, out, fmin, fmax)
             r.certificate = cert
             k = cert.order_at(eps_eq)
             if n_sel <= k:
@@ -1699,8 +2412,18 @@ class SessionController:
                                    progress=progress, note=note)
             Hs = H.simplify(mag_tol_db=mag_db, phase_tol_deg=phase_deg,
                             fmin=fmin, fmax=fmax)
+            # the coefficient snap: the leading numeral of the DC gain
+            # (a collapsed ratio of unkept parameters on the path) goes
+            # to exactly 1 when the snapped form still meets the
+            # contract against the FULL response -- one more measured
+            # approximation, never a cosmetic rounding
+            from .analysis.simplify import snap_unity
+
+            full = self.solve(inp, out, [])
+            Hs, snap_k, snap_err = snap_unity(Hs, crit, full.freqs, full.h)
             r = self._assemble(Hs, inp, out, keep, reference=reference,
                                fmin=fmin, fmax=fmax, points=points)
+            r.snap_factor = float(snap_k)
             band_err = float(red.errors_db[-1]) if red.errors_db else \
                 float(red.baseline_db)
             r.simplified = True
@@ -1742,6 +2465,13 @@ class SessionController:
                 r.warnings.insert(
                     0, crit.headline(red, band_err, fmin, fmax,
                                      tol_db=tol_db))
+            if snap_err is not None:
+                r.details.append(
+                    f"coefficient snap: the DC gain's leading numeral "
+                    f"{snap_k:.4g} (a collapsed ratio of unkept parameters "
+                    f"on the path) divided out -- a uniform {snap_err:.3g} "
+                    f"dB shift, measured within the budget against the full "
+                    f"response")
             self._cache[key] = r
         return self._cache[key]
 
@@ -1759,6 +2489,21 @@ class SessionController:
         mos_model='lumped-gmb'; empty when separate. What the strip
         reports after the toggle."""
         return dict(self._analyzer_ready().lumped_gmb)
+
+    def model_values(self, name: str) -> dict:
+        """param -> the value the WORKING model uses for this device,
+        after the match policy, the gmb lump and any reduction: what a
+        symbol of it is worth in the next solve. Empty when the device
+        has no live primitive (lumped away, reduced)."""
+        out = {}
+        try:
+            prims = self._analyzer_ready().primitives
+        except Exception:                        # noqa: BLE001
+            return out
+        for p in prims:
+            if p.inst == name and p.value is not None                     and isinstance(p.value, (int, float)):
+                out[p.param or p.kind] = float(p.value)   # a passive's
+        return out                                        # value is its kind
 
     def device_op(self, name: str) -> dict:
         """The full OP record of one device (region, vds, vdsat, ... --

@@ -14,7 +14,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import os
+
 try:
+    if os.environ.get("CIN_NO_WEBENGINE"):
+        # opt-out for displays where Chromium's start-up stalls the GUI
+        # thread (X11 over VNC without GL): the matplotlib/QTextEdit
+        # surfaces come back, nothing of Chromium is touched
+        raise ImportError("CIN_NO_WEBENGINE set")
     from PySide6.QtCore import QObject, QUrl, Signal, Slot
     from PySide6.QtWebChannel import QWebChannel
     from PySide6.QtWebEngineWidgets import QWebEngineView

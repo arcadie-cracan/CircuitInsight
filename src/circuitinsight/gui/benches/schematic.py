@@ -32,8 +32,8 @@ from ...schematic import (ComposeError, SymbolLibrary, compose,
                           page, sidecar_path)
 from ...schematic.blocks import propose, save_block_symbols
 from ...schematic.compose import (NET_ACGROUND, STYLE_LUMPED,
-                                  STYLE_NUMERIC, STYLE_REMOVED,
-                                  STYLE_SYMBOLIC, _xml_id)
+                                  STYLE_NUMERIC, STYLE_PASSIVE,
+                                  STYLE_REMOVED, STYLE_SYMBOLIC, _xml_id)
 
 
 def hints_path(cin_path) -> Path:
@@ -48,6 +48,9 @@ class SchematicView(QGraphicsView):
     """Zoomable, pannable SVG with instance hit-testing."""
     instanceClicked = Signal(str, str)      # name, kind
     instanceActivated = Signal(str, str)    # double-click
+    backgroundClicked = Signal()            # click on nothing: deselect
+    netClicked = Signal(str)                # click on a wire: its net
+    netMenu = Signal(str, object)           # right-click on a wire
     instanceMenu = Signal(str, str, object)  # right-click: name, kind, QPoint
 
     def __init__(self, parent=None):
@@ -69,13 +72,19 @@ class SchematicView(QGraphicsView):
         self._item: QGraphicsSvgItem | None = None
         self._bounds: dict = {}          # name -> (QRectF item coords, kind)
         self._hl: QGraphicsRectItem | None = None
-        self._sx = self._sy = 1.0
+        self._net_hl = None              # the selected net's wire run
+        self._net_wires: dict = {}       # net -> [polyline (mm)], from
+        self._sx = self._sy = 1.0        # the composer
 
     # ----------------------------------------------------------- content
-    def load_svg(self, svg: str, instances: dict) -> None:
-        """instances: name -> kind (device/block/glyph)."""
+    def load_svg(self, svg: str, instances: dict,
+                 net_wires: dict | None = None) -> None:
+        """instances: name -> kind (device/block/glyph); net_wires:
+        net -> [polyline in SVG user units], for the net highlight."""
         self._scene.clear()
         self._hl = None
+        self._net_hl = None
+        self._net_wires = dict(net_wires or {})
         self._bounds = {}
         self._item = QGraphicsSvgItem()
         self._renderer = self._item.renderer()
@@ -131,6 +140,59 @@ class SchematicView(QGraphicsView):
     def bounds_of(self, name: str):
         return self._bounds.get(name, (None, None))[0]
 
+    def hit_net(self, view_pos):
+        """The net whose wire runs nearest the view point, within a
+        lane's width -- None when nothing is close. Instances win over
+        wires (hit() is asked first), so this only fires on the open
+        wire between symbols."""
+        if self._item is None or not self._net_wires:
+            return None
+        p = self._item.mapFromScene(self.mapToScene(view_pos))
+        vb = self._renderer.viewBoxF()
+        qx = p.x() / self._sx + vb.x()
+        qy = p.y() / self._sy + vb.y()
+        tol = 0.8                          # mm: most of a 1 mm lane
+        best = None
+        for net, polys in self._net_wires.items():
+            for pts in polys:
+                for (ax, ay), (bx, by) in zip(pts, pts[1:]):
+                    dx, dy = bx - ax, by - ay
+                    L2 = dx * dx + dy * dy
+                    t = 0.0 if L2 == 0 else max(
+                        0.0, min(1.0, ((qx - ax) * dx + (qy - ay) * dy)
+                                 / L2))
+                    ex, ey = ax + t * dx - qx, ay + t * dy - qy
+                    d = (ex * ex + ey * ey) ** 0.5
+                    if d <= tol and (best is None or d < best[0]):
+                        best = (d, net)
+        return best[1] if best else None
+
+    def highlight_net(self, net: str | None) -> None:
+        """The net's own wire run, overdrawn -- a bounding rect around
+        a whole net would cover half the page."""
+        if self._net_hl is not None:
+            self._scene.removeItem(self._net_hl)
+            self._net_hl = None
+        polys = self._net_wires.get(net) if net else None
+        if not polys or self._item is None:
+            return
+        from PySide6.QtGui import QPainterPath
+
+        vb = self._renderer.viewBoxF()
+        path = QPainterPath()
+        for pts in polys:
+            x0, y0 = pts[0]
+            path.moveTo((x0 - vb.x()) * self._sx,
+                        (y0 - vb.y()) * self._sy)
+            for x, y in pts[1:]:
+                path.lineTo((x - vb.x()) * self._sx,
+                            (y - vb.y()) * self._sy)
+        pen = QPen(QColor(213, 94, 0, 200), 1.0)
+        pen.setCapStyle(Qt.RoundCap)
+        item = self._scene.addPath(self._item.mapToScene(path), pen)
+        item.setZValue(10)
+        self._net_hl = item
+
     # ------------------------------------------------------------ events
     def wheelEvent(self, ev):
         f = 1.15 if ev.angleDelta().y() > 0 else 1 / 1.15
@@ -141,6 +203,12 @@ class SchematicView(QGraphicsView):
             h = self.hit(ev.position().toPoint())
             if h:
                 self.instanceClicked.emit(*h)
+            else:
+                net = self.hit_net(ev.position().toPoint())
+                if net:
+                    self.netClicked.emit(net)
+                else:
+                    self.backgroundClicked.emit()
         super().mousePressEvent(ev)
 
     def mouseDoubleClickEvent(self, ev):
@@ -153,6 +221,10 @@ class SchematicView(QGraphicsView):
         h = self.hit(ev.pos())
         if h:
             self.instanceMenu.emit(h[0], h[1], ev.globalPos())
+            return
+        net = self.hit_net(ev.pos())
+        if net:
+            self.netMenu.emit(net, ev.globalPos())
             return
         super().contextMenuEvent(ev)
 
@@ -194,6 +266,9 @@ class SchematicMixin:
         self.sch_view.instanceClicked.connect(self._schematic_clicked)
         self.sch_view.instanceActivated.connect(self._schematic_activated)
         self.sch_view.instanceMenu.connect(self._schematic_menu)
+        self.sch_view.backgroundClicked.connect(self._schematic_deselect)
+        self.sch_view.netClicked.connect(self._schematic_net_clicked)
+        self.sch_view.netMenu.connect(self._schematic_net_menu)
         v.addWidget(self.sch_view, 1)
         self._sch_hints = None
         self._sch_cin = None
@@ -272,6 +347,8 @@ class SchematicMixin:
         if not self._sch_synced:
             self.devices.itemSelectionChanged.connect(
                 self._schematic_follow_tree)
+            self.nets_tree.itemSelectionChanged.connect(
+                self._schematic_follow_nets)
             self._sch_synced = True
         self._schematic_render()
 
@@ -295,13 +372,16 @@ class SchematicMixin:
                 styles, net_styles = self._schematic_styles()
             except Exception:                     # noqa: BLE001
                 styles, net_styles = ({}, {})     # decoration only
+        tints = self._schematic_tints()
         try:
             pg = page(self._sch_hints, defname)
             svg = compose(pg, devtypes, self._sch_lib, subckts=subckts,
                           block_symbols=self._sch_blocks,
                           styles=styles, net_styles=net_styles,
                           proposed_cells=self._schematic_proposed(pg,
-                                                                  subckts))
+                                                                  subckts),
+                          tints=tints, tex_labels=True,
+                          aliases=self._schematic_aliases())
         except (ComposeError, KeyError, ValueError) as e:
             self._sch_status.setText(f"{defname}: {e}")
             self._schematic_crumbs()
@@ -309,18 +389,22 @@ class SchematicMixin:
         insts = dict(getattr(compose, "last_instances", {}))
         kinds = {n: ("block" if c in subckts else "device")
                  for n, c in insts.items()}
-        self.sch_view.load_svg(svg, kinds)
+        self.sch_view.load_svg(
+            svg, kinds,
+            net_wires=dict(getattr(compose, "last_net_wires", {})))
         n_blk = sum(1 for k in kinds.values() if k == "block")
         bits = [f"{len(insts)} instances, {len(pg.wires)} wires"]
         if n_blk:
             bits.append(f"{n_blk} block(s) — double-click to descend")
         n_acg = sum(1 for v in net_styles.values() if v == NET_ACGROUND)
         n_rm = sum(1 for v in styles.values() if v == STYLE_REMOVED)
+        n_pv = sum(1 for v in styles.values() if v == STYLE_PASSIVE)
         n_sym = sum(1 for v in styles.values() if v == STYLE_SYMBOLIC)
         n_num = sum(1 for v in styles.values() if v == STYLE_NUMERIC)
         n_lump = sum(1 for v in styles.values() if v == STYLE_LUMPED)
         state = [f"{n} {what}" for n, what in (
             (n_acg, "net(s) AC-grounded"), (n_rm, "removed"),
+            (n_pv, "turned into loads (gm dead)"),
             (n_lump, "ĝm-lumped"), (n_sym, "in the formula"),
             (n_num, "numeric")) if n]
         if state:
@@ -353,10 +437,30 @@ class SchematicMixin:
                 ln = local(n)
                 if ln:
                     nets[ln] = NET_ACGROUND
-            for d in summ.get("dead_sources", []):
+            # faded = nothing of the device is left; a device whose
+            # transconductance died but whose gds/caps remain is a
+            # load and stays drawn (the input pair lost only its gmbs)
+            gone = summ.get("devices_silenced")
+            if gone is None:                         # older summaries
+                gone = summ.get("dead_sources", [])
+            for d in gone:
                 ld = local(d)
                 if ld:
                     styles[ld] = STYLE_REMOVED
+            # an explicit element deleted by the removal scan's Apply
+            # is gone outright (equivalents are not drawn; local() skips
+            # them)
+            for d in summ.get("removed", []):
+                ld = local(d)
+                if ld:
+                    styles[ld] = STYLE_REMOVED
+            # a device whose gm died is a load now (a mirror with its
+            # gate grounded); one that lost only gmbs is untouched
+            for prim in summ.get("dead_primitives", []):
+                if prim.startswith("gm_"):
+                    ld = local(prim[len("gm_"):])
+                    if ld and ld not in styles:
+                        styles[ld] = STYLE_PASSIVE
         try:
             for d, how in c.lumped_gmb().items():
                 ld = local(d)
@@ -371,7 +475,8 @@ class SchematicMixin:
             present = {str(x) for x in expr.free_symbols}
             for d in c.devices:
                 ld = local(d.name)
-                if not ld or styles.get(ld) == STYLE_REMOVED:
+                if not ld or styles.get(ld) in (STYLE_REMOVED,
+                                                STYLE_PASSIVE):
                     continue
                 key = d.name.replace(".", "_")
                 if d.name in present or any(
@@ -380,6 +485,48 @@ class SchematicMixin:
                 elif ld not in styles:
                     styles[ld] = STYLE_NUMERIC
         return styles, nets
+
+    def _schematic_aliases(self) -> dict:
+        """Device-level LaTeX aliases (the Instances tree's 'Set LaTeX
+        alias') for this page, by local name: M_1 is typeset as math
+        on the schematic, as in the expressions."""
+        c = getattr(self, "controller", None)
+        if c is None:
+            return {}
+        pre = self._schematic_prefix()
+        names = {d.name for d in c.devices}
+        out = {}
+        for full, tex in (getattr(c, "sym_aliases", {}) or {}).items():
+            if full not in names:
+                continue                       # a per-symbol alias
+            if pre:
+                if full.startswith(pre):
+                    out[full[len(pre):]] = tex
+            elif "." not in full:
+                out[full] = tex
+        return out
+
+    def _schematic_tints(self) -> dict:
+        """Matched devices on this page: name -> (tint, '🔗n'), the
+        same tint and group number the Instances tree shows, so a
+        matched pair reads as one across the two views."""
+        from ..devtree import GROUP_TINTS, LINK
+
+        pre = self._schematic_prefix()
+        out = {}
+        for gi, group in enumerate(getattr(self, "_match_groups", [])):
+            fill = GROUP_TINTS[gi % len(GROUP_TINTS)]
+            for full in group:
+                if pre:
+                    if not full.startswith(pre):
+                        continue
+                    local = full[len(pre):]
+                elif "." in full:
+                    continue
+                else:
+                    local = full
+                out[local] = (fill, f"{LINK}{gi + 1}")
+        return out
 
     def _schematic_restyle(self):
         """Re-draw the current page with the session's state; cheap
@@ -442,11 +589,13 @@ class SchematicMixin:
                 lambda: self._schematic_clicked(name, kind))
         menu.exec(gpos)
 
-    def _schematic_symbol_dialog(self, name: str):
+    def _schematic_symbol_dialog(self, name: str, dialog_cls=None):
         """Confirm (or drop) the symbol for the block's cell; the
-        sidecar is the record, the page re-renders from it."""
+        sidecar is the record, the page re-renders from it.
+        dialog_cls: a test double for the dialog."""
         from ..blockdialog import BlockSymbolDialog
 
+        BlockSymbolDialog = dialog_cls or BlockSymbolDialog
         if not self._sch_hints or self._sch_lib is None:
             return
         defname = self._sch_path[-1][1]
@@ -460,7 +609,11 @@ class SchematicMixin:
         ports = list(cdef.get("ports") or inst.terms.keys())
         proposal = self._schematic_proposal(cell, inst.terms)
         dlg = BlockSymbolDialog(cell, ports, self._sch_lib, proposal, self)
-        if dlg.exec() != dlg.Accepted:
+        dlg.exec()
+        # the dialog's own outcome, not exec()'s return value: in
+        # PySide6 that int never compares equal to the DialogCode enum,
+        # which made every OK read as Cancel
+        if dlg.result_mapping is None and not dlg.draw_as_box:
             return
         if dlg.draw_as_box:
             if cell in self._sch_mapping:
@@ -497,9 +650,85 @@ class SchematicMixin:
             self._schematic_render()
 
     def _schematic_clicked(self, name: str, kind: str):
+        self.sch_view.highlight_net(None)
         self.sch_view.highlight(name)
         if kind == "device":
             self._goto_instance(self._schematic_prefix() + name)
+
+    def _schematic_net_clicked(self, local: str):
+        """A click on a wire selects its net in the Nets tree -- the
+        selection then lights the run, the exact mirror of the
+        instance click. Passthrough names (supplies) have no page
+        prefix, so the bare name is the fallback."""
+        for full in (self._schematic_prefix() + local, local):
+            it = self.nets_tree.item_for(full)
+            if it is not None:
+                self.dev_tabs.setCurrentWidget(self.nets_tree)
+                self.nets_tree.setCurrentItem(it)
+                self.nets_tree.scrollToItem(it)
+                self.statusBar().showMessage(f"net: {full}")
+                return
+
+    def _schematic_net_actions(self, full: str, local: str,
+                               others=()) -> list:
+        """The wire's verbs: the same ones the Nets tree offers.
+        [(label, callable)], empty for ground. `others`: nets already
+        selected when the wire was clicked -- exactly one adds the
+        two-net verb, Z between the pair."""
+        gnd = set(self.controller.ground) | {"0"} if self.controller \
+            else {"0"}
+        if full in gnd:
+            return []
+        acts = [
+            ("Set as output", lambda: self._set_output_net(full)),
+            ("AC ground (measure cost)…",
+             lambda: self._acg_from_net(full)),
+            (f"Impedance at {local}",
+             lambda: self._impedance_at_nets(full, "")),
+        ]
+        others = [o for o in others if o != full and o not in gnd]
+        if len(others) == 1:
+            o = others[0]
+            acts.append((f"Impedance between {local} and "
+                         f"{o.split('.')[-1]}",
+                         lambda: self._impedance_at_nets(full, o)))
+        return acts
+
+    def _schematic_net_menu(self, local: str, gpos):
+        """Right-click on a wire: select the net (so the mark shows
+        what the menu applies to), then the Nets tree's own verbs. A
+        net selected beforehand -- click one wire, right-click the
+        other -- stays selected and adds Z between the pair."""
+        full = next((c for c in (self._schematic_prefix() + local, local)
+                     if self.nets_tree.item_for(c) is not None), None)
+        if full is None:
+            return
+        others = [n for n in self.nets_tree.selected_nets()
+                  if n != full]
+        self._schematic_net_clicked(local)
+        if len(others) == 1:
+            prev = self.nets_tree.item_for(others[0])
+            if prev is not None:
+                prev.setSelected(True)        # the pair stays visible
+        actions = self._schematic_net_actions(full, local, others)
+        if not actions:
+            return
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        for i, (label, fn) in enumerate(actions):
+            if i == 2:
+                menu.addSeparator()          # impedance verbs together
+            menu.addAction(label, fn)
+        menu.exec(gpos)
+
+    def _schematic_deselect(self):
+        """A click on the background clears the selection, here and in
+        the Instances tree (the two are one selection)."""
+        self.sch_view.highlight(None)
+        self.sch_view.highlight_net(None)
+        self.devices.clearSelection()
+        self.nets_tree.clearSelection()
 
     def _schematic_follow_tree(self):
         """Tree selection -> highlight, when the device is on this page."""
@@ -511,6 +740,28 @@ class SchematicMixin:
             if full.startswith(pre):
                 local = full[len(pre):]
                 if self.sch_view.bounds_of(local) is not None:
+                    self.sch_view.highlight_net(None)
                     self.sch_view.highlight(local)
                     return
         self.sch_view.highlight(None)
+
+    def _schematic_follow_nets(self):
+        """Nets-tree selection -> the net's wires light up, when the
+        net is on this page: the same cross-probe an instance gets.
+        Passthrough names (supplies, globals) are never prefixed, so
+        they match on any page."""
+        if not self._sch_hints:
+            return
+        pre = self._schematic_prefix()
+        for full in self.nets_tree.selected_nets():
+            if full.startswith(pre) and len(full) > len(pre):
+                local = full[len(pre):]
+            elif "." not in full:
+                local = full                  # vdd! and friends
+            else:
+                continue
+            if "." not in local and self.sch_view._net_wires.get(local):
+                self.sch_view.highlight(None)
+                self.sch_view.highlight_net(local)
+                return
+        self.sch_view.highlight_net(None)

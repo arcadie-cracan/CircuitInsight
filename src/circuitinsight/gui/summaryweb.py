@@ -13,7 +13,11 @@ from __future__ import annotations
 
 import html as _html
 
+import os
+
 try:
+    if os.environ.get("CIN_NO_WEBENGINE"):
+        raise ImportError("CIN_NO_WEBENGINE set")   # see exprweb
     from PySide6.QtWebEngineWidgets import QWebEngineView
     WEBENGINE = True
 except Exception:                                     # pragma: no cover

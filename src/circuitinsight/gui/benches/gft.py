@@ -45,19 +45,35 @@ class GFTBenchMixin:
         if not probe or not ref:
             self.statusBar().showMessage("GFT needs a probe and an error ref")
             return
+        # the form ladder, GFT flavor: the bench is numeric, so full
+        # order (expression pruning) has nothing to act on and its
+        # entry is disabled in this mode; the lowest order computes
+        # the quartet OF THE REDUCED MODEL -- the identity is then
+        # exact on that model, and the reduction is the one priced
+        # approximation
+        reduce_kw = None
+        if self.form_combo.currentText() == "Simplified · lowest order":
+            fl, fh = self.band_slider.values()
+            reduce_kw = dict(strategy=self._strategy(),
+                             strategy_opts=self._strategy_opts(),
+                             fmin=fl, fmax=fh)
 
         def fn(_cb):
-            return self._gft_compute(probe, inp, out, ref, c)
+            return self._gft_compute(probe, inp, out, ref, c,
+                                     reduce_kw=reduce_kw)
 
         self._launch(fn, f"GFT dissection at {probe}…",
                      on_done=self._on_gft_done)
 
-    def gft_sync(self, probe, inp, out, ref, c):
-        payload = self._gft_compute(probe, inp, out, ref, c)
+    def gft_sync(self, probe, inp, out, ref, c, reduce_kw=None):
+        payload = self._gft_compute(probe, inp, out, ref, c,
+                                    reduce_kw=reduce_kw)
         self._on_gft_done(payload)
         return payload
 
-    def _gft_compute(self, probe, inp, out, ref, c):
+    def _gft_compute(self, probe, inp, out, ref, c, reduce_kw=None):
+        import dataclasses
+
         import numpy as np
         import sympy as sp
 
@@ -68,6 +84,39 @@ class GFTBenchMixin:
         an = self.controller._analyzer_ready()
         sys_in = an.system(inp)
         sys_pr = an.system(probe)
+        headline = None
+        if reduce_kw is not None:
+            from ...analysis.criteria import make_criterion
+            from ...analysis.sensitivity import _reactive_symbols
+
+            strat = reduce_kw.get("strategy")
+            opts = dict(reduce_kw.get("strategy_opts") or {})
+            lo = float(reduce_kw.get("fmin", 1e3))
+            hi = float(reduce_kw.get("fmax", 1e7))
+            tol_db = float(reduce_kw.get("tol_db", 0.5))
+            red = an.dominant_reactances(inp, out, tol_db, lo, hi,
+                                         strategy=strat,
+                                         strategy_opts=opts)
+            dropped = set(_reactive_symbols(an)) - set(red.selected)
+
+            def _zero(sysm):
+                vals = dict(sysm.values)
+                for n in dropped:
+                    if n in vals:
+                        vals[n] = 0.0
+                return dataclasses.replace(sysm, values=vals)
+
+            sys_in = _zero(sys_in)
+            sys_pr = _zero(sys_pr)
+            crit = make_criterion(strategy=strat, strategy_opts=opts,
+                                  eps=None, tol_db=tol_db)
+            band_err = (float(red.errors_db[-1]) if red.errors_db
+                        else float(red.baseline_db))
+            headline = ("quartet of the REDUCED model: "
+                        + (crit.headline(red, band_err, lo, hi)
+                           if crit.name
+                           else crit.headline(red, band_err, lo, hi,
+                                              tol_db=tol_db)))
         A = nested_gft._exact_A(sys_pr)
         pr = _probe_indices(sys_pr, probe)
         err = (nested_gft._node(sys_pr, ref), int(c))
@@ -87,7 +136,8 @@ class GFTBenchMixin:
             if r != 0:
                 worst = max(worst, abs(float((r / q["H"]).evalf())))
         return {"freqs": freqs, "q": pack, "residual": worst,
-                "probe": probe, "ref": ref, "c": c, "inp": inp, "out": out}
+                "probe": probe, "ref": ref, "c": c, "inp": inp,
+                "out": out, "headline": headline}
 
     def _on_gft_done(self, payload):
         import numpy as np
@@ -134,10 +184,12 @@ class GFTBenchMixin:
         self.canvas.draw_idle()
         res = payload["residual"]
         sign = "+" if payload["c"] > 0 else "−"
+        head = payload.get("headline")
+        tail = f" — {head}" if head else ""
         if res == 0.0:
             self._set_strip("GFT identity EXACT (rational residual 0.0) at "
                             f"probe {payload['probe']}, error "
-                            f"v({payload['ref']}) {sign} v(p)",
+                            f"v({payload['ref']}) {sign} v(p)" + tail,
                             "ok")
         else:
             self._set_strip(f"GFT identity residual {res:.2e} -- designation "

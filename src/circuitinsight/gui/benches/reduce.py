@@ -4,82 +4,127 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget)
+    QAbstractItemView, QGroupBox, QHBoxLayout, QLabel, QPushButton,
+    QSizePolicy, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout,
+    QWidget)
 from .. import theme
 from .. import view
 
 class ReduceBenchMixin:
     # --------------------------------------------------------- compensation
-    def _reduce_page(self):
-        """The Reduce-circuit bench (gui-ux-plan.md U-C): scan the bias
-        nodes, tick a set, watch the measured joint cost and the exact
-        follow-on (dead sources, lumping) update, then Apply — the reduced
-        circuit becomes THE working circuit for every bench, revertibly.
-        Grounding is the only approximation in the chain; everything shown
-        after it is exact for the rewritten circuit."""
-        page = QWidget()
-        v = QVBoxLayout(page)
-        row = QHBoxLayout()
-        self.removal_btn = QPushButton("Scan removals")
-        self.removal_btn.setToolTip(
-            "Which explicit elements can simply be DELETED: every netlist "
-            "passive priced by the exact response shift its removal would "
-            "cause. Advisory only -- edit the schematic to act on it.")
-        self.removal_btn.clicked.connect(self.run_removal_scan)
+    def _reduce_candidates_col(self):
+        """The whole Reduce bench as ONE full-height column in the left
+        side's second slot (the symbols column's, idle here): the
+        two candidate tabs -- AC grounds, Device removals -- each with
+        its scan verb above its tick table, the ticked set's joint
+        price with Apply, the applied headline right below the button
+        that produced it with the verb that undoes it, and the
+        evidence. The tables are declarative: Apply re-derives
+        the working circuit from whatever is ticked in both tabs, and
+        grounding and outright deletion are the only approximations in
+        the chain -- everything shown after them is exact for the
+        rewritten circuit. No bottom bench tab: the plot keeps the
+        room."""
+        from PySide6.QtWidgets import QTabWidget
+
+        col = QWidget()
+        v = QVBoxLayout(col)
+        v.setContentsMargins(2, 2, 2, 2)
+        v.setSpacing(4)
+
+        tabs = QTabWidget()
+        tabs.setObjectName("reduce_cands")
+
+        pg = QWidget()
+        pv = QVBoxLayout(pg)
+        pv.setContentsMargins(2, 2, 2, 2)
+        pv.setSpacing(2)
         scanb = QPushButton("Scan AC grounds")
         scanb.setToolTip(
             "Rank the mirror/bias nodes by the EXACT error grounding each "
             "would cause in the current in→out transfer (one matrix inverse "
             "per frequency prices every node)")
         scanb.clicked.connect(self.run_acg_scan)
-        row.addWidget(scanb)
-        row.addWidget(self.removal_btn)
-        # NO local budget knob: the scans gate under the toolbar's
-        # tolerance strategy -- one contract for every approximation
-        # (a second dB spin here would be the pm_spin class of dead
-        # knob, or worse, a live one that silently disagrees)
-        self.acg_joint_lbl = QLabel("")
-        self.acg_joint_lbl.setSizePolicy(QSizePolicy.Ignored,
-                                         QSizePolicy.Preferred)
-        row.addWidget(self.acg_joint_lbl, 1)
-        v.addLayout(row)
-
+        self.acg_scan_btn = scanb
+        pv.addWidget(scanb)
         self.acg_tbl = QTableWidget(0, 5)
         self.acg_tbl.setHorizontalHeaderLabels(
             ["node", "cost", "phase", "kind", "gates"])
         self.acg_tbl.horizontalHeader().setStretchLastSection(True)
         self.acg_tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.acg_tbl.itemChanged.connect(self._on_acg_toggled)
-        v.addWidget(self.acg_tbl, 2)
+        pv.addWidget(self.acg_tbl, 1)
+        tabs.addTab(pg, "AC grounds")
 
+        pg2 = QWidget()
+        rv = QVBoxLayout(pg2)
+        rv.setContentsMargins(2, 2, 2, 2)
+        rv.setSpacing(2)
+        self.removal_btn = QPushButton("Scan removals")
+        self.removal_btn.setToolTip(
+            "Which explicit elements can simply be DELETED: every netlist "
+            "passive priced by the exact response shift its removal would "
+            "cause. Tick the priced elements below; Apply deletes them "
+            "from the working circuit.")
+        self.removal_btn.clicked.connect(self.run_removal_scan)
+        rv.addWidget(self.removal_btn)
+        self.rm_tbl = QTableWidget(0, 5)
+        self.rm_tbl.setHorizontalHeaderLabels(
+            ["element", "value", "cost", "phase", "kind"])
+        self.rm_tbl.horizontalHeader().setStretchLastSection(True)
+        self.rm_tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.rm_tbl.itemChanged.connect(self._on_acg_toggled)
+        rv.addWidget(self.rm_tbl, 1)
+        tabs.addTab(pg2, "Device removals")
+        self.reduce_tabs = tabs
+        v.addWidget(tabs, 1)
+
+        # the TICKED set's joint price and the verb that enacts it.
+        # NO local budget knob: the scans gate under the toolbar's
+        # tolerance strategy -- one contract for every approximation
+        # (a second dB spin here would be the pm_spin class of dead
+        # knob, or worse, a live one that silently disagrees)
+        self.acg_joint_lbl = QLabel("")
+        self.acg_joint_lbl.setWordWrap(True)
+        v.addWidget(self.acg_joint_lbl)
+        self.acg_apply = QPushButton("Apply reduction")
+        self.acg_apply.setEnabled(False)
+        self.acg_apply.setToolTip(
+            "Rewrite the working circuit: ground the ticked nodes, remove "
+            "the dead sources, lump, and delete the ticked elements. "
+            "Measures the true end-to-end cost. Every bench then analyses "
+            "the reduced circuit.")
+        self.acg_apply.clicked.connect(self.apply_reduction)
+        v.addWidget(self.acg_apply)
+
+        # the APPLIED state with its measured cost, right below the
+        # button that produced it -- where the eye lands on click --
+        # and the one verb that undoes it
+        self.red_banner = QLabel("circuit: as imported")
+        self.red_banner.setWordWrap(True)
+        v.addWidget(self.red_banner)
+        self.acg_revert = QPushButton("Revert to as-imported")
+        self.acg_revert.setEnabled(False)
+        self.acg_revert.clicked.connect(self.revert_reduction)
+        v.addWidget(self.acg_revert)
+
+        # the evidence: what Apply does, collapsed by default
         self.acg_preview = QTextEdit()
         self.acg_preview.setReadOnly(True)
         self.acg_preview.setPlaceholderText(
             "Tick nodes above to see what grounding them unlocks: the "
             "controlled sources that die (exact) and the passives that "
-            "lump into C_node / R_node symbols (exact).")
-        v.addWidget(self.acg_preview, 1)
-
-        arow = QHBoxLayout()
-        self.acg_apply = QPushButton("Apply reduction")
-        self.acg_apply.setEnabled(False)
-        self.acg_apply.setToolTip(
-            "Rewrite the working circuit: ground the ticked nodes, remove "
-            "the dead sources, lump. Measures the true end-to-end cost and "
-            "banners it. Every bench then analyses the reduced circuit.")
-        self.acg_apply.clicked.connect(self.apply_reduction)
-        arow.addWidget(self.acg_apply)
-        self.acg_revert = QPushButton("Revert to as-imported")
-        self.acg_revert.setEnabled(False)
-        self.acg_revert.clicked.connect(self.revert_reduction)
-        arow.addWidget(self.acg_revert)
-        self.red_banner = QLabel("circuit: as imported")
-        self.red_banner.setSizePolicy(QSizePolicy.Ignored,
-                                      QSizePolicy.Preferred)
-        arow.addWidget(self.red_banner, 1)
-        v.addLayout(arow)
+            "lump into C_node / G_node symbols (exact).")
+        self.acg_preview.setMaximumHeight(110)
+        self.acg_evidence = QGroupBox("what Apply does")
+        _ev = QVBoxLayout()
+        _ev.setContentsMargins(2, 2, 2, 2)
+        _ev.addWidget(self.acg_preview)
+        self._collapsible(self.acg_evidence, _ev, collapsed=True)
+        v.addWidget(self.acg_evidence, 0)
         self._acg_report = None
-        return page
+        self._reduce_plot_base = None
+        return col
 
     def explain_per_numeral(self):
         """Analysis menu: the deep pass — every collapsed numeral of the
@@ -191,15 +236,44 @@ class ReduceBenchMixin:
         self.progress.hide()
         self.cancel_btn.hide()
         self._job_finished()
-        self.acg_preview.setPlainText(rep.describe())
-        if rep.recommended:
-            cost = self._cost_phrase(rep.joint_score, rep.joint_db)
-            self.statusBar().showMessage(
-                f"removal scan: {', '.join(rep.recommended)} deletable "
-                f"together at {cost}")
-        else:
-            self.statusBar().showMessage(
-                "removal scan: every element earns its place")
+        recommended = set(rep.recommended)
+        units = {"c": "F", "r": "Ω", "g": "S", "l": "H"}
+        self._filling = True
+        try:
+            self.rm_tbl.setRowCount(len(rep.candidates))
+            ro = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+            for i, c in enumerate(rep.candidates):
+                el_it = QTableWidgetItem(c.inst)
+                el_it.setFlags(ro | Qt.ItemIsUserCheckable)
+                el_it.setCheckState(Qt.Checked if c.inst in recommended
+                                    else Qt.Unchecked)
+                val_it = QTableWidgetItem(
+                    f"{c.value:.4g} {units.get(c.kind, '')}"
+                    if c.value is not None else "—")
+                cost_it = QTableWidgetItem(
+                    f"{c.score:.2f}×" if c.score is not None
+                    else f"{c.worst_db:.3g} dB")
+                cost_it.setToolTip(f"{c.worst_db:.3g} dB / "
+                                   f"{c.worst_deg:.3g}° worst; × "
+                                   f"is the toolbar contract's budget")
+                deg_it = QTableWidgetItem(f"{c.worst_deg:.3g}°")
+                kind_it = QTableWidgetItem(c.kind)
+                if not c.within_budget:
+                    from PySide6.QtGui import QBrush, QColor
+                    cost_it.setForeground(QBrush(QColor(theme.BAD)))
+                for col, it in enumerate((el_it, val_it, cost_it, deg_it,
+                                          kind_it)):
+                    if col:
+                        it.setFlags(ro)
+                    self.rm_tbl.setItem(i, col, it)
+        finally:
+            self._filling = False
+        self._refresh_applied_marks()
+        self.statusBar().showMessage(
+            f"removal scan: {len(rep.recommended)} element(s) deletable "
+            f"within the budget" if rep.recommended
+            else "removal scan: every element earns its place")
+        self._refresh_acg_choice()
 
     def attribute_poles(self):
         """Analysis menu: which element establishes which pole, verified.
@@ -368,13 +442,13 @@ class ReduceBenchMixin:
             finally:
                 self._filling = False
             self._acg_pending.clear()
-        if rep.recommended:
-            self.statusBar().showMessage(
-                f"scan: ground {', '.join(rep.recommended)} together for "
-                f"{rep.joint_db:.3g} dB")
-        else:
-            self.statusBar().showMessage(
-                "scan: no node is groundable within the budget")
+        self._refresh_applied_marks()
+        # one cost grammar, in one place: the ticked line above the
+        # table (refreshed below) -- not a dB-only copy in the status bar
+        self.statusBar().showMessage(
+            f"scan: {len(rep.recommended)} node(s) groundable within the "
+            f"budget" if rep.recommended
+            else "scan: no node is groundable within the budget")
         self._refresh_acg_choice()
 
     # ------------------------------------------------------------ nets tree
@@ -415,6 +489,7 @@ class ReduceBenchMixin:
         if self.controller is None:
             return
         self.mode_combo.setCurrentText("Reduce circuit")
+        self.reduce_tabs.setCurrentIndex(0)
         for i in range(self.acg_tbl.rowCount()):
             it = self.acg_tbl.item(i, 0)
             if it is not None and it.text() == net:
@@ -444,6 +519,47 @@ class ReduceBenchMixin:
                 out.append(it.text())
         return out
 
+    def _refresh_applied_marks(self):
+        """The tables are declarative -- ticks ARE the target state, and
+        Apply re-derives the circuit from whatever is ticked -- so a row
+        whose tick is already in force must read differently from a
+        pending suggestion: the name turns green with an 'applied'
+        tooltip. Refreshed after every scan refill, apply and revert."""
+        from PySide6.QtGui import QBrush, QColor
+
+        summ = (self.controller.reduction_summary()
+                if self.controller is not None else None) or {}
+        marks = ((self.acg_tbl, set(summ.get("nodes") or ()),
+                  "grounded"),
+                 (self.rm_tbl, set(summ.get("removed") or ()),
+                  "deleted"))
+        was = self._filling
+        self._filling = True
+        try:
+            for tbl, applied, verb in marks:
+                for i in range(tbl.rowCount()):
+                    it = tbl.item(i, 0)
+                    if it is None:
+                        continue
+                    if it.text() in applied:
+                        it.setForeground(QBrush(QColor(theme.GOOD)))
+                        it.setToolTip(f"applied — {verb} in the working "
+                                      f"circuit; untick and Apply to "
+                                      f"undo")
+                    else:
+                        it.setForeground(QBrush())
+                        it.setToolTip("")
+        finally:
+            self._filling = was
+
+    def checked_removals(self) -> list[str]:
+        out = []
+        for i in range(self.rm_tbl.rowCount()):
+            it = self.rm_tbl.item(i, 0)
+            if it is not None and it.checkState() == Qt.Checked:
+                out.append(it.text())
+        return out
+
     def _on_acg_toggled(self, item):
         if self._filling or item.column() != 0:
             return
@@ -456,48 +572,74 @@ class ReduceBenchMixin:
         if self.controller is None:
             return
         nodes = self.checked_acg_nodes()
-        self.acg_apply.setEnabled(bool(nodes))
-        if not nodes:
+        rms = self.checked_removals()
+        self.acg_apply.setEnabled(bool(nodes or rms))
+        if not nodes and not rms:
             self.acg_joint_lbl.setText("")
             self.acg_preview.clear()
+            self._plot_reduction([])
             return
         inp, out = self._io()
         try:
-            jm = self.controller.acground_joint(inp, out, nodes,
-                                                **self._contract_kw())
-            pv = self.controller.preview_reduction(nodes)
+            jm = self.controller.reduction_joint(inp, out, nodes, rms,
+                                                 **self._contract_kw())
+            pv = self.controller.preview_reduction(nodes, rms)
         except Exception as exc:
             self.acg_joint_lbl.setText(f"({type(exc).__name__}: {exc})")
             return
         cost = self._cost_phrase(jm["score"], jm["worst_db"],
                                  jm["worst_deg"])
-        self.acg_joint_lbl.setText(
-            f"ticked set: {cost} together — the only approximation")
+        summ = self.controller.reduction_summary() or {}
+        if summ and set(nodes) == set(summ.get("nodes") or ()) \
+                and set(rms) == set(summ.get("removals") or ()):
+            self.acg_joint_lbl.setText(f"ticked = applied state ({cost})")
+        else:
+            self.acg_joint_lbl.setText(f"ticked: {cost} together")
+        self._plot_reduction(nodes, rms)
         lines = [f"{pv['prims_before']} → {pv['prims_after']} primitives:"]
         if pv["dead_sources"]:
+            dp = pv.get("dead_primitives") or pv["dead_sources"]
             lines.append(
-                f"  {len(pv['dead_sources'])} controlled sources contribute "
-                f"exactly zero — removed (exact): "
-                + ", ".join(pv["dead_sources"][:8])
-                + ("…" if len(pv["dead_sources"]) > 8 else ""))
+                f"  {len(dp)} controlled sources contribute exactly "
+                f"zero — removed (exact): " + ", ".join(dp[:8])
+                + ("…" if len(dp) > 8 else ""))
+            gone = pv.get("devices_silenced") or []
+            if gone:
+                lines.append(f"    devices left with nothing live: "
+                             + ", ".join(gone[:8])
+                             + ("…" if len(gone) > 8 else ""))
+            part = pv.get("devices_passive") or []
+            if part:
+                lines.append(f"    devices reduced to loads (gds/caps "
+                             f"stay): " + ", ".join(part[:8])
+                             + ("…" if len(part) > 8 else ""))
         for g in pv["lump_groups"]:
             lines.append("  lump (exact): " + g)
         if pv["symbols_saved"]:
             lines.append(f"  {pv['symbols_saved']} symbols saved for the "
                          f"solver grid")
+        if pv.get("removed"):
+            lines.append("  deleted outright (priced by the removal "
+                         "scan): " + ", ".join(pv["removed"]))
+        missing = set(rms) - set(pv.get("removed") or ())
+        if missing:
+            lines.append("  not in the rewritten circuit (nothing to "
+                         "delete): " + ", ".join(sorted(missing)))
         self.acg_preview.setPlainText("\n".join(lines))
 
     def apply_reduction(self):
         if self.controller is None:
             return
         nodes = self.checked_acg_nodes()
-        if not nodes:
+        rms = self.checked_removals()
+        if not nodes and not rms:
             return
         inp, out = self._io()
         self._launch(
-            lambda cb: self.controller.apply_reduction(nodes, inp=inp, out=out,
+            lambda cb: self.controller.apply_reduction(
+                nodes, inp=inp, out=out, removals=rms,
                 **self._contract_kw()),
-            f"applying reduction ({', '.join(nodes)}) …",
+            f"applying reduction ({', '.join(nodes + rms)}) …",
             on_done=self._on_reduction_applied, est_s=None)
 
     def _on_reduction_applied(self, summ):
@@ -509,21 +651,23 @@ class ReduceBenchMixin:
         self._refresh_reduction_banner()
         self._refresh_net_decor()
         # the reduction REWRITES the circuit: dead sources removed,
-        # passives lumped into Ceq/Req node symbols -- the old ranking
-        # and its ticks name symbols that may no longer exist, and a
-        # solve with them fails. Invalidate, like the matches path does.
-        self.keep_tbl.setRowCount(0)
-        self.estimate_lbl.setText(
-            "estimate: — (re-Rank: the reduced circuit has lumped/removed "
-            "symbols)")
+        # passives lumped into Ceq/Geq node symbols -- the old ranking
+        # and its ticks name symbols that may no longer exist. Re-rank
+        # the reduced circuit in the background and carry the ticks
+        # over: a ticked symbol that survived stays ticked, a ticked
+        # member of a lump ticks the equivalent that absorbed it.
+        self._rerank_after_rewrite(
+            "ranking the reduced circuit's symbols …",
+            eqs=summ.get("equivalents") or [])
         cost = self._cost_phrase(summ.get("score"), summ["worst_db"],
                                  summ["worst_deg"])
-        self._set_strip(
-            f"circuit reduced: {summ['prims_before']} → "
-            f"{summ['prims_after']} primitives at a measured {cost} "
-            f"({summ['inp']} → {summ['out']}); grounding was the only "
-            f"approximation — every bench now analyses the reduced circuit",
-            "ok")
+        # the headline carries the applied state; the strip would be
+        # a third copy of the same sentence
+        self.log(f"circuit reduced: {summ['prims_before']} → "
+                 f"{summ['prims_after']} primitives at a measured {cost} "
+                 f"({summ['inp']} → {summ['out']}); every bench now "
+                 f"analyses the reduced circuit")
+        self._plot_reduction([])
         # the ĝm composition: grounding a bias net can make the exact
         # gm+gmb criterion hold on the reduced circuit — say which
         # devices earned their hat through this reduction
@@ -544,26 +688,131 @@ class ReduceBenchMixin:
         self.controller.revert_reduction()
         self._refresh_reduction_banner()
         self._refresh_net_decor()
-        self.keep_tbl.setRowCount(0)             # reduced-circuit ranking
-        self.estimate_lbl.setText("estimate: — (re-Rank)")
-        self._set_strip("circuit: back to as-imported — re-Rank for the "
-                        "restored symbols", "info")
+        self._rerank_after_rewrite("ranking the restored symbols …")
+        self._set_strip("circuit: back to as-imported", "info")
+
+    def _rerank_after_rewrite(self, status: str, eqs=(), ranker=None):
+        """The keep table after the circuit changed under it: rank the
+        working circuit off the GUI thread and refill, keeping every
+        tick whose symbol still exists and mapping a ticked lump
+        member onto its equivalent. Until it lands the table is empty
+        and the estimate says why."""
+        c = self.controller
+        # a later rerank supersedes this one: without the sequence, a
+        # fast mode cycle lands a stale ranking (e.g. Z's) after the
+        # bench moved on
+        seq = getattr(self, "_rank_seq", 0) + 1
+        self._rank_seq = seq
+        was = set(self.checked_keep())
+        absorbed = {}
+        for e in eqs:
+            for m in e.get("members", []):
+                absorbed[m.replace(".", "_")] = e["name"]
+        self.keep_tbl.setRowCount(0)
+        self.estimate_lbl.setText(f"estimate: — ({status})")
+        try:
+            inp, out = self._io()
+        except Exception:
+            return
+
+        def land(ranking):
+            if self.controller is not c or ranking is None                     or seq != getattr(self, "_rank_seq", 0):
+                return
+            names = {r[0] if isinstance(r, (tuple, list)) else
+                     getattr(r, "name", r) for r in ranking}
+            keep = set()
+            for s in was:
+                if s in names:
+                    keep.add(s)
+                elif absorbed.get(s) in names:
+                    keep.add(absorbed[s])
+            self._fill_keep_table(ranking, checked=sorted(keep))
+            self._update_estimate()
+
+        self._run_bg(ranker or (lambda: c.rank_symbols(inp, out)), land)
+
+    def _plot_reduction(self, nodes, removals=()):
+        """The bench's plot: the as-imported response (solid) against
+        the ticked reduction (dashed) inside the tolerance tube -- the
+        scan's cost as a curve. Computed off the GUI thread; the last
+        plot stays until the new one lands."""
+        if self.controller is None or \
+                self.mode_combo.currentText() != "Reduce circuit":
+            return
+        c = self.controller
+        try:
+            inp, out = self._io()
+        except Exception:
+            return
+        nodes = list(nodes)
+        removals = list(removals)
+        seq = getattr(self, "_redplot_seq", 0) + 1
+        self._redplot_seq = seq
+
+        def compute():
+            r0 = c.solve(inp, out, [])            # freqs + the sim reference
+            hb, hr = c.reduction_responses(nodes, inp, out, r0.freqs,
+                                           removals=removals)
+            return r0, hb, hr
+
+        def land(res):
+            if res is None or seq != self._redplot_seq \
+                    or self.controller is not c \
+                    or self.mode_combo.currentText() != "Reduce circuit":
+                return
+            import numpy as np
+            from dataclasses import replace
+
+            r0, hb, hr = res
+            base = replace(r0, h=np.asarray(hb), poles_hz=np.array([]),
+                           zeros_hz=np.array([]), simplified=False,
+                           pm_deg=None, gm_db=None, warnings=[])
+            red = replace(base, h=np.asarray(hr), h_ref=None)
+            bits = ([f"{len(nodes)} net(s)"] if nodes else []) + \
+                ([f"{len(removals)} removal(s)"] if removals else [])
+            any_tick = bool(nodes or removals)
+            labels = ("as imported",
+                      [f"ticked reduction ({', '.join(bits)})"]
+                      if any_tick else [])
+            self._reduce_plot_base = base
+            view.bode_figure(base, self.canvas.figure,
+                             overlays=[red] if any_tick else (),
+                             labels=labels)
+            theme.style_figure(self.canvas.figure)
+            self._update_tol_bands()
+            self.canvas.draw_idle()
+
+        self._run_bg(compute, land)
 
     def _refresh_reduction_banner(self):
         summ = (self.controller.reduction_summary()
                 if self.controller is not None else None)
         try:
             self._schematic_restyle()
+            self._refresh_solve_hint()
         except Exception:                         # noqa: BLE001
             pass                                  # decoration only
         if summ is None:
-            self.red_banner.setText("circuit: as imported")
+            self.red_banner.setText("applied: none — the circuit is as "
+                                    "imported")
             self.red_banner.setStyleSheet(f"color: {theme.MUTED};")
             self.acg_revert.setEnabled(False)
         else:
+            cost = self._cost_phrase(summ.get("score"), summ["worst_db"],
+                                     summ["worst_deg"])
+            bits = []
+            if summ["nodes"]:
+                bits.append(f"{len(summ['nodes'])} net(s) grounded "
+                            f"({', '.join(summ['nodes'])})")
+            rmv = summ.get("removed") or []
+            if rmv:
+                shown = ", ".join(rmv[:8]) + ("…" if len(rmv) > 8
+                                              else "")
+                bits.append(f"{len(rmv)} element(s) removed ({shown})")
             self.red_banner.setText(
-                f"circuit: REDUCED — grounded {', '.join(summ['nodes'])}; "
-                f"{summ['prims_before']} → {summ['prims_after']} primitives, "
-                f"≤ {summ['worst_db']:.3g} dB measured")
+                f"applied: {'; '.join(bits)}; {summ['prims_before']} → "
+                f"{summ['prims_after']} primitives; {cost}, measured "
+                f"end to end")
             self.red_banner.setStyleSheet(f"color: {theme.GOOD};")
             self.acg_revert.setEnabled(True)
+        self._refresh_applied_marks()

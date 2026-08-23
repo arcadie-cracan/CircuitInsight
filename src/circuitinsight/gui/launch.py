@@ -105,9 +105,38 @@ def main(argv=None):
                          "style alone")
     args, _ = ap.parse_known_args(raw)
 
+    # ONE BLAS thread in the GUI process. OpenBLAS/MKL start a spinning
+    # thread per core at import; on a 32-core shared server those 32
+    # threads starved the drawing thread so badly that a 0.3 s Bode draw
+    # took 18 s and the window stayed blank for as long (measured on
+    # <sim-host>; OPENBLAS_NUM_THREADS=1 brought first light from 19 s to
+    # 2.5 s). The GUI's own numpy work is 3x3 transforms and small
+    # solves; the heavy solves run exact arithmetic in worker processes.
+    import os
+    for var in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+                "OMP_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+        os.environ.setdefault(var, "1")
+    # and a quicker GIL handoff: with a compute thread (an advisor's
+    # lambdified sweep, a sympy pass) holding the GIL in 5 ms slices,
+    # the drawing thread got 0.3 s of CPU in a 1.9 s stall; 1 ms slices
+    # cost the compute threads a few percent and give the GUI its turn
+    sys.setswitchinterval(0.001)
+
+    # stage clock: every splash phase is timed and written to the Log
+    # tab once the window is up, so a slow start on a given machine
+    # (X11 over VNC, NFS-hosted interpreter, a license checkout) says
+    # WHICH stage cost the seconds instead of being a guess
+    import time as _time
+    t_start = _time.perf_counter()
+    marks = []
+
+    def _mark(label):
+        marks.append((label, _time.perf_counter()))
+
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
+    _mark("Qt")
     splash = _splash()
     splash.show()
     _stage(app, splash, "loading the analysis engine …")
@@ -140,20 +169,181 @@ def main(argv=None):
         theme.apply(app)
     while not heavy_done.wait(0.03):             # splash keeps painting
         app.processEvents()
+    _mark("engine imports")
     from .app import build_window                # deps cached: fast now
+    _mark("GUI imports")
 
     _stage(app, splash, "building the workbench …")
+    from .app import MainWindow
+    win = MainWindow()
+    _mark("window")
     if args.cin and args.psf:
         from pathlib import Path
         _stage(app, splash, f"opening {Path(args.cin).name} …")
-    # async_open: the window appears after the cheap populate; first
-    # light and the auto-setup narrate themselves in the status bar
-    # instead of hiding 8+ measured seconds behind this splash
-    win = build_window(args.cin, args.psf, probe=args.probe,
-                       async_open=True)
+        # async_open: the window appears after the cheap populate;
+        # first light and the auto-setup narrate themselves in the
+        # status bar instead of hiding 8+ measured seconds behind
+        # this splash
+        # the first-light worker must not overlap the first paint: a
+        # sympy-holding worker thread starved the draw of the GIL
+        # (0.3 s of CPU in a 1.6 s stall). The chain starts after the
+        # first paint instead.
+        win._auto_deferred = []
+        win.open_session(args.cin, args.psf, probe=args.probe,
+                         async_open=True)
+        _mark("open")
     win.show()
     splash.finish(win)
+    _mark("show")
+
+    # show() only SCHEDULES the paint: the window is seen when the
+    # event loop first paints it, and anything that blocks the GUI
+    # thread before that (a web view's GPU probe on a display without
+    # GL, a render process start-up) is invisible to the marks above.
+    # Catch the first paint and log the whole breakdown then.
+    from PySide6.QtCore import QEvent, QObject, QTimer
+
+    class _FirstPaint(QObject):
+        def eventFilter(self, obj, ev):
+            if ev.type() == QEvent.Paint and obj is win:
+                _mark("first paint")
+                win.removeEventFilter(self)
+                deferred = getattr(win, "_auto_deferred", None) or []
+                win._auto_deferred = None
+                for thunk in deferred:
+                    QTimer.singleShot(0, thunk)
+                total = marks[-1][1] - t_start
+                prev = t_start
+                bits = []
+                for label, at in marks:
+                    bits.append(f"{label} {at - prev:.1f}")
+                    prev = at
+                try:
+                    win.log(f"start-up {total:.1f} s to the first paint: "
+                            + ", ".join(bits))
+                except Exception:                # noqa: BLE001
+                    pass                         # the clock is advisory
+            return False
+
+    win._first_paint_filter = _FirstPaint(win)
+    win.installEventFilter(win._first_paint_filter)
+    _install_stall_watch(app, win)
+    del build_window
     return app.exec()
+
+
+def _install_stall_watch(app, win, limit_s: float = 1.0):
+    """A watchdog for the GUI thread: a 100 ms heartbeat timer on the
+    main thread, a daemon thread that notices when the heartbeat stops
+    for more than limit_s and SAMPLES THE MAIN THREAD'S STACK while it
+    is stuck; once the thread runs again the stall (duration + stack)
+    goes to the Log. Turns "the window froze for a while" into the
+    name of the function that froze it."""
+    import os
+    import sys
+    import threading
+    import traceback
+
+    from PySide6.QtCore import QTimer
+
+    main_ident = threading.main_thread().ident
+    main_tid = threading.get_native_id()
+    beat = {"t": __import__("time").perf_counter()}
+    pending = []
+
+    def _main_cpu():
+        """The MAIN THREAD's own CPU seconds (Linux: /proc task stat);
+        None elsewhere. CPU ~ wall over a stall means it computed;
+        CPU << wall means it was starved (GIL or cores)."""
+        try:
+            with open(f"/proc/self/task/{main_tid}/stat") as f:
+                fields = f.read().rsplit(")", 1)[1].split()
+            return (int(fields[11]) + int(fields[12])) / os.sysconf(
+                "SC_CLK_TCK")
+        except Exception:                        # noqa: BLE001
+            return None
+
+    def _others():
+        """Top frame of every OTHER busy Python thread, compact: who
+        holds the GIL. The watchdog itself and idle waiters are left out."""
+        names = {th.ident: th.name for th in threading.enumerate()}
+        out = []
+        for ident, frame in sys._current_frames().items():
+            if ident == main_ident:
+                continue
+            fn = frame.f_code.co_name
+            if names.get(ident, "").startswith("ci-stall") or fn in (
+                    "wait", "_wait", "select", "get", "sleep",
+                    "_bootstrap_inner"):
+                continue
+            base = os.path.basename(frame.f_code.co_filename)
+            out.append(f"{fn} ({base}:{frame.f_lineno})")
+        return ", ".join(out)
+
+    def _where(frame):
+        """The innermost CircuitInsight frame of the stalled main thread,
+        else the innermost frame with its package: 'draw (matplotlib)'."""
+        chain = []
+        f = frame
+        while f is not None:
+            chain.append(f)
+            f = f.f_back
+        for f in chain:
+            path = f.f_code.co_filename
+            if "circuitinsight" in path:
+                return (f"{f.f_code.co_name} "
+                        f"({os.path.basename(path)}:{f.f_lineno})")
+        f = chain[0]
+        path = f.f_code.co_filename.replace(os.sep, "/")
+        pkg = path.split("site-packages/")
+        pkg = pkg[1].split("/")[0] if len(pkg) > 1 else os.path.basename(path)
+        return f"{f.f_code.co_name} ({pkg})"
+
+    def _heartbeat():
+        import time as _t
+        beat["t"] = _t.perf_counter()
+        while pending:
+            dur, stack, cpu0, cpu1, others, where = pending.pop(0)
+            cpu = (f", main thread CPU {cpu1 - cpu0:.1f} s"
+                   if cpu0 is not None and cpu1 is not None else "")
+            try:
+                line = (f"GUI thread stalled {dur:.1f} s{cpu} in {where}"
+                        + (f"; other threads: {others}" if others else ""))
+                if dur >= 5.0:                   # a long one earns its stack
+                    line += chr(10) + stack
+                win.log(line)
+            except Exception:                    # noqa: BLE001
+                pass
+
+    hb = QTimer(win)
+    hb.setInterval(100)
+    hb.timeout.connect(_heartbeat)
+    hb.start()
+    win._stall_heartbeat = hb
+
+    def _watch():
+        import time as _t
+        stuck_since = None
+        sample = ""
+        while True:
+            _t.sleep(0.25)
+            age = _t.perf_counter() - beat["t"]
+            if age > limit_s:
+                if stuck_since is None:
+                    stuck_since = beat["t"]
+                    cpu0 = _main_cpu()
+                    others = _others()
+                    frame = sys._current_frames().get(main_ident)
+                    where = "the event loop"
+                    if frame is not None:
+                        sample = "".join(traceback.format_stack(frame)[-8:])
+                        where = _where(frame)
+            elif stuck_since is not None:
+                pending.append((beat["t"] - stuck_since, sample, cpu0,
+                                _main_cpu(), others, where))
+                stuck_since = None
+
+    threading.Thread(target=_watch, daemon=True, name="ci-stall").start()
 
 
 if __name__ == "__main__":

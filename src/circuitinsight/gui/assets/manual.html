@@ -127,7 +127,11 @@ the exact structure still in it.</td></tr>
 are removed and added back by matching pursuit until the smallest set
 the search can certify remains &ndash; the <i>presentation</i> model
 you would draw on a whiteboard: A<sub>0</sub>, GBW, done. Certified
-only over the band you select.</td></tr>
+only over the band you select. A leading numeral in
+A<sub>0</sub> (0.98&hellip;, a collapsed ratio of unkept parameters on
+the path) is divided out when the snapped form still meets the budget
+against the full response &ndash; a measured, recorded step, so the
+whiteboard form carries no 0.98.</td></tr>
 </table>
 <p>The two answer different questions. Measured on a 17-pole folded
 cascode at a 1 dB tolerance: full order returned the same degree
@@ -168,7 +172,9 @@ is relative error of the small quantity.</td></tr>
 <p><b>One contract for every approximation.</b> The tolerance
 strategy, its budgets and the band selector define the session's
 accuracy contract &ndash; and every budgeted step speaks it: the
-lowest-order solve, the AC-ground scan, the removal scan and the
+lowest-order solves (Transfer, Impedance and Loop gain climb the
+same Exact / full-order / lowest-order ladder), the AC-ground scan,
+the removal scan and the
 applied reduction are all priced and gated by the same criterion over
 the same band, reported as a fraction of the same budget
 (<i>0.42&times; budget</i>; at or under 1.00&times; means within it).
@@ -211,7 +217,13 @@ design qualifies; a run carrying an stb analysis opens here with its
 designated probe selected. The plot annotates the phase and gain
 margins; the probe-adequacy advisor grades whether this probe's T
 actually predicts closed-loop stability, and its verdict lands in the
-message strip a few seconds after the solve.</p>
+message strip a few seconds after the solve. Ticked symbols make the
+solve a hybrid Tian computation &ndash; four rational solves, roughly
+4&times; the transfer's cost with the same ticks &ndash; so it is
+gated on the keep pane's own budget: over budget, Solve refuses with
+the estimate and the way out (untick, go numeric, or insist) instead
+of running away; the estimate label costs the loop solve while the
+tool is active.</p>
 
 <h3><a name="compensate"></a>Compensate</h3>
 
@@ -243,8 +255,24 @@ designation.</p>
 
 <h3><a name="impedance"></a>Impedance</h3>
 
-<p>Z at a port &ndash; any isource or vsource marks one. A run carrying
-an xf analysis overlays it as truth.</p>
+<p>Z at a port &ndash; any isource or vsource marks one (isource:
+parallel port; vsource: series, opened automatically). A run carrying
+an xf analysis overlays a marker port as truth. The result-form
+selector applies here exactly as in Transfer: <b>Exact</b>,
+<b>Simplified &middot; full order</b>, or <b>Simplified &middot;
+lowest order</b> under the tolerance strategy &ndash; internally a
+unit probe current source turns Z into an ordinary transfer
+function, so the reactance pursuit, the collapse, the snap and the
+order certificate run unchanged. The lowest-order form needs a
+ground-referenced port; between-two-nets impedance offers Exact and
+full order. The trees offer three
+more ways to say where to look, and the port dropdown then reads
+<i>user selected</i>: right-click a net for <b>Impedance at</b> that
+net (to ground); Ctrl-select two nets for <b>Impedance between</b>
+them; right-click a two-terminal instance for <b>Impedance seen
+by</b> it &ndash; the element removed, sources zeroed, the Thevenin
+impedance it looks into. A net the applied reduction AC-grounds is
+refused with the reason: Z there is 0 by construction.</p>
 
 <h3><a name="reduce"></a>Reduce circuit</h3>
 
@@ -253,13 +281,39 @@ working circuit. The session holds one circuit in one of two named
 states &ndash; <b>as imported</b> or <b>reduced</b> &ndash; and every
 result records which state produced it.</p>
 
+<p>The bench shows only what the decision needs, and the whole of
+it is ONE full-height column beside the Nets tree (right-click a net
+there to AC-ground it by hand; the applied state wears earth marks).
+Top to bottom: two candidate tabs &ndash; <b>AC grounds</b> and
+<b>Device removals</b> &ndash; each with its scan verb above its tick
+table; the <i>ticked</i> set's joint price (or "ticked = applied
+state") with <b>Apply</b>; right below the button, the headline
+naming the <i>applied</i> state with its measured cost and
+<b>Revert</b> under it; and "what Apply does", which unfolds the
+evidence (dead sources, loads, lumps, deletions). The tables are <i>declarative</i>: ticks are the target
+state, Apply re-derives the working circuit from whatever is ticked
+in both tabs, and a row whose tick is already in force shows its name
+in green with an "applied" tooltip &ndash; untick it and Apply to
+undo just that item. The keep panel, the match controls, History,
+Summary and Expression are hidden here, and so is Solve; there is no
+bottom bench tab &ndash; the plot keeps the room, showing the
+as-imported response against the <i>ticked</i> reduction, dashed,
+inside the tolerance tube, so a set's cost is a curve and not only a
+number.</p>
+
 <p>Grounding a node folds the parallel same-kind elements it leaves
 to ground into ONE equivalent &ndash; exact, a sum &ndash; which then
 appears in H(s) as <i>G</i><sub>eq,net8</sub> or
 <i>C</i><sub>eq,net8</sub>. It is a definition you can look up:
 hover it in the Expression view and the tooltip spells out the
-members it stands for; the Summary's ledger lists every equivalent as
-<code>Geq_I0_net8 = gds_I0_NM6 + gds_I0_PM6 = 1.21 uS</code>.</p>
+members it stands for; the Expression view defines every equivalent
+under the expressions (<i>G</i><sub>eq,net8</sub> =
+<i>g</i><sub>ds,M10</sub> + <i>g</i><sub>ds,NM9</sub> = 1.21 uS), and
+ticking <b>Expand equivalents</b> substitutes those sums into
+<i>A</i><sub>0</sub>, <i>N</i>(<i>s</i>), <i>D</i>(<i>s</i>),
+<i>p</i><sub>1</sub> and <i>z</i><sub>1</sub> so the formula reads in
+the original device symbols. The Summary's ledger lists the same
+definitions.</p>
 <ol>
 <li><b>Scan AC grounds</b> prices every mirror and bias node by the exact
 error grounding it would cause in the current transfer. The recommended
@@ -268,13 +322,15 @@ set is pre-ticked; ticking any combination re-prices it jointly.</li>
 sources that die because their controlling voltage became zero, and the
 parallel passives that lump into single C<sub>node</sub> and
 R<sub>node</sub> symbols.</li>
-<li><b>Apply reduction</b> rewrites the working circuit and banners the
-true end-to-end cost, measured over the full band &ndash; grounding is
-the only approximation in the chain. <b>Revert</b> restores as-imported
-at any time.</li>
-<li><b>Scan removals</b> is advisory: every explicit element priced by
-the response shift its outright deletion would cause. Act on it in the
-schematic, not here.</li>
+<li><b>Scan removals</b> prices every explicit element &ndash;
+lumped equivalents included &ndash; by the response shift its outright
+deletion would cause, and fills its own tick table; the recommended
+set arrives pre-ticked.</li>
+<li><b>Apply reduction</b> rewrites the working circuit &ndash; grounds
+the ticked nodes, deletes the ticked elements &ndash; and banners the
+true end-to-end cost, measured over the full band; grounding and
+deletion are the only approximations in the chain. <b>Revert</b>
+restores as-imported at any time.</li>
 </ol>
 <p>Reduced results carry a <i>[reduced]</i> marker in History, so an
 overlay against an as-imported result shows exactly what the modelling
@@ -301,12 +357,46 @@ Double-click a net to make it the output; right-click to route an
 AC-ground request through the measured Reduce flow &ndash; nothing is
 ever grounded silently.</p>
 
+<p>Under the trees, the <b>Operating point</b> card shows the selected
+device the way a designer reads it: region with the margins that
+matter (V<sub>DS</sub> &minus; V<sub>DSAT</sub>, amber when thin;
+V<sub>OV</sub>), the bias point, the small-signal parameters with the
+derived figures (g<sub>m</sub>/I<sub>D</sub>, r<sub>o</sub>,
+g<sub>m</sub>/g<sub>ds</sub> in dB, f<sub>T</sub>), and "as the model
+sees it": the value each symbol carries in the working model after
+matching, lumping and reduction, whether it is in the shown formula,
+and where the match policy moved it from the device's own value. It
+follows the selection from the tree, the schematic, an expression
+symbol and a keep-table row; <b>full record&hellip;</b> opens the
+complete dcOpInfo dump, <b>copy</b> puts the card on the clipboard.</p>
+
+<p><b>Suggest</b> proposes sets that are structurally alike &ndash;
+same subcircuit scope, same device type and parameters, and sharing at
+least one net (a mirror's common gate, a pair's common source; ground
+and global supplies do not count) &ndash; then refines by operating
+point against the growing set's mean (g<sub>m</sub> within 2&nbsp;%,
+other conductances 25&nbsp;%, capacitances 50&nbsp;%) &ndash; so
+membership does not hinge on which member happens to be compared
+first. A <b>mirror</b> earns a wider g<sub>m</sub> budget: when the
+set shares its gate net, V<sub>GS</sub> and V<sub>TH</sub> agree
+within 1&nbsp;mV, and the drain currents agree to within the budget
+itself, the remaining g<sub>m</sub> spread is channel-length
+modulation, and the tolerance grows by the set's own measured
+&Delta;V<sub>DS</sub>&middot;g<sub>ds</sub>/I<sub>D</sub> (capped at
+10&nbsp;%).</p>
+
 <p><b>Matching</b> declares devices to share one set of symbols. It is
 what lets gm<sub>1</sub>/(gds<sub>2</sub>+gds<sub>4</sub>) emerge instead
 of six unrelated symbols &ndash; and it means one value set must stand
 for the group. Every member of a match set wears 🔗 with its group
-number and the group tint; right-click a linked member to unmatch the
-group or choose its representative. The <b>values</b> selector chooses
+number and the group tint. The verbs live in two places that each
+carry the full set: <b>right-click in the Instances tree</b> (Suggest
+matched pairs, Match selected devices, Unmatch selection, and on a
+linked member Unmatch 🔗<i>n</i> and Choose representative) and the
+<b>Devices</b> menu. The group's shared symbols carry ONE member's
+name: the member whose parameters shape the in&rarr;out response most
+(the cascode on the signal path, not its mirror twin), or the
+representative you chose. <b>Devices &rarr; Match values</b> chooses
 how the group gets its numbers:</p>
 <table border="1" cellpadding="4" cellspacing="0">
 <tr><td><b>weighted</b> &ndash; the default</td>
@@ -360,6 +450,23 @@ gained its hat through the reduction.</p>
 
 <p>The keep table decides which parameters stay as letters. Two facts
 keep it honest:</p>
+
+<p>The pane is three things: the filter, the list of symbols with
+their ticks, and the estimate line. Hover a symbol for its dcOp value,
+its score and where it peaks; "keep symbolic" means exact either way
+&ndash; pick a Simplified form in the toolbar to trade accuracy for
+size. Everything else is one click away: <b>right-click a row</b> for
+its LaTeX alias, its device's alias, Rank, Suggest&nbsp;&le;&nbsp;budget,
+Split advice and the dcOp / score / peaks columns; the same menu on
+the header adds grouping by device;
+<b>Analysis &rarr; Solver backend</b> for the solver. The table
+re-ranks itself when the in/out pair changes, after a reduction and
+after a revert, keeping your ticks, so Rank is rarely needed by hand.
+The Operating point card under the trees starts collapsed; its title
+names the selected device and region. The left side is two full-height
+columns: the circuit (trees, card) and, beside it, the symbols (the
+keep table over History, both about solves) &ndash; vertical room is
+the scarce one on a full-screen window.</p>
 <ul>
 <li>Every keep set is <b>exact</b>. Keeping fewer symbols loses no
 accuracy &ndash; the rest become the exact rational values of their
@@ -449,7 +556,8 @@ Expression view highlights its device in the schematic.</p>
 
 <h2><a name="schematic"></a>The Schematic pane</h2>
 
-<p>The <b>Schematic</b> tab shows the circuit as it was drawn in
+<p>The <b>Schematic</b> page &ndash; the second tab of the right
+column, beside <b>Analysis</b> &ndash; shows the circuit as it was drawn in
 Virtuoso, redrawn with an SVG symbol library: the original placement,
 the original wiring, one page per cell. It needs two things beside the
 CIN: the <b>layout hints</b> (<code>&lt;stem&gt;.hints.json</code>),
@@ -474,7 +582,13 @@ session did to the circuit, on the same layout: AC-grounded nets turn
 gray-dashed with an earth mark, sources the reduction made dead fade,
 &#285;m-lumped devices wear a badge, devices whose symbol is in the
 shown formula are bold and those folded into a number are gray. The
-geometry never changes; untick for the plain drawing.</p>
+geometry never changes; untick for the plain drawing. Matched devices
+wear the same tint and &#128279;<i>n</i> badge as in the Instances
+tree, so a matched pair reads as one across the two views. Labels are
+typeset as outlines in STIX (the face of the symbol library's own
+labels), so a device's LaTeX alias (right-click it in the Instances
+tree: <i>M</i><sub>1</sub>) shows on the schematic exactly as in the
+expressions.</p>
 
 <p>A subcircuit instance is drawn as a plain box until a symbol is
 <b>confirmed</b> for its cell in <code>&lt;stem&gt;.symbols.json</code>
@@ -511,6 +625,11 @@ overlays exist to answer exactly that.</p>
 <tr><td>Ctrl+Return</td><td>Solve</td></tr>
 <tr><td>Ctrl+Shift+Return</td><td>Simplified, full order</td></tr>
 <tr><td>Ctrl+R</td><td>Simplified, lowest order</td></tr>
+<tr><td>Ctrl+Shift+L</td><td>Bring back any pane dragged to nothing (in
+any splitter); when nothing is collapsed, collapse the left side for a
+wide plot. A double-click on a splitter handle brings back the pane
+it hides; File &rarr; Reset layout restores the default
+proportions</td></tr>
 <tr><td>F5</td><td>Rank symbols</td></tr>
 <tr><td>Ctrl+L</td><td>Copy H(s) as LaTeX</td></tr>
 <tr><td>Ctrl+E</td><td>Export report</td></tr>

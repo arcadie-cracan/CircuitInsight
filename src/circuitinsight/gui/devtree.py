@@ -63,7 +63,10 @@ class InstanceTree(QTreeWidget):
     context menu."""
 
     aliasRequested = Signal(str)
+    impedanceSeenRequested = Signal(str)
     deviceActivated = Signal(str)
+    suggestRequested = Signal()
+    unmatchSelectionRequested = Signal()
     unmatchRequested = Signal(int)
     representativeRequested = Signal(int)
     matchRequested = Signal()
@@ -90,16 +93,57 @@ class InstanceTree(QTreeWidget):
         self._op_fetch = None
 
     # ----------------------------------------------------------- population
+    @staticmethod
+    def _natkey(name: str):
+        """Natural sort: NM5 before NM10, digits compared as numbers."""
+        import re
+        return [int(p) if p.isdigit() else p.lower()
+                for p in re.split(r"(\d+)", name)]
+
+    def _ordered_rows(self, rows):
+        """rows sorted alphabetically WITHIN each parent level -- device
+        instances first, compound instances (subcircuits) after them --
+        with a match group's members kept adjacent and the group placed
+        by its representative (the first member of its tuple, else its
+        alphabetically-first member). Natural order (NM5 < NM10)."""
+        rep_of = {}          # member name -> the group's anchor: its
+        for g in self._groups:              # alphabetically-first member
+            if not g:
+                continue
+            rep = min(g, key=lambda n: self._natkey(n.split(".")[-1]))
+            for m in g:
+                rep_of[m] = rep
+
+        def key(name):
+            # hierarchical: ancestors compare segment by segment, and a
+            # tier puts every device leaf (0) before every subcircuit
+            # (1) at its level; the leaf sorts at its group's
+            # representative, members adjacent behind it
+            parts = name.split(".")
+            k = [((1, self._natkey(s)), []) for s in parts[:-1]]
+            rep = rep_of.get(name, name)
+            # the group's alphabetically-first member decides WHERE the
+            # block sits; within it the members are purely alphabetical
+            k.append(((0, self._natkey(rep.split(".")[-1])),
+                      self._natkey(parts[-1])))
+            return k
+
+        return sorted(rows, key=lambda r: key(r["name"]))
+
     def populate(self, rows, op_fetch=None) -> None:
         """rows: dicts with name, type, region, gm, gds, alias, terminals
         and an optional ii_note -- kept as the item's info record (see
         `info()`) and shown in the hover glance; op_fetch: name -> OP
         record dict, fetched lazily on first hover."""
+        self._rows = [dict(r) for r in rows]
+        self._op_fetch = op_fetch
+        self._rebuild()
+
+    def _rebuild(self) -> None:
         self._filling = True
         try:
             self.clear()
             self._by_name.clear()
-            self._op_fetch = op_fetch
             parents: dict[tuple, QTreeWidgetItem] = {}
 
             def parent_for(path: tuple):
@@ -113,7 +157,7 @@ class InstanceTree(QTreeWidget):
                     parents[path] = it
                 return parents[path]
 
-            for r in rows:
+            for r in self._ordered_rows(self._rows):
                 parts = r["name"].split(".")
                 it = QTreeWidgetItem(parent_for(tuple(parts[:-1])))
                 it.setText(self.NAME, parts[-1])
@@ -164,6 +208,21 @@ class InstanceTree(QTreeWidget):
 
     # ---------------------------------------------------------- decorations
     def set_groups(self, groups) -> None:
+        # ordering depends on the groups; a match change re-sorts so the
+        # new group's members sit together (see _ordered_rows)
+        new = [tuple(g) for g in groups]
+        reorder = new != self._groups and getattr(self, "_rows", None)
+        if reorder:
+            self._groups = new
+            sel = set(self.selected_names())
+            self._rebuild()
+            for n in sel:
+                it = self._by_name.get(n)
+                if it is not None:
+                    it.setSelected(True)
+        return self._set_groups_decorate(groups)
+
+    def _set_groups_decorate(self, groups) -> None:
         """Match sets as decorations: every member wears the link mark
         with its group number, plus the group tint on all columns."""
         self._groups = [tuple(g) for g in groups]
@@ -234,13 +293,25 @@ class InstanceTree(QTreeWidget):
         item = self.itemAt(pos)
         name = self.device_name(item)
         menu = QMenu(self)
+        menu.addAction("Suggest matched pairs",
+                       lambda: self.suggestRequested.emit())
         if len(self.selected_names()) >= 2:
             menu.addAction("Match selected devices",
                            lambda: self.matchRequested.emit())
+        if any(self.group_of(n) is not None for n in self.selected_names()):
+            menu.addAction("Unmatch selection",
+                           lambda: self.unmatchSelectionRequested.emit())
+        menu.addSeparator()
         if name is not None:
             menu.addAction(
                 "Set LaTeX alias…",
                 lambda name=name: self.aliasRequested.emit(name))
+            terms = (self.info(item) or {}).get("terminals") or {}
+            if len(dict.fromkeys(terms.values())) == 2:
+                menu.addAction(
+                    f"Impedance seen by {name.split('.')[-1]}",
+                    lambda name=name:
+                    self.impedanceSeenRequested.emit(name))
             gi = self.group_of(name)
             if gi is not None:
                 menu.addAction(
@@ -262,6 +333,7 @@ class NetTree(QTreeWidget):
 
     outputRequested = Signal(str)
     acgroundRequested = Signal(str)
+    impedanceRequested = Signal(str, str)   # (net, ref); ref "" = ground
     connectionActivated = Signal(str)
 
     def __init__(self, parent=None):
@@ -270,6 +342,8 @@ class NetTree(QTreeWidget):
         self.setHeaderLabels(["net / connections"])
         _branch_style(self)
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        # two nets selectable together: Z between them from the menu
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._menu)
         self.itemDoubleClicked.connect(self._dclick)
@@ -360,6 +434,14 @@ class NetTree(QTreeWidget):
         elif kind == "net" and item.data(0, _ROLE_NAME) not in self._ground:
             self.outputRequested.emit(item.data(0, _ROLE_NAME))
 
+    def selected_nets(self) -> list[str]:
+        out = []
+        for it in self.selectedItems():
+            n = self.net_for(it)
+            if n is not None and n not in self._ground:
+                out.append(n)
+        return out
+
     def _menu(self, pos):
         item = self.itemAt(pos)
         net = self.net_for(item)
@@ -370,4 +452,14 @@ class NetTree(QTreeWidget):
                        lambda: self.outputRequested.emit(net))
         menu.addAction("AC ground (measure cost)…",
                        lambda: self.acgroundRequested.emit(net))
+        menu.addSeparator()
+        menu.addAction(f"Impedance at {net.split('.')[-1]}",
+                       lambda: self.impedanceRequested.emit(net, ""))
+        sel = self.selected_nets()
+        if len(sel) == 2 and net in sel:
+            a, b = sel
+            menu.addAction(
+                f"Impedance between {a.split('.')[-1]} and "
+                f"{b.split('.')[-1]}",
+                lambda: self.impedanceRequested.emit(a, b))
         menu.exec(self.viewport().mapToGlobal(pos))

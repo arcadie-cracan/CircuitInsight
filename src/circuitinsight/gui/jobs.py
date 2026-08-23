@@ -258,7 +258,10 @@ class JobRunnerMixin:
             est = self._live_est or self._est_s
             tail = f", est ~{est:.0f}s" if est else ""
             took = f" [{prev} took {dur:.1f}s]" if prev and dur else ""
-            self.log(f"  phase: {phase} (at {el:.0f}s{tail}){took}")
+            # the first phase of a run starts at 0 s by definition; only
+            # transitions carry information
+            if prev:
+                self.log(f"  phase: {phase} (at {el:.0f}s{tail}){took}")
             if phase == "reconstructing" and prev == "evaluating" and dur:
                 # reconstruction is the DOMINANT phase (measured 90% of a
                 # sparse solve) and no cost model prices it. The learned
@@ -383,7 +386,9 @@ class JobRunnerMixin:
         self.log(f"{verdict} after {el:.1f}s{acc}"
                  f"{self._backend_note()}")
         bd = self._phase_breakdown()
-        if bd:
+        # a breakdown of one phase says nothing the line above did not;
+        # a quick run needs no breakdown at all
+        if bd and (len(self._phase_totals) > 1 or el > 2.0):
             self.log(f"  phases: {bd}")
 
     # ----------------------------------------------- solve-time learning

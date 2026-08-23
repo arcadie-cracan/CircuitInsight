@@ -39,7 +39,8 @@ DOT_R = 0.53                     # mm (~2 px)
 
 #: analysis-state styling on the SAME layout (the simplified view):
 #: instance tags and net tags the GUI derives from the session
-STYLE_REMOVED = "removed"        # dead source / deleted: faded
+STYLE_REMOVED = "removed"        # nothing of the device is left: faded
+STYLE_PASSIVE = "passive"        # its gm died, gds/caps remain: a load
 STYLE_LUMPED = "lumped"          # gmb bundled into ĝm: badge
 STYLE_SYMBOLIC = "symbolic"      # a symbol of it is in the shown formula
 STYLE_NUMERIC = "numeric"        # priced numerically in the shown formula
@@ -105,6 +106,10 @@ class Symbol:
     #                              starts at x = 10 mm, every other
     #                              symbol at 0 -- anchors must be taken
     #                              RELATIVE to this to land on the canvas
+    #: where the library author put the designator: (x_mm, y_mm,
+    #: text-anchor) in DOCUMENT coords like the anchors, from the first
+    #: lib:role="equation" placeholder; None when the symbol has none
+    label_spot: tuple | None = None
 
     def local(self, anchor: str) -> tuple:
         """Anchor position relative to the symbol canvas, in mm."""
@@ -178,13 +183,92 @@ class SymbolLibrary:
                   vbv[1] * (h_mm / vbv[3]) if vbv[3] else 0.0)
         sym = Symbol(inner=inner, w=w_mm, h=h_mm, viewbox=vb,
                      anchors=dict(self._anchors.get(filename, {})),
-                     origin=origin)
+                     origin=origin,
+                     label_spot=_designator_spot(
+                         text, w_mm / vbv[2] if vbv[2] else 1.0,
+                         h_mm / vbv[3] if vbv[3] else 1.0))
         self._cache[filename] = sym
         return sym
 
 
 #: Cadence port glyph cells: their label is the pin name
 PORT_CELLS = frozenset({"ipin", "opin", "iopin"})
+
+
+def _parse_transform(s: str):
+    """An SVG transform attribute as a 3x3 affine (translate, scale,
+    matrix; rotate about the origin). Unknown functions are identity."""
+    m = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+
+    def mul(a, b):
+        return [[a[0][0] * b[0][0] + a[0][1] * b[1][0],
+                 a[0][0] * b[0][1] + a[0][1] * b[1][1],
+                 a[0][0] * b[0][2] + a[0][1] * b[1][2] + a[0][2]],
+                [a[1][0] * b[0][0] + a[1][1] * b[1][0],
+                 a[1][0] * b[0][1] + a[1][1] * b[1][1],
+                 a[1][0] * b[0][2] + a[1][1] * b[1][2] + a[1][2]]]
+    for fn, args in re.findall(r"(\w+)\s*\(([^)]*)\)", s or ""):
+        v = [float(x) for x in re.split(r"[\s,]+", args.strip()) if x]
+        if fn == "translate":
+            b = [[1, 0, v[0]], [0, 1, v[1] if len(v) > 1 else 0.0]]
+        elif fn == "scale":
+            b = [[v[0], 0, 0], [0, v[1] if len(v) > 1 else v[0], 0]]
+        elif fn == "matrix" and len(v) == 6:
+            b = [[v[0], v[2], v[4]], [v[1], v[3], v[5]]]
+        elif fn == "rotate":
+            c, s_ = math.cos(math.radians(v[0])), math.sin(math.radians(v[0]))
+            b = [[c, -s_, 0], [s_, c, 0]]
+        else:
+            continue
+        m = mul(m, b)
+    return m
+
+
+def _designator_spot(text: str, sx: float, sy: float):
+    """(x_mm, y_mm, text-anchor) of the first equation placeholder's
+    hidden <text>, composed through its ancestors' transforms, in
+    DOCUMENT mm (viewBox units scaled like the anchors). None when
+    the symbol carries no placeholder or the markup resists."""
+    try:
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        return None
+    ns_role = [k for k in ("{https://arcadie.dev/symlib}role",) ]
+    parent = {c: p for p in root.iter() for c in p}
+
+    def is_eq(el):
+        return any(el.get(k) == "equation" for k in ns_role) or \
+            el.get("role") == "equation"
+    for el in root.iter():
+        if not is_eq(el):
+            continue
+        txt = next((c for c in el.iter()
+                    if c.tag.endswith("text") and c.get("x") is not None),
+                   None)
+        if txt is None:
+            continue
+        chain, cur = [], txt
+        while cur is not None:
+            chain.append(cur)
+            cur = parent.get(cur)
+        m = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+        for node in reversed(chain):          # root -> text
+            tm = _parse_transform(node.get("transform", ""))
+            m = [[m[0][0] * tm[0][0] + m[0][1] * tm[1][0],
+                  m[0][0] * tm[0][1] + m[0][1] * tm[1][1],
+                  m[0][0] * tm[0][2] + m[0][1] * tm[1][2] + m[0][2]],
+                 [m[1][0] * tm[0][0] + m[1][1] * tm[1][0],
+                  m[1][0] * tm[0][1] + m[1][1] * tm[1][1],
+                  m[1][0] * tm[0][2] + m[1][1] * tm[1][2] + m[1][2]]]
+        x, y = float(txt.get("x")), float(txt.get("y"))
+        px = m[0][0] * x + m[0][1] * y + m[0][2]
+        py = m[1][0] * x + m[1][1] * y + m[1][2]
+        style = txt.get("style", "")
+        am = re.search(r"text-anchor:\s*(start|middle|end)", style)
+        anchor = am.group(1) if am else (txt.get("text-anchor") or "start")
+        return (px * sx, py * sy, anchor)
+    return None
 
 
 def _pin_named(inst, pins):
@@ -244,6 +328,7 @@ def _orient_svg(m) -> str:
 
 
 FONT_MM = 3.0                    # instance / net label size
+PORT_FONT_MM = 2.5               # port names: secondary to instances
 FONT_W = 0.56                    # mean glyph advance, em fraction
 
 
@@ -267,20 +352,53 @@ def _overlap(a, b) -> float:
     return w * h if w > 0 and h > 0 else 0.0
 
 
-def _place(text, size, candidates, obstacles):
+def _place(text, size, candidates, obstacles, tolerance=0.0):
     """The candidate (x, y, anchor, baseline) covering the least
     obstacle area; the first candidate wins ties (it is the natural
-    spot). Returns (x, y, anchor, baseline, box)."""
+    spot), and also wins outright when its overlap is within
+    `tolerance` of its own area (a port name grazing a wire is better
+    than a port name somewhere else). Returns (x, y, anchor,
+    baseline, box)."""
     best = None
     for i, (x, y, an, bl) in enumerate(candidates):
         box = _text_box(x, y, text, size, an, bl)
         cost = sum(_overlap(box, o) for o in obstacles)
+        area = (box[2] - box[0]) * (box[3] - box[1])
+        if i == 0 and area > 0 and cost <= tolerance * area:
+            return (x, y, an, bl, box)
         key = (round(cost, 3), i)
         if best is None or key < best[0]:
             best = (key, (x, y, an, bl, box))
         if cost == 0:
             break
     return best[1]
+
+
+def _spot_candidate(sym, m, cx, cy, text, size, fit_body=True):
+    """The library author's designator spot as a label candidate in
+    world coordinates, carried through orientation m (a mirror swaps
+    the text anchor's side); None when the symbol has none.
+    fit_body: an end-anchored spot at the canvas edge suits the
+    library's short value labels; a longer name that would run back
+    over the body starts just right of the pin column instead."""
+    if sym.label_spot is None:
+        return None
+    lx, ly, an = sym.label_spot
+    lx -= sym.origin[0]
+    ly -= sym.origin[1]
+    if fit_body and an == "end" and sym.anchors:
+        w_txt = FONT_W * size * len(text)
+        right = max(sym.local(k)[0] for k in sym.anchors)
+        if lx - w_txt < right + 3.0:       # a body reaches ~3 mm past
+            lx, an = right + 3.5, "start"  # its pin column
+    a, b = m[0]
+    c, d = m[1]
+    ox, oy = lx - sym.w / 2.0, ly - sym.h / 2.0
+    wx = cx + a * ox + (-b) * oy
+    wy = cy + (-c) * ox + d * oy
+    if a < 0 and an in ("start", "end"):
+        an = "end" if an == "start" else "start"
+    return (wx, wy, an, "alphabetic")
 
 
 def _symbol_rect(cx, cy, sym, m):
@@ -370,7 +488,8 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
             *, margin_mm: float = 8.0, subckts=frozenset(),
             overlay: bool = False, block_symbols: dict | None = None,
             styles: dict | None = None, net_styles: dict | None = None,
-            proposed_cells=frozenset()) -> str:
+            proposed_cells=frozenset(), tints: dict | None = None,
+            tex_labels: bool = False, aliases: dict | None = None) -> str:
     """SVG document string for one page (a definition, or the flat
     view).
 
@@ -399,7 +518,46 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
     turn gray-dashed with an earth mark. The geometry never changes.
     proposed_cells: block cells that have a symbol PROPOSED but not
     confirmed — their boxes wear a "?" badge inviting the dialog.
+    tints: instance name -> (fill colour, badge text): a matched device
+    gets a tinted plate behind its symbol and the badge (🔗n) after its
+    name, the same tint and number as the Instances tree.
+    tex_labels: labels as mathtext outlines (STIX, the library's own
+    face) instead of <text>: viewer-independent, and a device alias
+    (aliases: device name -> LaTeX, e.g. M_1) is typeset as math.
     """
+    tints = tints or {}
+    aliases = aliases or {}
+
+    def label(x, y, text, size=FONT_MM, anchor="start",
+              baseline="alphabetic", fill="#000000", bold=False,
+              tex_text=None, extra=""):
+        """One label: a <text> or, with tex_labels, the outlines.
+        tex_text: the mathtext to use instead of tex_name(text)."""
+        if tex_labels:
+            from .mathtext import svg_label, tex_name
+            return svg_label(x, y, tex_text or tex_name(text, bold), size,
+                             anchor, baseline, fill, extra)
+        attrs = (f' text-anchor="{anchor}" dominant-baseline="{baseline}"'
+                 + (f' font-size="{size}"' if size != FONT_MM else "")
+                 + (f' fill="{fill}"' if fill != "#000000" else "")
+                 + (' font-weight="bold"' if bold else "") + extra)
+        return f'<text x="{x:.2f}" y="{y:.2f}"{attrs}>{text}</text>'
+
+    def tex_for(inst_name):
+        """An instance label's mathtext: the device alias typeset as
+        written when there is one, else the upright name."""
+        from .mathtext import tex_alias, tex_name
+        a = aliases.get(inst_name) or aliases.get(inst_name.split(".")[-1])
+        return tex_alias(a) if a else None
+
+    def badge_text(x, y, badge_tspans, anchor="start"):
+        """Badges (ĝ, 🔗n, ?) stay <text>: mathtext has no emoji. Placed
+        after a path label at the measured width."""
+        if not badge_tspans:
+            return ""
+        return (f'<text x="{x:.2f}" y="{y:.2f}" text-anchor="{anchor}" '
+                f'dominant-baseline="alphabetic">{badge_tspans}</text>')
+
     block_symbols = block_symbols or {}
     styles = styles or {}
     net_styles = net_styles or {}
@@ -487,12 +645,24 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
     # the one of the eight with the smallest registration residual,
     # the harvested orient winning ties.
     stubbed = []                      # (inst, sym, spec, stubs)
-    for inst in list(blocks):
-        bs = block_symbols.get(inst.cell)
-        if not bs or not bs.confirmed:
-            continue
-        sym = lib.load(bs.symbol)
-        spec = SymbolSpec(bs.symbol, dict(bs.pins))
+    fitted = []                       # scalable DEVICE symbols, refitted
+    todo = [(inst, None) for inst in list(blocks)]
+    # devices whose symbol has no canonical size (SymbolSpec.scalable:
+    # the balun) are fitted the same way, shrinking when the library
+    # draws them larger than the PDK footprint
+    todo += [(inst, (sym, spec)) for inst, sym, spec in placed
+             if sym and spec and spec.scalable and inst.terms]
+    for inst, device in todo:
+        if device is None:
+            bs = block_symbols.get(inst.cell)
+            if not bs or not bs.confirmed:
+                continue
+            sym = lib.load(bs.symbol)
+            spec = SymbolSpec(bs.symbol, dict(bs.pins))
+            kmin = 1.0
+        else:
+            sym, spec = device
+            kmin = 0.4
         pairs = [(mm(inst.terms[r]), anchor_for(spec, r))
                  for r in inst.terms if anchor_for(spec, r) in sym.anchors]
         if not pairs:
@@ -511,8 +681,9 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
                 if du > 1e-9 and dm > 1e-9:
                     ks.append(du / dm)
         if ks:
-            k = min(max(min(ks), 1.0), BLOCK_MAX_SCALE)
-            sym = _scaled(sym, k)
+            k = min(max(min(ks), kmin), BLOCK_MAX_SCALE)
+            if abs(k - 1.0) > 1e-9:
+                sym = _scaled(sym, k)
         best = None
         for name, m in ORIENTS.items():
             off = _offset_fn(sym, m)
@@ -521,14 +692,20 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
             key = (round(res, 6), 0 if m == inst.m else 1)
             if best is None or key < best[0]:
                 best = (key, m)
-        blocks.remove(inst)
         inst2 = replace(inst, m=best[1])
-        placed.append((inst2, sym, spec))
-        stubbed.append((inst2, sym, spec,
-                        {r: bs.stubs.get(r, "auto") for r in inst.terms
-                         if anchor_for(spec, r) not in sym.anchors}))
+        if device is None:
+            blocks.remove(inst)
+            placed.append((inst2, sym, spec))
+            stubbed.append((inst2, sym, spec,
+                            {r: bs.stubs.get(r, "auto") for r in inst.terms
+                             if anchor_for(spec, r) not in sym.anchors}))
+        else:
+            placed[[p_[0] for p_ in placed].index(inst)] = (inst2, sym, spec)
+            fitted.append(inst2.name)
 
-    block_names = {s[0].name for s in stubbed}
+    # least-squares centering for everything fitted (blocks and
+    # scalable devices): no exact pitch to preserve
+    block_names = {s[0].name for s in stubbed} | set(fitted)
 
     # ---- wires first (symbols overlay them; rule 5's masking order)
     ends: dict = {}
@@ -649,9 +826,7 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
                     else [(px, py), (ex, ey)]
                 tx, ty, ta = (px + ex) / 2.0, py - 0.8, "middle"
             bridges.append(pts_)
-            parts.append(f'<text x="{tx:.2f}" y="{ty:.2f}" '
-                         f'font-size="2.2" text-anchor="{ta}" '
-                         f'dominant-baseline="central">{r}</text>')
+            parts.append(label(tx, ty, r, 2.2, ta, "central"))
     for pts in bridges:
         d = "M " + " L ".join(f"{x:.3f} {y:.3f}" for x, y in pts)
         parts.append(f'<path d="{d}" {WIRE_STYLE}/>')
@@ -660,8 +835,10 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
     earthed: set = set()
     segs: list = []                   # (net, (x0, y0), (x1, y1)) lanes
     wire_ends: list = []              # (net, point)
-    for w in flat.wires:
+    net_wires: dict = {}              # net -> [polyline, ...] for the
+    for w in flat.wires:              # viewer's net highlight
         pts = [mm(p) for p in w.points]
+        net_wires.setdefault(w.net, []).append(pts)
         segs += [(w.net, pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
         wire_ends += [(w.net, pts[0]), (w.net, pts[-1])]
         for p in (pts[0], pts[-1]):
@@ -703,6 +880,7 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
                 dots.add(key)
                 break
     compose.last_dots = set(dots)
+    compose.last_net_wires = net_wires
     for (x, y) in dots:
         parts.append(f'<circle cx="{x:.3f}" cy="{y:.3f}" '
                      f'r="{DOT_R}" fill="black"/>')
@@ -739,21 +917,72 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
         obstacles.append(box)
 
     inst_label_pos: dict = {}
+    port_label_pos: dict = {}
     for inst, sym, spec in placed:
         if sym is None or inst.name not in anchor_world:
             continue
-        if inst.cell in PORT_CELLS or inst.cell in block_symbols:
+        if inst.cell in block_symbols:
             continue
-        cx_, cy_, _ = anchor_world[inst.name]
+        cx_, cy_, pts_ = anchor_world[inst.name]
         r = _symbol_rect(cx_, cy_, sym, inst.m)
+        if inst.cell in PORT_CELLS:
+            # a port's name goes on its FREE end, away from the wire:
+            # the side of the glyph opposite its connection anchor
+            pn = _pin_named(inst, flat.pins)
+            if not pn or not pts_:
+                continue
+            ax, ay = next(iter(pts_.values()))
+            gap = 0.8
+            spot = _spot_candidate(sym, inst.m, cx_, cy_, pn["name"],
+                                   PORT_FONT_MM, fit_body=False)
+            if abs(ax - cx_) >= abs(ay - cy_):          # horizontal glyph
+                if ax > cx_:                            # wire on the right
+                    first = (r[0] - gap, cy_ + 0.35 * PORT_FONT_MM, "end",
+                             "alphabetic")
+                else:
+                    first = (r[2] + gap, cy_ + 0.35 * PORT_FONT_MM, "start",
+                             "alphabetic")
+                cands = [first,
+                         (cx_, r[1] - gap, "middle", "alphabetic"),
+                         (cx_, r[3] + gap, "middle", "hanging")]
+                if spot:
+                    cands.insert(0, spot)   # the author's spot first
+            else:                                       # vertical glyph
+                if ay > cy_:                            # wire below
+                    first = (cx_, r[1] - gap, "middle", "alphabetic")
+                else:
+                    first = (cx_, r[3] + gap, "middle", "hanging")
+                cands = [first,
+                         (r[2] + gap, cy_ + 0.35 * PORT_FONT_MM, "start",
+                          "alphabetic"),
+                         (r[0] - gap, cy_ + 0.35 * PORT_FONT_MM, "end",
+                          "alphabetic")]
+                if spot:
+                    cands.insert(0, spot)
+            own = [o for o in obstacles if o != r]
+            px, py, an, bl, box = _place(pn["name"], PORT_FONT_MM, cands,
+                                         own, tolerance=0.15)
+            port_label_pos[inst.name] = (px, py, an, bl, pn["name"])
+            obstacles.append(box)
+            continue
         gap = 1.0
-        cands = [
+        # where the library author put the designator, first. The
+        # planned text includes the badges the label will carry
+        label_text = inst.name + (" xxx" if inst.name in tints else "")
+        cands = []
+        spot = _spot_candidate(sym, inst.m, cx_, cy_, label_text, FONT_MM)
+        if spot:
+            cands.append(spot)
+        cands += [
             (r[2] + gap, cy_ + 0.35 * FONT_MM, "start", "alphabetic"),
             (r[0] - gap, cy_ + 0.35 * FONT_MM, "end", "alphabetic"),
             (cx_, r[1] - gap, "middle", "alphabetic"),
             (cx_, r[3] + gap, "middle", "hanging"),
         ]
-        px, py, an, bl, box = _place(inst.name, FONT_MM, cands, obstacles)
+        # the symbol's own canvas is no obstacle to its own label: the
+        # author's designator spot lies inside it by design
+        own = [o for o in obstacles if o != r]
+        px, py, an, bl, box = _place(label_text, FONT_MM, cands, own)
         inst_label_pos[inst.name] = (px, py, an, bl)
         obstacles.append(box)
 
@@ -774,9 +1003,17 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
         cxb = (q0[0] + q1[0]) / 2.0
         badge = (f'<tspan fill="{EMPH}" font-weight="bold"> ?</tspan>'
                  if inst.cell in proposed_cells else "")
-        parts.append(f'<text x="{cxb:.2f}" y="{q0[1] - 1.2:.2f}" '
-                     f'text-anchor="middle">{inst.name} '
-                     f'({inst.cell}){badge}</text>')
+        if tex_labels:
+            from .mathtext import label_width, tex_name
+            txt = f"{inst.name} ({inst.cell})"
+            parts.append(label(cxb, q0[1] - 1.2, txt, anchor="middle"))
+            if badge:
+                w = label_width(tex_name(txt), FONT_MM)
+                parts.append(badge_text(cxb + w / 2.0, q0[1] - 1.2, badge))
+        else:
+            parts.append(f'<text x="{cxb:.2f}" y="{q0[1] - 1.2:.2f}" '
+                         f'text-anchor="middle">{inst.name} '
+                         f'({inst.cell}){badge}</text>')
         for pname, pxy in inst.terms.items():
             px, py = anchor_world[inst.name][2][pname]
             parts.append(f'<circle cx="{px:.3f}" cy="{py:.3f}" r="0.45" '
@@ -785,9 +1022,7 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
             # pin name just inside the box edge nearest the pin
             inside_x = px + (1.0 if px < cxb else -1.0)
             anchor = "start" if px < cxb else "end"
-            parts.append(f'<text x="{inside_x:.2f}" y="{py + 1.0:.2f}" '
-                         f'font-size="2.2" text-anchor="{anchor}">'
-                         f'{pname}</text>')
+            parts.append(label(inside_x, py + 1.0, pname, 2.2, anchor))
         parts.append("</g>")
 
     # ---- symbols
@@ -796,7 +1031,8 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
                 "glyph" if inst.cell in CELL_GLYPHS else "device")
         instances[inst.name] = inst.cell
         tag = styles.get(inst.name)
-        extra = ' opacity="0.25"' if tag == STYLE_REMOVED else ""
+        extra = (' opacity="0.25"' if tag == STYLE_REMOVED else
+                 ' opacity="0.55"' if tag == STYLE_PASSIVE else "")
         parts.append(f'<g id="{_xml_id(inst.name)}" class="{kind}"{extra}>')
         # in the formula: bold; folded into a number: gray. Blue stays
         # the harvested net labels' color, nothing else
@@ -804,6 +1040,9 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
                     ' fill="#8a8a8a"' if tag == STYLE_NUMERIC else "")
         badge = (f'<tspan fill="{EMPH}" font-size="2.4"> ĝ</tspan>'
                  if tag == STYLE_LUMPED else "")
+        if inst.name in tints and tints[inst.name][1]:
+            badge += (f'<tspan fill="{EMPH}" font-size="2.2"> '
+                      f'{tints[inst.name][1]}</tspan>')
         if sym is None:
             q0 = mm((inst.bbox[0], inst.bbox[3]))
             q1 = mm((inst.bbox[2], inst.bbox[1]))
@@ -818,6 +1057,16 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
             parts.append("</g>")
             continue
         cx, cy, _ = anchor_world[inst.name]
+        if inst.name in tints:
+            # the match-group plate: a tinted rounded rectangle behind
+            # the symbol, inset so it reads as a highlight, not a box
+            fill, _badge = tints[inst.name]
+            pr = _symbol_rect(cx, cy, sym, inst.m)
+            parts.append(
+                f'<rect x="{pr[0] + 0.6:.2f}" y="{pr[1] + 0.6:.2f}" '
+                f'width="{pr[2] - pr[0] - 1.2:.2f}" '
+                f'height="{pr[3] - pr[1] - 1.2:.2f}" rx="1.2" '
+                f'fill="{fill}" stroke="none"/>')
         # a plain scaled <g>, not a nested <svg>: QtSvg (SVG Tiny)
         # ignores nested svg elements entirely — measured, not assumed
         vb = [float(v) for v in sym.viewbox.split()]
@@ -831,38 +1080,60 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
             f'translate({-vb[0]:.3f}, {-vb[1]:.3f})">'
             f'{sym.inner}</g>')
         if inst.cell in PORT_CELLS:
-            # a port shows its PIN NAME where the source draws it (the
-            # harvested pin figure), never the Cadence instance name
-            pn = _pin_named(inst, flat.pins)
-            if pn:
-                x, y = mm_raw(pn["xy"])
-                parts.append(f'<text x="{x:.2f}" y="{y:.2f}" '
-                             f'text-anchor="middle" '
-                             f'dominant-baseline="central">'
-                             f'{pn["name"]}</text>')
+            # a port shows its PIN NAME on its free end, never the
+            # Cadence instance name
+            if inst.name in port_label_pos:
+                px, py, an, bl, txt = port_label_pos[inst.name]
+                parts.append(label(px, py, txt, PORT_FONT_MM, an, bl))
         elif inst.cell in block_symbols:
             # under the body, centered: the sides carry the bridges
             ext = max(sym.w, sym.h) / 2.0
-            parts.append(f'<text x="{cx:.2f}" y="{cy + ext + 1.5:.2f}" '
-                         f'text-anchor="middle" '
-                         f'dominant-baseline="hanging"{lab_attr}>'
-                         f'{inst.name}{badge}</text>')
-            parts.append(f'<text x="{cx:.2f}" y="{cy + ext + 5.2:.2f}" '
-                         f'text-anchor="middle" '
-                         f'dominant-baseline="hanging" font-size="2.2">'
-                         f'({inst.cell})</text>')
+            bold = tag == STYLE_SYMBOLIC
+            fill = "#8a8a8a" if tag == STYLE_NUMERIC else "#000000"
+            if tex_labels:
+                from .mathtext import label_width, tex_name
+                ttx = tex_for(inst.name) or tex_name(inst.name, bold)
+                parts.append(label(cx, cy + ext + 1.5, inst.name,
+                                   anchor="middle", baseline="hanging",
+                                   fill=fill, bold=bold, tex_text=ttx))
+                if badge:
+                    w = label_width(ttx, FONT_MM)
+                    parts.append(badge_text(cx + w / 2.0,
+                                            cy + ext + 1.5 + 2.4, badge))
+            else:
+                parts.append(f'<text x="{cx:.2f}" y="{cy + ext + 1.5:.2f}" '
+                             f'text-anchor="middle" '
+                             f'dominant-baseline="hanging"{lab_attr}>'
+                             f'{inst.name}{badge}</text>')
+            parts.append(label(cx, cy + ext + 5.2, f"({inst.cell})", 2.2,
+                               "middle", "hanging"))
         else:
             px, py, an, bl = inst_label_pos.get(
                 inst.name, (cx + sym.w / 2 + 1, cy, "start", "alphabetic"))
-            parts.append(f'<text x="{px:.2f}" y="{py:.2f}" '
-                         f'text-anchor="{an}" dominant-baseline="{bl}"'
-                         f'{lab_attr}>{inst.name}{badge}</text>')
+            if tex_labels:
+                from .mathtext import label_width, render, tex_name
+                bold = tag == STYLE_SYMBOLIC
+                fill = "#8a8a8a" if tag == STYLE_NUMERIC else "#000000"
+                ttx = tex_for(inst.name) or tex_name(inst.name, bold)
+                parts.append(label(px, py, inst.name, anchor=an,
+                                   baseline=bl, fill=fill, bold=bold,
+                                   tex_text=ttx))
+                if badge:
+                    w = label_width(ttx, FONT_MM)
+                    bx = {"start": px + w, "middle": px + w / 2.0,
+                          "end": px}.get(an, px + w)
+                    by = py + (render(ttx, FONT_MM)[2] if bl == "hanging"
+                               else 0.0)
+                    parts.append(badge_text(bx, by, badge))
+            else:
+                parts.append(f'<text x="{px:.2f}" y="{py:.2f}" '
+                             f'text-anchor="{an}" dominant-baseline="{bl}"'
+                             f'{lab_attr}>{inst.name}{badge}</text>')
         parts.append("</g>")
     compose.last_instances = instances
 
     for x, y, txt in net_label_pos:
-        parts.append(f'<text x="{x:.2f}" y="{y:.2f}" '
-                     f'fill="#1a466b">{txt}</text>')
+        parts.append(label(x, y, txt, fill="#1a466b"))
 
     if overlay:
         parts.append(_overlay_svg(flat, blocks, placed, raw_wires, mm_raw))

@@ -206,6 +206,8 @@ def op_unit(name: str) -> str:
     of the whole name -- keying off the whole name lets the ``I0_`` prefix
     masquerade as a current (``I0_Cc`` -> ``14.7 pA``)."""
     n = name.lower()
+    if n.startswith(("geq_", "ceq_", "req_")):
+        return {"g": "S", "c": "F", "r": "Ω"}[n[0]]   # lumped equivalents
     if n.startswith(("gm", "gds", "gmb", "go", "gpi", "gmu")):
         return "S"                    # trans/output conductances
     if n.startswith("c"):

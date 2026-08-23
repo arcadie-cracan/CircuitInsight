@@ -50,10 +50,12 @@ def _pole_zero_ticks(ax1, result, f):
                      color=("#D00000" if rhp else "#666666"),
                      mew=1.0, ls="none", clip_on=False)
 
-def bode_figure(result, fig=None, overlays=()):
+def bode_figure(result, fig=None, overlays=(), labels=None):
     """Magnitude/phase Bode of the model, with the AC-sim overlay if present,
     PM/GM annotations for loop-gain results, and pole/zero tick markers.
     `overlays`: additional Results drawn for comparison (history multi-select).
+    `labels`: (main label, [overlay labels]) to override the in->out
+    naming -- the Reduce bench's "as imported" vs "ticked reduction".
     Pass an existing Figure (e.g. a Qt canvas's) to draw into it."""
     from matplotlib.figure import Figure
 
@@ -76,8 +78,14 @@ def bode_figure(result, fig=None, overlays=()):
     f = np.asarray(result.freqs, dtype=float)
     h = np.asarray(result.h)
     label = f"{result.inp} → {result.out}" if not overlays         else f"{result.out}"
+    main_label = label if overlays else "model"
+    over_labels = [f"{other.out}" for other in overlays]
+    if labels:
+        main_label = labels[0]
+        over_labels = list(labels[1])[:len(overlays)] + over_labels[
+            len(labels[1]):]
     ax1.semilogx(f, 20 * np.log10(np.abs(h)), color="#0072B2", lw=1.4,
-                 label=label if overlays else "model")
+                 label=main_label)
     ax2.semilogx(f, np.degrees(np.unwrap(np.angle(h))), color="#0072B2", lw=1.4)
     if result.h_ref is not None:
         hr = np.asarray(result.h_ref)
@@ -89,9 +97,11 @@ def bode_figure(result, fig=None, overlays=()):
         fo = np.asarray(other.freqs, dtype=float)
         ho = np.asarray(other.h)
         c = _OVERLAY_COLORS[i % len(_OVERLAY_COLORS)]
+        ls = "--" if labels else "-"          # a comparison reads dashed
         ax1.semilogx(fo, 20 * np.log10(np.abs(ho)), color=c, lw=1.1,
-                     label=f"{other.out}")
-        ax2.semilogx(fo, np.degrees(np.unwrap(np.angle(ho))), color=c, lw=1.1)
+                     ls=ls, label=over_labels[i])
+        ax2.semilogx(fo, np.degrees(np.unwrap(np.angle(ho))), color=c,
+                     lw=1.1, ls=ls)
 
     if getattr(result, "simplified", False) and \
             getattr(result, "band_fmin", None) is not None:
@@ -143,8 +153,18 @@ def figure_legend(fig, ax1):
     # or a canvas that shrank (certificate hint appearing, short panel)
     # pushes it below the edge — clipped is indistinguishable from gone
     h_px = fig.get_size_inches()[1] * fig.dpi
-    y = max(y, 24.0 / max(h_px, 1.0))    # anchor is the box TOP; ~21 px tall
     fig._ci_legend_y = y                         # refresh_legend compares
+    if y < 24.0 / max(h_px, 1.0):
+        # no room under the frequency label (a short canvas): clamping
+        # the anchor up put the legend ON the label. Inside the
+        # magnitude axes' top-right corner instead, where the flat
+        # low-frequency gain leaves the space empty.
+        fig.legend(handles, labels, loc="upper right",
+                   bbox_to_anchor=(ax1.get_position().x1 - 0.004,
+                                   ax1.get_position().y1 - 0.01),
+                   ncol=max(1, len(labels)), frameon=False, fontsize=8,
+                   borderaxespad=0.0, columnspacing=1.4, handlelength=1.6)
+        return
     fig.legend(handles, labels, loc="upper center",
                bbox_to_anchor=((pos.x0 + pos.x1) / 2, y),
                ncol=max(1, len(labels)), frameon=False, fontsize=8,

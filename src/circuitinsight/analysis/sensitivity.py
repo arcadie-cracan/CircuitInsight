@@ -463,6 +463,106 @@ def _reactive_symbols(analyzer) -> set[str]:
             for p in analyzer.primitives if p.kind in ("c", "cx", "l")}
 
 
+def _greedy_pursuit(response, err, contrib, react, Q_base, tol, unit,
+                    max_elements, note, progress):
+    """The exact greedy add-back shared by the transfer and loop-gain
+    pursuits: start with every selectable reactance removed from the
+    s-linear part, add the one whose restoration most reduces the
+    criterion error, stop within tolerance or at the cap. `response`
+    maps a Q matrix to the complex response array; everything else is
+    the caller's physics."""
+    Qsel = Q_base.copy()
+    Hr = response(Qsel)
+    baseline = err(Hr)
+    if note is not None:
+        note(f"baseline error {baseline:.3g}{unit} with no reactances; "
+             f"tolerance {tol:g}{unit}, {len(react)} candidates")
+    selected: list[str] = []
+    errors: list[float] = []
+    remaining = set(react)
+    # per-candidate progress: the number of ROUNDS is unknown up front
+    # (the pursuit stops when the tolerance is met), so the reported
+    # total is done + the current round's remainder -- a lower bound
+    # that grows honestly when another round begins
+    ev_done = 0
+
+    def track():
+        nonlocal ev_done
+        ev_done += 1
+        if progress is not None:
+            progress(ev_done, ev_done + len(remaining))
+
+    while remaining and (max_elements is None or len(selected) < max_elements):
+        if baseline <= tol and not selected:
+            break
+        cur = err(Hr)
+        best, best_err = None, cur
+        for c in remaining:                     # exact greedy over all
+            e = err(response(Qsel + contrib[c]))
+            track()
+            if e < best_err - 1e-9:
+                best, best_err = c, e
+        if best is None:                        # nothing improves -> stop
+            break
+        selected.append(best)
+        remaining.discard(best)
+        Qsel = Qsel + contrib[best]
+        Hr = response(Qsel)
+        errors.append(best_err)
+        if note is not None:
+            fate = ("tolerance met, stopping" if best_err <= tol else
+                    f"still above tolerance, re-trying "
+                    f"{len(remaining)} candidates")
+            note(f"round {len(selected)}: + {best} -> error "
+                 f"{best_err:.3g}{unit} ({fate})")
+        if best_err <= tol:
+            break
+    return selected, errors, baseline, Hr
+
+
+def _greedy_elimination(response, err, contrib, react, Q_full, tol,
+                        unit, note, progress):
+    """The mirror of _greedy_pursuit, for responses the add-back can
+    never reach from nothing: an AC-coupled loop gain is identically
+    zero with every reactance removed, so no single restoration
+    improves an infinite baseline. Start from the FULL response --
+    the criterion is met by construction -- and remove the reactance
+    whose removal costs least, while the tolerance still holds.
+    Returns (kept, errors, Hr)."""
+    Qsel = Q_full.copy()
+    Hr = response(Qsel)
+    kept = list(react)
+    errors: list[float] = []
+    if note is not None:
+        note(f"full model error {err(Hr):.3g}{unit}; tolerance "
+             f"{tol:g}{unit}, {len(kept)} removal candidates")
+    ev_done = 0
+
+    def track():
+        nonlocal ev_done
+        ev_done += 1
+        if progress is not None:
+            progress(ev_done, ev_done + len(kept))
+
+    while kept:
+        best, best_err = None, None
+        for c in kept:
+            e = err(response(Qsel - contrib[c]))
+            track()
+            if e <= tol and (best is None or e < best_err):
+                best, best_err = c, e
+        if best is None:                 # every removal breaks the
+            break                        # contract -> done
+        kept.remove(best)
+        Qsel = Qsel - contrib[best]
+        Hr = response(Qsel)
+        errors.append(best_err)
+        if note is not None:
+            note(f"- {best} removed -> error {best_err:.3g}{unit} "
+                 f"({len(kept)} reactance(s) stay)")
+    return kept, errors, Hr
+
+
 def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
                         fmin: float | None = None, fmax: float | None = None,
                         metric: str = "complex",
@@ -587,53 +687,9 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
     if crit.cap is not None and max_elements is None:
         max_elements = crit.cap       # an unreadable model is a failure
 
-    Qsel = Q_base.copy()
-    Hr = response(Qsel)
-    baseline = err(Hr)
-    unit = crit.unit
-    if note is not None:
-        note(f"baseline error {baseline:.3g}{unit} with no reactances; "
-             f"tolerance {tol:g}{unit}, {len(react)} candidates")
-    selected: list[str] = []
-    errors: list[float] = []
-    remaining = set(react)
-    # per-candidate progress: the number of ROUNDS is unknown up front
-    # (the pursuit stops when the tolerance is met), so the reported
-    # total is done + the current round's remainder -- a lower bound
-    # that grows honestly when another round begins
-    ev_done = 0
-
-    def track():
-        nonlocal ev_done
-        ev_done += 1
-        if progress is not None:
-            progress(ev_done, ev_done + len(remaining))
-
-    while remaining and (max_elements is None or len(selected) < max_elements):
-        if baseline <= tol and not selected:
-            break
-        cur = err(Hr)
-        best, best_err = None, cur
-        for c in remaining:                     # exact greedy over all
-            e = err(response(Qsel + contrib[c]))
-            track()
-            if e < best_err - 1e-9:
-                best, best_err = c, e
-        if best is None:                        # nothing improves -> stop
-            break
-        selected.append(best)
-        remaining.discard(best)
-        Qsel = Qsel + contrib[best]
-        Hr = response(Qsel)
-        errors.append(best_err)
-        if note is not None:
-            fate = ("tolerance met, stopping" if best_err <= tol else
-                    f"still above tolerance, re-trying "
-                    f"{len(remaining)} candidates")
-            note(f"round {len(selected)}: + {best} -> error "
-                 f"{best_err:.3g}{unit} ({fate})")
-        if best_err <= tol:
-            break
+    selected, errors, baseline, Hr = _greedy_pursuit(
+        response, err, contrib, react, Q_base, tol, crit.unit,
+        max_elements, note, progress)
     final = errors[-1] if errors else baseline
     metrics = crit.metrics(freqs, Hr, sig)
     met = bool(final <= tol + 1e-12)

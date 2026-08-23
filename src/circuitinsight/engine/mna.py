@@ -209,8 +209,21 @@ class TransferFunction:
 
     def dc_gain(self) -> sp.Expr:
         n, d = self.num_den
-        return sp.simplify(
-            n.eval(0) / d.eval(0)) if d.eval(0) != 0 else sp.zoo
+        if d.eval(0) == 0:
+            return sp.zoo
+        try:
+            return sp.simplify(n.eval(0) / d.eval(0))
+        except ZeroDivisionError:
+            # a denormal float DC coefficient passes the != 0 guard
+            # but still divides as zero in mpmath (seen on a reduced
+            # series-port impedance whose DC path is truly open)
+            return sp.zoo
+        except OverflowError:
+            # without python-flint, sympy's simplify walks factorint
+            # over the giant exact integers of a full-circuit DC
+            # ratio and overflows converting an mpz to float; the
+            # unsimplified quotient is exact and serves every caller
+            return n.eval(0) / d.eval(0)
 
     def _subs_map(self) -> dict:
         return {
