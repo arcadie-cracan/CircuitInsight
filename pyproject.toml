@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "circuitinsight"
-version = "0.1.0"
+version = "0.1.1"
 description = "Symbolic small-signal circuit analyzer driven by simulator operating-point data"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -49,6 +49,10 @@ Issues = "https://github.com/arcadie-cracan/CircuitInsight/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/circuitinsight"]
+# the symbols submodule rides inside the package; its git plumbing and
+# any local editing backups stay out of the wheel
+exclude = ["src/circuitinsight/symbols/.git*",
+           "src/circuitinsight/symbols/backup-*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

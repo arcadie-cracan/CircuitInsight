@@ -1,3 +1,6 @@
 [submodule "symbols"]
-	path = symbols
+	path = src/circuitinsight/symbols
+	url = https://github.com/arcadie-cracan/circuitinsight-symbols.git
+[submodule "src/circuitinsight/symbols"]
+	path = src/circuitinsight/symbols
 	url = https://github.com/arcadie-cracan/circuitinsight-symbols.git

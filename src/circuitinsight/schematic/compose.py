@@ -70,11 +70,13 @@ class ComposeError(ValueError):
     pass
 
 
-#: the symbol library as a git submodule of the source checkout
-#: (github.com/arcadie-cracan/circuitinsight-symbols, CC BY 4.0): the
-#: default when nothing is configured. A pip install has no checkout,
-#: so CIN_SYMLIB / the GUI's Library... setting remain the way there.
-BUNDLED_SYMLIB = Path(__file__).resolve().parents[3] / "symbols"
+#: the symbol library (github.com/arcadie-cracan/circuitinsight-symbols,
+#: CC BY 4.0): the default when nothing is configured.
+# The library lives INSIDE the package (the submodule's path is
+# src/circuitinsight/symbols) so a WHEEL ships it: a pip install from
+# git once delivered a GUI whose schematic pane could only shrug --
+# the library sat at the repo root, outside everything hatchling packs
+BUNDLED_SYMLIB = Path(__file__).resolve().parents[1] / "symbols"
 
 
 def library_root(explicit=None) -> Path:
