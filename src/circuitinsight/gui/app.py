@@ -199,10 +199,10 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                                         Qt.ToolTipRole)
         self.tool_combo.currentTextChanged.connect(self._on_tool_selected)
         tb.addWidget(self.tool_combo)
-        tb.addWidget(QLabel(" in: "))
-        tb.addWidget(self.in_combo)
-        tb.addWidget(QLabel(" out: "))
-        tb.addWidget(self.out_combo)
+        self._in_lbl_act = tb.addWidget(QLabel(" in: "))
+        self._in_act = tb.addWidget(self.in_combo)
+        self._out_lbl_act = tb.addWidget(QLabel(" out: "))
+        self._out_act = tb.addWidget(self.out_combo)
         self.probe_lbl = QLabel(" probe: ")
         self.probe_combo = QComboBox()
         self.probe_combo.setMinimumWidth(110)
@@ -859,6 +859,8 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.nets_tree.outputRequested.connect(self._set_output_net)
         self.nets_tree.acgroundRequested.connect(self._acg_from_net)
         self.nets_tree.impedanceRequested.connect(self._impedance_at_nets)
+        self.nets_tree.itemSelectionChanged.connect(
+            self._impedance_target_from_selection)
         self.devices.impedanceSeenRequested.connect(self._impedance_seen_by)
         self.probe_combo.currentTextChanged.connect(self._on_port_text)
         self.nets_tree.connectionActivated.connect(self._goto_instance)
@@ -1028,8 +1030,29 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             # of the group counted in its minimum width (214 px)
             w.setParent(self)
             w.setVisible(False)
+        # ticks survive reranks by design (they are stated intent),
+        # but a rerank can sink them below the fold -- the field report
+        # solved with 5 symbols while believing in 2. The count is
+        # always visible, the filter shows exactly what is ticked, and
+        # clear starts over.
+        self.ticked_chk = QCheckBox("ticked only (0)")
+        self.ticked_chk.setToolTip(
+            "Show only the ticked symbols — wherever the rerank sorted "
+            "them")
+        self.ticked_chk.toggled.connect(
+            lambda _on: self._apply_keep_filter())
+        clearb = QPushButton("clear ticks")
+        clearb.setFlat(True)
+        clearb.setToolTip("Untick every symbol: the next solve is "
+                          "numeric until you tick again")
+        clearb.clicked.connect(self._clear_keep_ticks)
+        trow = QHBoxLayout()
+        trow.addWidget(self.ticked_chk)
+        trow.addStretch(1)
+        trow.addWidget(clearb)
         v = QVBoxLayout()
         v.addWidget(self.keep_filter)
+        v.addLayout(trow)
         v.addWidget(self.keep_tbl, 1)
         v.addWidget(self.estimate_lbl)
         return self._collapsible(box, v)
@@ -1288,10 +1311,22 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         inp, out = self._io()
         r = self.controller.attach_template(
             self.controller.solve(inp, out, []))
-        self._show(r, push_history=False)
-        self.statusBar().showMessage(
-            f"first light: {inp} → {out} numeric, "
-            f"{r.dc_gain_db:.2f} dB — tick symbols and Solve to refine")
+        # the first light IS the transfer: shown only when the session
+        # opens INTO the Transfer tool. A restored Impedance session
+        # once opened onto a transfer Bode it never asked for (field
+        # report); other tools start with an empty plot, and the
+        # computed result waits for a switch to Transfer.
+        self._first_light_result = r
+        mode = self.mode_combo.currentText()
+        if mode == "Transfer":
+            self._show(r, push_history=False)
+            self.statusBar().showMessage(
+                f"first light: {inp} → {out} numeric, "
+                f"{r.dc_gain_db:.2f} dB — tick symbols and Solve to refine")
+        else:
+            self.statusBar().showMessage(
+                f"{mode}: pick a target and Solve — the plot fills with "
+                f"this tool's own result")
 
     @staticmethod
     def _collapsible(box, body_layout, collapsed=False):
@@ -1332,12 +1367,36 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         # the label is hidden state now; the verdict reads in the strip
         self._set_strip("split: " + adv.verdict(), "info")
 
-    def _apply_keep_filter(self, text: str):
+    def _apply_keep_filter(self, text: str | None = None):
+        if text is None:
+            text = self.keep_filter.text()
         text = text.strip().lower()
+        only = getattr(self, "ticked_chk", None) is not None \
+            and self.ticked_chk.isChecked()
         for i in range(self.keep_tbl.rowCount()):
             it = self.keep_tbl.item(i, 0)
-            hide = bool(text) and text not in it.text().lower()
+            hide = (bool(text) and text not in it.text().lower()) \
+                or (only and it.checkState() != Qt.Checked)
             self.keep_tbl.setRowHidden(i, hide)
+        self._refresh_tick_count()
+
+    def _refresh_tick_count(self):
+        chk = getattr(self, "ticked_chk", None)
+        if chk is not None:
+            chk.setText(f"ticked only ({len(self.checked_keep())})")
+
+    def _clear_keep_ticks(self):
+        self._filling = True
+        try:
+            for i in range(self.keep_tbl.rowCount()):
+                it = self.keep_tbl.item(i, 0)
+                if it is not None:
+                    it.setCheckState(Qt.Unchecked)
+        finally:
+            self._filling = False
+        self._apply_keep_filter()
+        self._update_estimate()
+        self._refresh_solve_hint()
 
     def _history_group(self):
         from PySide6.QtWidgets import QListWidget
@@ -1421,7 +1480,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         removed, sources zeroed (Thevenin looking outward)."""
         self._impedance_user_spec({"seen_by": name})
 
-    def _impedance_user_spec(self, spec):
+    def _impedance_user_spec(self, spec, solve=True):
         if self.controller is None:
             return
         # mode first: entering Impedance repopulates the port combo,
@@ -1434,10 +1493,33 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.probe_combo.setCurrentText(self.USER_PORT)
         self._rerank_for_z()
         desc = self._imp_desc(spec)
+        if not solve:
+            # the target is chosen and the ranking follows; the solve
+            # waits for Solve (a selection is not a command)
+            self.statusBar().showMessage(
+                f"impedance target: {desc} — Solve to compute")
+            return
         keep = self.checked_keep()
         self._launch(lambda cb: self.controller.impedance_result(
                          spec, keep=keep),
                      f"impedance: {desc} …")
+
+    def _impedance_target_from_selection(self):
+        """In the Impedance tool, SELECTING a net -- Nets tree or a
+        wire click -- chooses the port: the dropdown reads 'user
+        selected' and the keep ranking re-ranks for that Z, but
+        nothing solves until Solve (field request). One net is Z to
+        ground, two are Z between them."""
+        if self.controller is None                 or self.mode_combo.currentText() != "Impedance":
+            return
+        sel = self.nets_tree.selected_nets()
+        if not sel or len(sel) > 2:
+            return
+        spec = ({"node": sel[0]} if len(sel) == 1
+                else {"node": sel[0], "ref": sel[1]})
+        if spec == getattr(self, "_imp_spec", None):
+            return
+        self._impedance_user_spec(spec, solve=False)
 
     def _on_port_text(self, text: str):
         """Choosing a real marker port leaves the user-selected spec:
@@ -1482,6 +1564,17 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         io_on = mode in ("Transfer", "GFT", "Reduce circuit")
         self.out_combo.setEnabled(io_on)
         self.in_combo.setEnabled(io_on)
+        # tools that never read the pair HIDE it instead of graying it
+        # (field report: Impedance showing in/out invited reading Z
+        # against a transfer pair it ignores)
+        for a in (self._in_lbl_act, self._in_act,
+                  self._out_lbl_act, self._out_act):
+            a.setVisible(io_on)
+        # a session that opened into another tool kept its first light
+        # off screen; entering Transfer with nothing solved shows it
+        if mode == "Transfer" and self.result is None \
+                and getattr(self, "_first_light_result", None) is not None:
+            self._show(self._first_light_result, push_history=False)
         # the result-form selector serves the two tools that solve a
         # response: Transfer and Impedance (parity -- one contract
         # ladder, wherever a response is solved)
@@ -1527,6 +1620,9 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         prev = getattr(self, "_last_mode", None)
         self._last_mode = mode
         if mode == "Impedance":
+            # a net already selected when the tool opens becomes the
+            # target -- the flow 'select the net, then pick the tool'
+            self._impedance_target_from_selection()
             self._rerank_for_z()
         elif prev == "Impedance":
             self._rerank_on_io()
@@ -2064,11 +2160,17 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             self._job_finished()
             if not live():
                 return
-            self._show(r, push_history=False)
-            self.statusBar().showMessage(
-                f"first light: {inp} → {out} numeric, "
-                f"{r.dc_gain_db:.2f} dB — matches and keep plan on the "
-                f"way …")
+            self._first_light_result = r
+            if self.mode_combo.currentText() == "Transfer":
+                self._show(r, push_history=False)
+                self.statusBar().showMessage(
+                    f"first light: {inp} → {out} numeric, "
+                    f"{r.dc_gain_db:.2f} dB — matches and keep plan on "
+                    f"the way …")
+            else:
+                self.statusBar().showMessage(
+                    f"{self.mode_combo.currentText()}: pick a target and "
+                    f"Solve — matches and keep plan on the way …")
             self._run_bg(lambda: [tuple(g) for g in c.suggest_matches()],
                          land_matches)
 
@@ -2079,7 +2181,11 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                 self._match_groups = list(groups)
                 c.set_matches(*groups)
                 self._refresh_matches_label()
-            baseline = self.result
+            # the pre-match baseline is the COMPUTED first light, not
+            # the displayed result -- a session opened into another
+            # tool computes it without showing it
+            baseline = getattr(self, "_first_light_result", None) \
+                or self.result
 
             def compute():
                 plan = c.suggest_keep(inp, out, self.budget_spin.value())
@@ -2315,6 +2421,11 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             for name, *_ in rows:
                 order.setdefault(self._sym_device(name), len(order))
             rows = sorted(rows, key=lambda r: (order[self._sym_device(r[0])],))
+        # the list stays in PURE rank order: floating ticked rows to
+        # the top misread as importance (field report: CL led the list
+        # for Z(net1) and looked like a dominant contributor). The
+        # count on the estimate line and the 'ticked only' filter are
+        # how carried ticks stay findable.
         from PySide6.QtGui import QBrush, QColor
         tints = (QBrush(), QBrush(QColor(theme.WARN_TINT)))
         self.keep_tbl.setRowCount(len(rows))
@@ -2485,7 +2596,14 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             self._save_aliases()
             self._render_expr()
             return
-        self._update_estimate()                   # a checkbox toggled
+        # a checkbox toggled: the count follows, and under 'ticked
+        # only' an unticked row leaves the view
+        if getattr(self, "ticked_chk", None) is not None \
+                and self.ticked_chk.isChecked():
+            self._apply_keep_filter()
+        else:
+            self._refresh_tick_count()
+        self._update_estimate()
 
     #: combo index -> engine.interp.PROBE_BACKEND value (None = auto)
     _BACKENDS = (None, "qq", "bot", "zp", "ratfun")
@@ -2554,9 +2672,18 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                 self.estimate_lbl.setText(
                     f"estimate: — ({type(est).__name__})")
                 return
-            self.estimate_lbl.setText(f"estimate: {est}")
+            n = len(keep)
+            tick_note = f"  —  {n} ticked" if n else ""
+            self.estimate_lbl.setText(f"estimate: {est}{tick_note}")
             self._show_auto_backend(getattr(est, "backend", None))
             secs = getattr(est, "seconds", None)
+            # an unmodelled path's seconds are an extrapolation the
+            # estimator itself refuses to print -- the launch line must
+            # not quote them either (field report: '[estimate ~3s]'
+            # against a 45 s direct determinant)
+            if getattr(est, "path", None) not in getattr(
+                    est, "MODELLED", ()):
+                secs = None
             # the progress bar shows elapsed against this, so a wrong
             # estimate is visible while you wait, not only afterwards
             self._est_s = secs
@@ -2660,7 +2787,8 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             kw, phrase = self._impedance_form_kw()
             self._launch(lambda cb: self.controller.impedance_result(
                              target, keep=keep, progress=cb, **kw),
-                         f"impedance: {desc}{phrase} …")
+                         f"impedance: {desc}{phrase}"
+                         f"{f' [{len(keep)} kept]' if keep else ''} …")
             return
         if self.mode_combo.currentText() == "GFT":
             self.run_gft()
@@ -2679,7 +2807,8 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             self._launch(lambda cb: self.controller.loop_gain(
                              probe, keep=keep, progress=cb,
                              max_seconds=budget, **kw),
-                         f"loop gain at {probe}{phrase} …")
+                         f"loop gain at {probe}{phrase}"
+                         f"{f' [{len(keep)} kept]' if keep else ''} …")
             return
         # Transfer: ONE Solve action; the form selector picks the contract
         form = self.form_combo.currentText()
@@ -2692,7 +2821,8 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         inp, out, keep = *self._io(), self.checked_keep()
         self._launch(lambda cb: self.controller.attach_template(
                          self.controller.solve(inp, out, keep, progress=cb)),
-                     f"solving {inp} → {out} …")
+                     f"solving {inp} → {out}"
+                     f"{f' [{len(keep)} kept]' if keep else ''} …")
 
     def _loopgain_form_kw(self) -> tuple[dict, str]:
         """The Loop-gain solve's contract from the form selector --

@@ -1056,11 +1056,16 @@ class SessionController:
                 progress=progress, note=note)
             self._cache[key] = r
             return r
+        # the progress callback reaches the solver: without it every
+        # impedance solve filed its whole life under 'preparing' and
+        # the live estimate had nothing to refine from (field report:
+        # 11 s promised, 91.6 s delivered, no phase to blame)
         if "port" in spec:
-            tf = an.impedance(port=spec["port"], keep=keep)
+            tf = an.impedance(port=spec["port"], keep=keep,
+                              progress=progress)
         else:
             tf = an.impedance(node=node, ref=ref, keep=keep,
-                              disable=disable)
+                              disable=disable, progress=progress)
         if form == "simplified":
             H = tf
             tf = H.simplify(mag_tol_db=mag_db, phase_tol_deg=phase_deg,

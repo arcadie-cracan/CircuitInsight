@@ -373,7 +373,8 @@ class Analyzer:
     def impedance(self, node: str | None = None, ref: str | None = None,
                   keep=ALL, method: str = "auto",
                   disable: tuple[str, ...] = (),
-                  port: str | None = None) -> TransferFunction:
+                  port: str | None = None,
+                  progress=None) -> TransferFunction:
         """Driving-point impedance Z(s) looking into `node` (referenced to
         `ref`, default ground): a unit test current is injected into the
         port and Z = v(port). All independent sources are zeroed (vsources
@@ -418,10 +419,12 @@ class Analyzer:
         if iref is not None:
             system.z[iref, 0] -= 1
 
-        zp = solve_tf(system, node, keep, method=method)
+        zp = solve_tf(system, node, keep, method=method,
+                      progress=progress)
         if iref is None:
             return zp
-        zn = solve_tf(system, ref, keep, method=method)
+        zn = solve_tf(system, ref, keep, method=method,
+                      progress=progress)
         return TransferFunction(expr=sp.cancel(zp.expr - zn.expr),
                                 values=zp.values, symbols=zp.symbols)
 

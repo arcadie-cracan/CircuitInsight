@@ -29,9 +29,15 @@ def summary_text(result) -> str:
     tpl = getattr(result, "template_text", None)
     if tpl:
         lines += [tpl, ""]
-    lines.append(
-        f"DC gain : {eng(abs(result.dc_gain), sig=4)} "
-        f" ({result.dc_gain_db:.2f} dB)")
+    if str(getattr(result, "out", "") or "").startswith("Z"):
+        # a dimensioned result: ohms with an SI multiple, dB-ohm beside
+        lines.append(
+            f"Z0      : {eng(abs(result.dc_gain), 'Ω', sig=4)} "
+            f" ({result.dc_gain_db:.2f} dBΩ)")
+    else:
+        lines.append(
+            f"DC gain : {eng(abs(result.dc_gain), sig=4)} "
+            f" ({result.dc_gain_db:.2f} dB)")
     poles = list(result.poles_hz)
     zeros = list(result.zeros_hz)
     if poles:

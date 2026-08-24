@@ -108,7 +108,12 @@ def bode_figure(result, fig=None, overlays=(), labels=None):
         for ax in (ax1, ax2):
             ax.axvspan(result.band_fmin, result.band_fmax,
                        color="#0072B2", alpha=0.05, lw=0)
-    ax1.set_ylabel("|H| (dB)")
+    # an impedance result is dimensioned: its magnitude axis reads
+    # dB-ohm, matching the Z_0 line in the Expression view
+    if str(getattr(result, "out", "") or "").startswith("Z"):
+        ax1.set_ylabel("|Z| (dBΩ)")
+    else:
+        ax1.set_ylabel("|H| (dB)")
     ax2.set_ylabel("phase (deg)")
     ax2.set_xlabel("frequency (Hz)")
     # one shared frequency axis: labels only under the phase plot, and

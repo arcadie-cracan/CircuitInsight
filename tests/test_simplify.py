@@ -186,3 +186,36 @@ def test_degenerate_prune_candidate_is_rejected_not_a_crash():
     out = numeric_eval(bad, s, np.array([1.0, 1e3]))
     assert out.shape == (2,)
     assert np.all(np.isnan(out.real))
+
+
+def test_free_terms_are_harvested_past_a_phase_limited_ladder():
+    """fc field report: Z at net1 kept '187.6 n + gm' although the
+    numeral sits 1900x below gm. The shared-eps ladder coupled every
+    coefficient to one knob -- other drops at the same eps moved the
+    phase near a 705 MHz doublet past the budget, so NOTHING pruned
+    (and at a 10 dB budget the top rungs emptied whole coefficients
+    and self-rejected). Now a coefficient never empties, and a
+    per-term harvest retries the survivors individually: the free
+    prune lands, the phase-sensitive ones stay."""
+    import warnings
+
+    import sympy as sp
+
+    from circuitinsight.session import SessionController
+
+    fc = OTA.parent / "fc"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(fc / "tb_fc.cin.json", fc / "psf")
+        c.set_matches(*[tuple(g) for g in c.suggest_matches()])
+        keep = ["gm_I0_NM6", "cgs_I0_NM6"]
+        r0 = c.impedance_result({"node": "I0.net1"}, keep=keep)
+        rs = c.impedance_result({"node": "I0.net1"}, keep=keep,
+                                form="simplified", mag_db=10.0,
+                                phase_deg=30.0)
+    assert rs.n_terms < r0.n_terms        # something was pruned
+    assert 0 < rs.mag_err_db <= 10.0      # measured, inside the budget
+    # the DC form is the physical one: 1/gm, no vestigial numeral
+    z0 = rs.tf.dc_gain()
+    prod = sp.simplify(z0 * sp.Symbol("gm_I0_NM6", positive=True))
+    assert prod.free_symbols == set() and abs(float(prod) - 1) < 1e-9

@@ -155,6 +155,10 @@ def test_all_numeric_sweeps_s_instead_of_one_symbolic_determinant():
     an = Analyzer.from_cin(GOLDEN / "miller_ota.cin.json")
     seen = []
     h = an.tf("V1", "vout", keep=[], progress=lambda d, t: seen.append((d, t)))
+    # the direct path records itself now (it once attached a stale
+    # solver note to a 45 s determinant), so the numeric solve's
+    # record is captured BEFORE the direct reference overwrites it
+    rec = dict(I.LAST_SOLVE)
     ref = an.tf("V1", "vout", keep=[], method="direct")
 
     n, d = h.num_den
@@ -162,8 +166,10 @@ def test_all_numeric_sweeps_s_instead_of_one_symbolic_determinant():
     assert sp.expand(n.as_expr() * dr.as_expr()
                      - d.as_expr() * nr.as_expr()) == 0
     assert seen and seen[-1][0] == seen[-1][1]     # ran to completion
-    assert I.LAST_SOLVE["backend"] == "qq-s"
-    assert I.LAST_SOLVE["n_dense_dets"] == 2 * I.LAST_SOLVE["L"]
+    assert rec["backend"] == "qq-s"
+    assert rec["n_dense_dets"] == 2 * rec["L"]
+    assert I.LAST_SOLVE["backend"] == "direct"     # and it is recorded
+    assert I.LAST_SOLVE["wall_s"] > 0
 
 
 def test_s_degree_bound_covers_the_true_degree():

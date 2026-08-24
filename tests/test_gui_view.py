@@ -474,3 +474,26 @@ def test_prepare_display_prewarms_the_expression_lines(result):
             view._expr_lines(result, base=False, wrap=False)  # other key
     finally:
         _simplify.round_expr = real
+
+
+def test_impedance_dc_renders_as_z0_in_ohms():
+    """An impedance is DIMENSIONED: its DC value is Z_0 in ohms with
+    an SI multiple (and dB-ohm beside it for the plot's axis), never a
+    bare A_0 gain (field report: 'A_0 = 6.281e+04 (95.96 dB)' for Z at
+    a bias net). The transfer keeps its A_0."""
+    d = FIX.parent / "miller"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(d / "tb_ota2s.cin.json", d / "psf")
+        rz = c.impedance_result({"node": "vout"})
+        rt = c.solve("VIND", "vout", [])
+    zl = view._expr_lines(rz)
+    assert zl[0][0] == "Z_0 = "
+    assert r"\Omega" in zl[0][1]                  # SI-prefixed ohms
+    assert r"dB\Omega" in zl[0][1]
+    assert any(lab == "Z(s) = " for lab, _ in zl)
+    assert "Z0      :" in view.summary_text(rz)
+    assert "Ω" in view.summary_text(rz)
+    tl = view._expr_lines(rt)
+    assert tl[0][0] == "A_0 = "
+    assert any(lab == "H(s) = " for lab, _ in tl)

@@ -37,6 +37,18 @@ def win(qapp, tmp_path):
         warnings.simplefilter("ignore", UserWarning)
         w.open_session(str(MILLER / "tb_ota2s_stb.cin.json"),
                        str(MILLER / "psf_stb"))
+    # the auto plan's tick count follows MACHINE SPEED (it fills a
+    # time budget), and this file's tests solve with checked_keep():
+    # on an idle machine the plan once ticked enough symbols that the
+    # unbudgeted hybrid Tian ran for the better part of an hour.
+    # These tests are about GUI behavior, not tick content -- they
+    # run numeric, deterministically.
+    import time as _time
+    deadline = _time.time() + 60
+    while _time.time() < deadline and not w.keep_tbl.rowCount():
+        qapp.processEvents()
+        _time.sleep(0.05)
+    w._clear_keep_ticks()
     yield w
     w.close()
     MainWindow.settings_path = None

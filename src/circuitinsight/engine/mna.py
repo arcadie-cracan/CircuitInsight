@@ -480,16 +480,18 @@ def solve_tf(
             from .interp import solve_tf_interp
 
             return solve_tf_interp(system, output, keep, progress=progress)
-        # tiny grids (e.g. one unmatched kept symbol) don't amortize the
-        # interpolation machinery — the direct det is faster there
-        grid = 1
-        for n in kept_names:
-            grid *= max(1, system.stamp_counts.get(n, 1)) + 1
-        if method == "interp" or grid > 4:
-            from .interp import solve_tf_interp
+        # every hybrid solve goes through the interpolation machinery.
+        # The tiny-grid direct shortcut is gone: its win was a few
+        # tenths of a second of fixed overhead, its loss a symbolic
+        # QQ[s] elimination whose cost explodes with s-degree --
+        # measured 37.5 s direct vs 9.9 s interp at grid 4, s-deg 18
+        # (field report: 45 s delivered on a ~3 s quote, filed 100%
+        # under 'preparing'). Interp is also everything direct is not:
+        # modelled, progress-reporting, cancellable, recorded.
+        from .interp import solve_tf_interp
 
-            return solve_tf_interp(system, output, keep,
-                                   progress=progress)
+        return solve_tf_interp(system, output, keep,
+                               progress=progress)
 
     if isinstance(output, int):                 # raw unknown index: node OR
         k = output                              # branch current (loop gain)
@@ -505,6 +507,12 @@ def solve_tf(
         subs, _ = hybrid_split(system, keep)
         A = A.xreplace(subs)
 
+    # the direct symbolic determinant (keep=ALL, or forced): timed and
+    # RECORDED, so the GUI's backend note can never again attach a
+    # stale solver time to a run this path dominated
+    import time as _time
+
+    _t0 = _time.perf_counter()
     den = _det(A)
     if den == 0:
         raise MnaError("singular MNA matrix: floating node or short loop?")
@@ -512,6 +520,15 @@ def solve_tf(
     Ak[:, k] = z
     num = _det(Ak)
     expr = sp.cancel(num / den)
+    try:
+        from .interp import _record_solve
+
+        _record_solve(backend="direct", backend_requested=method,
+                      fell_back=False, reduced=False, batch=1,
+                      grid_K=0, L=0, n_dense_dets=0,
+                      wall_s=_time.perf_counter() - _t0)
+    except Exception:                            # noqa: BLE001
+        pass                     # telemetry, never a reason to fail
     return TransferFunction(
         expr=expr, values=dict(system.values), symbols=dict(system.symbols)
     )

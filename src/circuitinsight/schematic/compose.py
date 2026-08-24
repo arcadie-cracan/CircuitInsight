@@ -860,6 +860,13 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
                 bridges.append([an, knee, pin])
             else:
                 bridges.append([an, pin])
+    # the match-group plates are COLLECTED here and spliced in at this
+    # index: a plate must sit UNDER the wire layer, or its fill covers
+    # the wire tails beneath the symbol and the terminals read as
+    # disconnected (field report, PM1's plate eating its wires)
+    plate_slot = len(parts)
+    plates: list = []
+
     # named STUBS for block pins the symbol has no anchor for (bias,
     # supplies): from the pin lane straight to the nearest edge of the
     # symbol's anchor extent, the pin name beside it. Real connections
@@ -1133,9 +1140,10 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
         if inst.name in tints:
             # the match-group plate: a tinted rounded rectangle behind
             # the symbol, inset so it reads as a highlight, not a box
+            # -- and UNDER the wires (spliced at plate_slot)
             fill, _badge = tints[inst.name]
             pr = _symbol_rect(cx, cy, sym, inst.m)
-            parts.append(
+            plates.append(
                 f'<rect x="{pr[0] + 0.6:.2f}" y="{pr[1] + 0.6:.2f}" '
                 f'width="{pr[2] - pr[0] - 1.2:.2f}" '
                 f'height="{pr[3] - pr[1] - 1.2:.2f}" rx="1.2" '
@@ -1211,6 +1219,7 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
     if overlay:
         parts.append(_overlay_svg(flat, blocks, placed, raw_wires, mm_raw))
 
+    parts[plate_slot:plate_slot] = plates
     parts.append("</svg>")
     return "\n".join(parts)
 

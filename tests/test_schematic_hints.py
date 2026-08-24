@@ -379,3 +379,32 @@ def test_gate_overrun_is_trimmed_to_the_anchor():
     touches = [q for pls in compose.last_net_wires.values()
                for pl in pls for q in pl if math.dist(q, dpin) < 0.6]
     assert touches
+
+
+@needs_lib
+def test_match_plates_sit_under_the_wires():
+    """The match-group plate is a filled rounded rectangle; drawn in
+    the per-instance pass it covered the wire tails beneath the symbol
+    and the terminals read as disconnected (field report). The plates
+    are spliced in BELOW the wire layer: in the SVG, every plate
+    precedes the first wire path."""
+    import json
+
+    from circuitinsight.schematic import SymbolLibrary, compose
+    from circuitinsight.schematic.hints import load_hints, page
+
+    fc = FIX / "spectre" / "fc"
+    h = load_hints(fc / "tb_fc.hints.json")
+    pg = page(h, "ota_folded_cascode")
+    cin = json.loads((fc / "tb_fc.cin.json").read_text(encoding="utf-8"))
+    cdef = cin["definitions"]["ota_folded_cascode"]
+    devtypes = {i["name"]: (i["device_type"],
+                            (i.get("params") or {}).get("polarity"))
+                for i in cdef["instances"] if "device_type" in i}
+    svg = compose(pg, devtypes, SymbolLibrary(),
+                  tints={"PM1": ("#dbe9f6", "🔗1"),
+                         "PM2": ("#dbe9f6", "🔗1")})
+    plate = svg.index('rx="1.2"')
+    first_wire = svg.index('<path d="M ')
+    assert plate < first_wire
+    assert svg.count('rx="1.2"') == 2

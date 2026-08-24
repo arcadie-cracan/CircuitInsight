@@ -2642,6 +2642,15 @@ def test_impedance_port_from_trees_says_user_selected(qapp):
         win.probe_combo.setCurrentText("VIND")
         assert win._imp_spec is None
         assert win.probe_combo.findText("user selected") < 0
+        # merely SELECTING a net in the tool chooses the target and
+        # re-ranks -- with NO solve until Solve (field request)
+        launched = []
+        win._launch = lambda fn, *a, **k: launched.append(a)
+        win.nets_tree.setCurrentItem(win.nets_tree.item_for("vin_p"))
+        assert win._imp_spec == {"node": "vin_p"}
+        assert win.probe_combo.currentText() == "user selected"
+        assert launched == []                  # nothing solved
+        assert "Solve to compute" in win.statusBar().currentMessage()
     finally:
         win.close()
 
@@ -2684,6 +2693,29 @@ def test_schematic_highlights_a_selected_net(qapp, tmp_path):
         win._schematic_deselect()
         assert win.sch_view._net_hl is None and win.sch_view._hl is None
         assert win.nets_tree.selected_nets() == []
+        # a re-render with UNCHANGED style inputs is skipped outright
+        # -- the scene object survives untouched
+        win.nets_tree.setCurrentItem(win.nets_tree.item_for("I0.net8"))
+        assert win.sch_view._net_hl is not None
+        item0 = win.sch_view._item
+        win._schematic_render()
+        assert win.sch_view._item is item0        # skipped
+        assert win.sch_view._net_hl is not None
+        # a FORCED same-page re-render (changed inputs) rebuilds the
+        # scene but re-applies the selection and keeps zoom and pan
+        win.sch_view.scale(2, 2)
+        m11 = win.sch_view.transform().m11()
+        win._sch_last_render_key = None
+        win._schematic_render()
+        assert win.sch_view._item is not item0    # truly re-rendered
+        assert win.sch_view._net_hl is not None
+        assert abs(win.sch_view.transform().m11() - m11) < 1e-9
+        # and a click on the ALREADY-selected net re-lights it too
+        # (setCurrentItem on the current item fires no signal)
+        win.sch_view.highlight_net(None)
+        win._schematic_net_clicked("net8")
+        assert win.sch_view._net_hl is not None
+        win._schematic_deselect()
         # the reverse probe: a click on a wire finds its net and
         # selects it in the Nets tree, which lights the run
         from PySide6.QtCore import QPoint
@@ -2728,6 +2760,32 @@ def test_schematic_highlights_a_selected_net(qapp, tmp_path):
             "I0.net8", "net8", others=["gnd!"])]
         assert not any(l.startswith("Impedance between")
                        for l in labels)
+        # the middle button pans; the left button never does (it is
+        # selection only -- a left-drag pan stole moving clicks)
+        from PySide6.QtCore import QPointF, Qt as _Qt
+        from PySide6.QtGui import QMouseEvent
+        from PySide6.QtWidgets import QGraphicsView
+        sv = win.sch_view
+        assert sv.dragMode() == QGraphicsView.NoDrag
+        sv.resize(300, 200)
+        sv.scale(4, 4)
+        hb = sv.horizontalScrollBar()
+        hb.setValue((hb.minimum() + hb.maximum()) // 2)
+        v0 = hb.value()
+        press = QMouseEvent(QMouseEvent.Type.MouseButtonPress,
+                            QPointF(50, 50), _Qt.MiddleButton,
+                            _Qt.MiddleButton, _Qt.NoModifier)
+        move = QMouseEvent(QMouseEvent.Type.MouseMove,
+                           QPointF(90, 50), _Qt.NoButton,
+                           _Qt.MiddleButton, _Qt.NoModifier)
+        rel = QMouseEvent(QMouseEvent.Type.MouseButtonRelease,
+                          QPointF(90, 50), _Qt.MiddleButton,
+                          _Qt.NoButton, _Qt.NoModifier)
+        sv.mousePressEvent(press)
+        sv.mouseMoveEvent(move)
+        sv.mouseReleaseEvent(rel)
+        assert hb.value() == v0 - 40
+        assert sv._pan_from is None
     finally:
         win.close()
 
@@ -2749,6 +2807,13 @@ def test_impedance_tool_offers_the_form_ladder(qapp):
     try:
         win.mode_combo.setCurrentText("Impedance")
         assert win._form_act.isVisible()
+        # the in/out pair is Transfer/GFT/Reduce vocabulary: hidden
+        # here, not grayed (field report)
+        assert not win._in_act.isVisible()
+        assert not win._out_act.isVisible()
+        win.mode_combo.setCurrentText("Transfer")
+        assert win._in_act.isVisible() and win._out_act.isVisible()
+        win.mode_combo.setCurrentText("Impedance")
         win.form_combo.setCurrentText("Simplified · full order")
         kw, _ = win._impedance_form_kw()
         assert kw["form"] == "simplified" and "mag_db" in kw
@@ -2844,5 +2909,90 @@ def test_loop_gain_dispatch_hands_over_the_budget(qapp):
         win._update_estimate()
         assert _wait_bg(qapp, lambda: est_rec.get("probe") == "IPRB0",
                         timeout=30)
+    finally:
+        win.close()
+
+
+def test_surviving_ticks_stay_visible_and_clearable(qapp, tmp_path):
+    """Ticks survive reranks by design, but a rerank could sink them
+    below the fold -- the field report solved with 5 symbols while
+    believing in 2. On refill the ticked rows lead the list; the
+    'ticked only' filter shows exactly them; the count sits on the
+    checkbox and on the estimate line; clear ticks starts over."""
+    from PySide6.QtCore import Qt
+
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"))
+        win.in_combo.setCurrentText("VIND")
+        win.out_combo.setCurrentText("vout")
+    try:
+        assert _wait_bg(qapp, lambda: win.keep_tbl.rowCount() > 0,
+                        timeout=60)
+        # tick two rows from the BOTTOM half, then refill with the
+        # same ranking: the order stays PURE rank order -- ticked
+        # rows floated to the top misread as importance (field
+        # report) -- and the count still tells the truth
+        n = win.keep_tbl.rowCount()
+        picked = [win.keep_tbl.item(i, 0).text() for i in (n - 1, n - 2)]
+        ranking = list(win._last_ranking)
+        win._fill_keep_table(ranking, checked=picked)
+        top2 = {win.keep_tbl.item(i, 0).text() for i in (0, 1)}
+        assert top2 != set(picked)              # rank order preserved
+        assert win.keep_tbl.item(n - 1, 0).checkState() == Qt.Checked
+        assert "ticked only (2)" in win.ticked_chk.text()
+        # 'ticked only' hides everything else
+        win.ticked_chk.setChecked(True)
+        visible = [win.keep_tbl.item(i, 0).text()
+                   for i in range(win.keep_tbl.rowCount())
+                   if not win.keep_tbl.isRowHidden(i)]
+        assert set(visible) == set(picked)
+        # unticking under the filter removes the row from view
+        # (rows keep rank order, so the ticked one sits at n-1)
+        win.keep_tbl.item(n - 1, 0).setCheckState(Qt.Unchecked)
+        visible = [i for i in range(win.keep_tbl.rowCount())
+                   if not win.keep_tbl.isRowHidden(i)]
+        assert len(visible) == 1
+        win.ticked_chk.setChecked(False)
+        # the estimate line carries the count
+        win._update_estimate()
+        assert _wait_bg(qapp, lambda: "1 ticked"
+                        in win.estimate_lbl.text(), timeout=60)
+        # clear ticks starts over
+        win._clear_keep_ticks()
+        assert win.checked_keep() == []
+        assert "ticked only (0)" in win.ticked_chk.text()
+    finally:
+        win.close()
+
+
+def test_first_light_stays_off_screen_outside_transfer(qapp, tmp_path):
+    """A restored session that opens INTO the Impedance tool once
+    showed the transfer Bode it never asked for (field report). The
+    first light is still computed -- it is the pre-match baseline and
+    the Transfer tool's opening view -- but other tools start with an
+    empty plot; switching to Transfer with nothing solved shows it."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    win.mode_combo.setCurrentText("Impedance")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(MILLER / "tb_ota2s.cin.json"),
+                         str(MILLER / "psf"))
+    try:
+        assert win.result is None                 # nothing displayed
+        assert win._first_light_result is not None
+        assert not any(ax.get_lines()
+                       for ax in win.canvas.figure.axes)
+        # entering Transfer with nothing solved shows the first light
+        win.mode_combo.setCurrentText("Transfer")
+        assert win.result is not None
+        assert win.result.out == "vout"
     finally:
         win.close()

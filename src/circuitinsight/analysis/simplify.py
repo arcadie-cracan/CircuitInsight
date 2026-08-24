@@ -236,7 +236,10 @@ def _select_terms(vals: np.ndarray, eps: float) -> np.ndarray:
     if total == 0.0:
         return keep
     dropped = 0.0
-    for i in np.argsort(np.abs(vals)):
+    # the largest term is never dropped: at eps >= 1 (a 10 dB budget
+    # puts the whole ladder there) the rule could empty a coefficient
+    # outright, zeroing the denominator and auto-rejecting every rung
+    for i in np.argsort(np.abs(vals))[:-1]:
         v = abs(vals[i])
         if dropped + v <= eps * total:
             dropped += v
@@ -357,6 +360,18 @@ def simplify_tf(
     ok0 = (h0d != 0)
     h0s = np.where(ok0, h0n / np.where(ok0, h0d, 1.0), np.nan)
 
+    # A_0 / Z_0 is a HEADLINE number, and the band starts at fmin: a
+    # dominant pole below it leaves DC contractually unconstrained,
+    # and the pruning once drifted a miller A_0 by 3.8 dB while
+    # honoring the band. The DC ratio is guarded by the same budget.
+    n0 = ndata.get(0)
+    d0 = ddata.get(0)
+    dc_full = None
+    if n0 is not None and d0 is not None:
+        sn, sd = n0[1].sum(), d0[1].sum()
+        if sn != 0 and sd != 0:
+            dc_full = sn / sd
+
     def numeric_check(nsel, dsel) -> bool:
         hn = _subset_response(ndata, nsel, W)
         hd = _subset_response(ddata, dsel, W)
@@ -370,7 +385,17 @@ def simplify_tf(
             return False
         mag = np.max(np.abs(20 * np.log10(np.abs(r))))
         ph = np.max(np.abs(np.degrees(np.angle(r))))
-        return mag <= mag_tol_db and ph <= phase_tol_deg
+        if not (mag <= mag_tol_db and ph <= phase_tol_deg):
+            return False
+        if dc_full is not None:
+            sn = n0[1][nsel[0]].sum()
+            sd = d0[1][dsel[0]].sum()
+            if sn == 0 or sd == 0:
+                return False
+            ddc = abs(20 * np.log10(abs((sn / sd) / dc_full)))
+            if ddc > mag_tol_db:
+                return False
+        return True
 
     def assemble(nsel, dsel) -> sp.Expr:
         nd = {k: sp.Add(*[t for t, keepit in zip(terms, nsel[k]) if keepit])
@@ -384,6 +409,7 @@ def simplify_tf(
 
     tol_lin = 10 ** (mag_tol_db / 20) - 1
     result = None
+    win_sel = None
     for eps in (2 * tol_lin, tol_lin, tol_lin / 2, tol_lin / 4, tol_lin / 10,
                 tol_lin / 40, 0.0):
         nsel = {k: _select_terms(v[1], eps) for k, v in ndata.items()}
@@ -394,9 +420,41 @@ def simplify_tf(
         ok, mag, ph = verify(expr)      # the official numbers, on the real expr
         if ok:
             result = (expr, mag, ph)
+            win_sel = (nsel, dsel)
             break
     if result is None:                                  # eps=0 must pass
         raise MnaError("simplify: even the unpruned TF failed verification")
+
+    # per-term harvest: the shared-eps ladder couples every coefficient
+    # to ONE knob, so a phase-sensitive term can veto prunes that are
+    # individually free (fc field report: 187.6 nS survived beside a
+    # gm 1900x larger because OTHER drops at the same eps moved the
+    # phase near a doublet past the budget). Retry the survivors one
+    # at a time, smallest first, keeping each drop only while the
+    # subset check still passes -- pure numpy per attempt.
+    if win_sel is not None:
+        nsel, dsel = win_sel
+        cands = []
+        for data, sel in ((ndata, nsel), (ddata, dsel)):
+            for k, (terms, vals) in data.items():
+                for i in range(len(vals)):
+                    if sel[k][i]:
+                        cands.append((abs(vals[i]), sel, k, i))
+        cands.sort(key=lambda c: c[0])
+        harvested = False
+        for _v, sel, k, i in cands:
+            if sel[k].sum() <= 1:
+                continue                # a coefficient never empties
+            sel[k][i] = False
+            if numeric_check(nsel, dsel):
+                harvested = True
+            else:
+                sel[k][i] = True
+        if harvested:
+            expr = assemble(nsel, dsel)
+            ok, mag, ph = verify(expr)
+            if ok:
+                result = (expr, mag, ph)
 
     expr, mag, ph = result
     n, d = sp.fraction(sp.together(expr))

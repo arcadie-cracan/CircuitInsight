@@ -60,7 +60,10 @@ class SchematicView(QGraphicsView):
         self.setRenderHints(QPainter.Antialiasing
                             | QPainter.SmoothPixmapTransform
                             | QPainter.TextAntialiasing)
-        self.setDragMode(QGraphicsView.ScrollHandDrag)
+        # left button is SELECTION only; the middle button pans (a
+        # left-drag pan stole every click that moved a pixel)
+        self.setDragMode(QGraphicsView.NoDrag)
+        self._pan_from = None
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         # the schematic is a paper drawing: black ink on white, in
         # every theme (the symbol library is drawn for white)
@@ -199,6 +202,11 @@ class SchematicView(QGraphicsView):
         self.scale(f, f)
 
     def mousePressEvent(self, ev):
+        if ev.button() == Qt.MiddleButton:
+            self._pan_from = ev.position()
+            self.setCursor(Qt.ClosedHandCursor)
+            ev.accept()
+            return
         if ev.button() == Qt.LeftButton:
             h = self.hit(ev.position().toPoint())
             if h:
@@ -210,6 +218,26 @@ class SchematicView(QGraphicsView):
                 else:
                     self.backgroundClicked.emit()
         super().mousePressEvent(ev)
+
+    def mouseMoveEvent(self, ev):
+        if self._pan_from is not None and (ev.buttons() & Qt.MiddleButton):
+            d = ev.position() - self._pan_from
+            self._pan_from = ev.position()
+            h = self.horizontalScrollBar()
+            v = self.verticalScrollBar()
+            h.setValue(int(h.value() - d.x()))
+            v.setValue(int(v.value() - d.y()))
+            ev.accept()
+            return
+        super().mouseMoveEvent(ev)
+
+    def mouseReleaseEvent(self, ev):
+        if ev.button() == Qt.MiddleButton:
+            self._pan_from = None
+            self.unsetCursor()
+            ev.accept()
+            return
+        super().mouseReleaseEvent(ev)
 
     def mouseDoubleClickEvent(self, ev):
         h = self.hit(ev.position().toPoint())
@@ -307,6 +335,8 @@ class SchematicMixin:
         open the top page. Every miss is a sentence in the status, never
         an exception in the open path."""
         self._sch_hints = self._sch_cin = self._sch_lib = None
+        self._sch_last_render_key = None
+        self._sch_last_page = None
         self._sch_blocks = {}
         self._sch_path = []
         self.sch_view.load_svg('<svg xmlns="http://www.w3.org/2000/svg" '
@@ -373,6 +403,17 @@ class SchematicMixin:
             except Exception:                     # noqa: BLE001
                 styles, net_styles = ({}, {})     # decoration only
         tints = self._schematic_tints()
+        aliases = self._schematic_aliases()
+        # a solve restyles the analysis state on every _show, but most
+        # of the time nothing the drawing encodes has changed: same
+        # page, same styles, same tints, same aliases, same blocks --
+        # skip the whole re-compose then, and the view (zoom, pan,
+        # highlights) is untouched by construction
+        key = (defname, self._sch_state_chk.isChecked(), styles,
+               net_styles, tints, aliases, self._sch_blocks,
+               str(self._sch_lib.root) if self._sch_lib else "")
+        if key == getattr(self, "_sch_last_render_key", None):
+            return
         try:
             pg = page(self._sch_hints, defname)
             svg = compose(pg, devtypes, self._sch_lib, subckts=subckts,
@@ -381,7 +422,7 @@ class SchematicMixin:
                           proposed_cells=self._schematic_proposed(pg,
                                                                   subckts),
                           tints=tints, tex_labels=True,
-                          aliases=self._schematic_aliases())
+                          aliases=aliases)
         except (ComposeError, KeyError, ValueError) as e:
             self._sch_status.setText(f"{defname}: {e}")
             self._schematic_crumbs()
@@ -389,9 +430,22 @@ class SchematicMixin:
         insts = dict(getattr(compose, "last_instances", {}))
         kinds = {n: ("block" if c in subckts else "device")
                  for n, c in insts.items()}
+        # a SAME-PAGE re-render is a restyle: the user's zoom and pan
+        # survive it; only a page change re-fits
+        same_page = getattr(self, "_sch_last_page", None) == defname
+        if same_page:
+            tr = self.sch_view.transform()
+            hv = self.sch_view.horizontalScrollBar().value()
+            vv = self.sch_view.verticalScrollBar().value()
         self.sch_view.load_svg(
             svg, kinds,
             net_wires=dict(getattr(compose, "last_net_wires", {})))
+        if same_page:
+            self.sch_view.setTransform(tr)
+            self.sch_view.horizontalScrollBar().setValue(hv)
+            self.sch_view.verticalScrollBar().setValue(vv)
+        self._sch_last_page = defname
+        self._sch_last_render_key = key
         n_blk = sum(1 for k in kinds.values() if k == "block")
         bits = [f"{len(insts)} instances, {len(pg.wires)} wires"]
         if n_blk:
@@ -411,6 +465,12 @@ class SchematicMixin:
             bits.append("; ".join(state))
         self._sch_status.setText(f"{defname}: " + ", ".join(bits))
         self._schematic_crumbs()
+        # a re-render (a solve restyles the analysis state) rebuilds
+        # the scene and drops the highlight overlays; the trees still
+        # hold the selection, so re-apply it -- the marks survive the
+        # solve instead of silently vanishing (field report)
+        self._schematic_follow_tree()
+        self._schematic_follow_nets()
 
     # ------------------------------------------------- analysis state
     def _schematic_styles(self):
@@ -666,6 +726,10 @@ class SchematicMixin:
                 self.dev_tabs.setCurrentWidget(self.nets_tree)
                 self.nets_tree.setCurrentItem(it)
                 self.nets_tree.scrollToItem(it)
+                # setCurrentItem on the ALREADY-current item fires no
+                # selectionChanged -- follow explicitly, so clicking
+                # the selected net's wire re-lights it after a render
+                self._schematic_follow_nets()
                 self.statusBar().showMessage(f"net: {full}")
                 return
 

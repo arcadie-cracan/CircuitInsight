@@ -439,7 +439,10 @@ def estimate_solve(analyzer, inp: str, out: str, keep,
     # so the interp model above does not describe it: for ALL, `seconds` is an
     # extrapolation of the wrong path and only `grid_size` (the size of the
     # symbol space) is a sound tractability signal. grid<=4 likewise goes direct.
-    path = "direct" if (is_all(keep) or grid <= 4) else "interp"
+    # aligned with solve_tf: every hybrid solve runs interp now (the
+    # tiny-grid direct shortcut lost 4x at high s-degree and priced as
+    # 'not modelled'); direct remains only for keep=ALL
+    path = "direct" if is_all(keep) else "interp"
     # keep=ALL is a sentinel, not a list: record what it actually keeps (every
     # symbol), so SolveEstimate.keep stays a plain, iterable list of names.
     requested = list(kept_names) if is_all(keep) else list(keep)

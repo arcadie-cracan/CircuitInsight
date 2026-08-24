@@ -286,8 +286,25 @@ def _expr_lines(result, base: bool = True, wrap: bool = False,
         return lines
 
     a0 = result.dc_gain.real if hasattr(result.dc_gain, "real") else result.dc_gain
-    numeric_a0 = (rf"{float(a0):.4g}\quad({result.dc_gain_db:.2f}\,"
-                  rf"\mathrm{{dB}})")
+    # an impedance result (out = "Z(...)"/"Z seen by ...") is DIMENSIONED:
+    # its DC value is Z_0 in ohms with an SI multiple, not a gain A_0
+    # (field report: 'A_0 = 6.281e+04 (95.96 dB)' for Z at a bias net)
+    is_z = str(getattr(result, "out", "") or "").startswith("Z")
+    if is_z:
+        from ...units import eng as _eng
+
+        raw = _eng(abs(float(a0)), "Ω", sig=4)
+        num_s, _, unit_s = raw.rpartition("\u2009")
+        if not num_s:
+            num_s, unit_s = raw, ""
+        unit_l = (r"\,\mathrm{" + unit_s.replace("Ω", r"\Omega") + "}"
+                  if unit_s else "")
+        sign = "-" if float(a0) < 0 else ""
+        numeric_a0 = (rf"{sign}{num_s}{unit_l}\quad"
+                      rf"({result.dc_gain_db:.2f}\,\mathrm{{dB\Omega}})")
+    else:
+        numeric_a0 = (rf"{float(a0):.4g}\quad({result.dc_gain_db:.2f}\,"
+                      rf"\mathrm{{dB}})")
     if wrap:
         numeric_a0 = rf"\htmlData{{num=A0}}{{{numeric_a0}}}"
 
@@ -304,11 +321,12 @@ def _expr_lines(result, base: bool = True, wrap: bool = False,
     except Exception:
         a0_sym = None
 
+    head = "Z_0" if is_z else "A_0"
     if a0_sym:
-        lines.append(("A_0 = ", a0_sym))
+        lines.append((f"{head} = ", a0_sym))
         lines.append(("", rf"= {numeric_a0}"))
     else:
-        lines.append(("A_0 = ", numeric_a0))
+        lines.append((f"{head} = ", numeric_a0))
 
     # When the expanded H(s) is compact -- the reduced / low-order solve -- show it
     # with SYMBOLIC coefficients: that IS the textbook expression (paper eq. 4),
@@ -317,11 +335,12 @@ def _expr_lines(result, base: bool = True, wrap: bool = False,
     # numeric-root factored corners instead.
     raw = _raw_tf_lines(result, base=base, wrap=wrap, aliases=aliases)
     poles, zeros = list(result.poles_hz), list(result.zeros_hz)
+    hs = "Z(s) = " if is_z else "H(s) = "
     if raw:
-        lines.append(("H(s) = ", r"\dfrac{N(s)}{D(s)}"))
+        lines.append((hs, r"\dfrac{N(s)}{D(s)}"))
         lines += raw
     elif poles:
-        lines.append(("H(s) = ", r"A_0\,\frac{N(s)}{D(s)}"))
+        lines.append((hs, head + r"\,\frac{N(s)}{D(s)}"))
         lines += _wrapped_product("N(s) = ", zeros)
         lines += _wrapped_product("D(s) = ", poles)
 
