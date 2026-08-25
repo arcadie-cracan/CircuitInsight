@@ -127,6 +127,18 @@ def lump_gmb_primitives(prims: list, acset: frozenset,
     return out
 
 
+def switch_ac_state(params: dict) -> int | None:
+    """Resolved SPST switch state in the AC-analysis configuration:
+    ac_position dominates position (per spectre docs). The schematic
+    view draws switches from the same rule, so the drawing can never
+    disagree with the solved circuit. None when neither param is set."""
+    for key in ("ac_position", "position"):
+        raw = params.get(key)
+        if raw is not None:
+            return int(parse_value(raw))
+    return None
+
+
 def _val(dev: FlatDevice, param: str, op: dict | None) -> float | None:
     if op is not None and param in op:
         return float(op[param])
@@ -258,12 +270,9 @@ def expand_device(dev: FlatDevice, op: dict | None = None,
                           (t["d"], t["c"], t["p"], t["n"]), None)]
     if dt == "switch":
         # spectre ideal switch: 0 = open, 1 = closed (zero resistance).
-        # ac_position dominates position (per spectre docs); the small-signal
-        # circuit is the AC-analysis configuration.
-        state = _val(dev, "ac_position", None)
+        state = switch_ac_state(dev.params)
         if state is None:
-            state = _val(dev, "position", None) or 0.0
-        state = int(state)
+            state = 0
         if state == 0:
             return []                                    # open: element absent
         if state == 1:

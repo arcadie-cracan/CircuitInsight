@@ -15,19 +15,22 @@ import sys
 
 def _version() -> str:
     """The running build's version, cheaply: the installed distribution's
-    metadata first (what pip actually put there), the package constant
-    as the fallback for a source checkout. Never raises -- a banner must
-    not be the thing that fails to start."""
-    try:
-        from importlib.metadata import version
-
-        return "v" + version("circuitinsight")
-    except Exception:
-        pass
+    the package constant first -- it lives in the tree that is
+    actually RUNNING, so an editable install shows what it executes
+    (dist-info is stamped at pip-install time and once kept a splash
+    at v0.1.1 while the dev tree ran 0.2.0); pip's metadata is the
+    fallback. Never raises -- a banner must not be the thing that
+    fails to start."""
     try:
         import circuitinsight
 
         return "v" + circuitinsight.__version__
+    except Exception:
+        pass
+    try:
+        from importlib.metadata import version
+
+        return "v" + version("circuitinsight")
     except Exception:
         return ""
 

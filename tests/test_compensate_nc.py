@@ -59,22 +59,24 @@ def test_pm_goal_rediscovers_section_vi(sys_uncomp):
     assert rc.f0_hz > 2 * c.f0_hz
 
 
-def test_mfm_goal_places_butterworth_damping(sys_uncomp):
-    """goal='mfm' (the Delft formulation): the winner puts the dominant
-    closed-loop pair at zeta ~ 1/sqrt(2) and reports the bandwidth budget
-    (|(1-L_MB) p1 p2|^(1/2) ~ 45 MHz here) with its utilization."""
+def test_mfm_goal_holds_the_measured_response_flat(sys_uncomp):
+    """goal='mfm' judges the MEASURED closed-loop magnitude: peaking of
+    |T/(1-T)| at most 1 dB (the dominant-pair zeta proxy certified fc
+    designs peaking +6.6 dB off a doublet, and rejected the flattest
+    design as 'overdamped'). The winner is flat, well-margined, and
+    CHEAPER than the proxy's pick -- the series R's zero flattens the
+    response at less capacitance, Sec. VI's own economy."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         sugg = suggest_compensation(sys_uncomp, "IPRB0", goal="mfm",
                                     candidates=[CLASSIC])
     best = sugg[0]
     assert best.achieved
-    assert abs(best.zeta - 1 / np.sqrt(2)) <= 0.05
     assert best.budget_hz == pytest.approx(44.95e6, rel=0.01)
-    assert best.f0_hz > 0.4 * best.budget_hz      # RC bridge: real utilization
     assert best.network == "series-RC" and best.area < 6
-    # over-damped/under-damped points were rejected, LHP everywhere implied
-    assert all(s.zeta > 0.3 for s in sugg)
+    # a flat loop carries real margins by construction
+    assert all(s.pm_deg is None or s.pm_deg > 45
+               for s in sugg if s.achieved)
 
 
 def test_probe_side_canonicalization(sys_uncomp):
@@ -97,3 +99,19 @@ def test_describe_is_human(sys_uncomp):
                                     candidates=[CLASSIC], top=1)
     text = sugg[0].describe()
     assert "pF" in text and "zeta" in text and "budget" in text
+
+
+def test_flatness_measures_the_servo_peak():
+    """_flatness_db: 0 for a clean single-pole loop, the doublet's
+    peak for a resonant one -- in the stb sign convention (critical
+    point T = +1)."""
+    from circuitinsight.analysis.compensate import _flatness_db
+
+    f = np.geomspace(1e3, 1e9, 800)
+
+    def loop(f2):
+        # stb convention: T(0) negative real, instability at T = +1
+        return -1000.0 / ((1 + 1j * f / 1e4) * (1 + 1j * f / f2))
+
+    assert _flatness_db(loop(1e8)) < 0.1     # well-separated poles: flat
+    assert _flatness_db(loop(1e6)) > 3.0     # tight second pole peaks

@@ -108,7 +108,12 @@ def bandwidth_contributions(analyzer) -> BandwidthReport:
             "reproduce a1/a0 — bookkeeping bug")
 
     tt = float(tau_total)
-    roots = np.roots([complex(x) for x in base.all_coeffs()])
+    # frequency-scaled rooting: this site had NO normalization at all,
+    # so a det ladder past float64 overflowed outright -- and f_dom is
+    # the smallest root, exactly the one degradation eats first
+    from ..engine.mna import scaled_roots
+
+    roots = scaled_roots(base.all_coeffs())
     roots = roots[np.abs(roots) > 0]
     f_dom = float(np.min(np.abs(roots))) / (2 * np.pi)
 

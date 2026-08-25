@@ -35,6 +35,49 @@ def top_suggestion():
     return sugg
 
 
+def test_vocabulary_includes_load_compensation():
+    """A shunt cap at the node already carrying the largest load -- the
+    single-stage / folded-cascode compensation -- is in the candidate
+    vocabulary. On the fc bench 1 pF at the CL node gave PM 66 deg
+    while no bridge topped 61, and nothing ever proposed it."""
+    import warnings
+
+    from circuitinsight.analysis.compensate import generate_candidates
+    from circuitinsight.session import SessionController
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(FIX / "tb_ota2s_stb.cin.json",
+                                   FIX / "psf_stb", cap_model="matrix")
+    system = c._analyzer_ready().system("IPRB0")
+    loads = [cd for cd in generate_candidates(system)
+             if cd.kind == "load"]
+    assert any(cd.node_a == "vout" and cd.node_b is None
+               for cd in loads)
+
+
+def test_default_candidates_path_reaches_suggestions():
+    """suggest_compensation with NO explicit candidates -- the GUI's
+    plain Suggest click. The f1ec066 cache branch read cache/fp that
+    the single-suggest signature never had, so this exact path raised
+    NameError while every test passed candidates explicitly."""
+    import warnings
+
+    import numpy as np
+
+    from circuitinsight.session import SessionController
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(FIX / "tb_ota2s_stb.cin.json",
+                                   FIX / "psf_stb", cap_model="matrix")
+        out = c.suggest_compensation("IPRB0", goal="pm", pm_target=55.0,
+                                     exclude=("I0.Cc",),
+                                     c_grid=np.array([1e-12, 3e-12, 5e-12]),
+                                     r_grid=np.array([0.0, 2e3]))
+    assert out and any(s.achieved for s in out)
+
+
 def test_session_surface_rederives_the_network(top_suggestion):
     s = top_suggestion[0]
     assert s.network == "series-RC" and s.achieved

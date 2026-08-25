@@ -96,6 +96,9 @@ class JobRunnerMixin:
         est = (f"  [estimate ~{self._run_est:.0f}s]" if self._run_est
                else "  [no estimate for this pass]")
         self.log(f"START {label.rstrip(' …')}{est}")
+        # the Log narrates the run: bring it forward while the
+        # computation holds the stage (the result tab returns on DONE)
+        self.tabs.setCurrentWidget(self.logview)
         self._phase_totals, self._phase_runs = {}, {}
         self._phase, self._phase_t0 = None, None
         self._set_phase("preparing")

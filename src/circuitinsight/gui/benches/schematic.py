@@ -44,6 +44,17 @@ def hints_path(cin_path) -> Path:
     return p.with_name(stem + ".hints.json")
 
 
+def _symbol_variant(device_type: str, params: dict):
+    """The symbol-variant slot of the composer's devtypes join. For a
+    switch it is the resolved AC state, by the solver's own rule -- the
+    schematic shows the configuration the small-signal circuit is in
+    (fc: S1 open, S0 closed), never the drawn-in-Virtuoso one."""
+    if device_type == "switch":
+        from ...models.small_signal import switch_ac_state
+        return {0: "open", 1: "closed"}.get(switch_ac_state(params))
+    return params.get("polarity")
+
+
 class SchematicView(QGraphicsView):
     """Zoomable, pannable SVG with instance hit-testing."""
     instanceClicked = Signal(str, str)      # name, kind
@@ -386,6 +397,32 @@ class SchematicMixin:
         names = [n for n, _ in self._sch_path if n]
         return ".".join(names) + "." if names else ""
 
+    def _sch_localize_net(self, full: str) -> str | None:
+        """SESSION net name -> this page's local net, walking the
+        breadcrumb: an instance's own nets lose the prefix; a parent
+        net entering the block becomes the PORT net inside (through
+        the instance's terminals); global rails (name!) pass through.
+        None when the net has no name on this page."""
+        defs = (self._sch_cin or {}).get("definitions", {})
+        name, parent = full, self._sch_path[0][1]
+        for inst_name, defname in self._sch_path[1:]:
+            pre = inst_name + "."
+            if name.startswith(pre):
+                name = name[len(pre):]
+            elif name.endswith("!"):
+                pass                          # vdd! and friends
+            else:
+                inst = next((i for i in defs.get(parent,
+                                                 {}).get("instances", [])
+                             if i.get("name") == inst_name), None)
+                inv = {v: k for k, v in
+                       ((inst or {}).get("terminals") or {}).items()}
+                if name not in inv:
+                    return None
+                name = inv[name]
+            parent = defname
+        return name if "." not in name else None
+
     def _schematic_render(self):
         if not self._sch_hints or not self._sch_path:
             return
@@ -393,7 +430,8 @@ class SchematicMixin:
         cdef = (self._sch_cin.get("definitions", {}).get(defname)
                 or {"instances": []})
         devtypes = {i["name"]: (i["device_type"],
-                                (i.get("params") or {}).get("polarity"))
+                                _symbol_variant(i["device_type"],
+                                                i.get("params") or {}))
                     for i in cdef["instances"] if "device_type" in i}
         subckts = frozenset(self._sch_cin.get("definitions", {}))
         styles, net_styles = ({}, {})
@@ -404,13 +442,23 @@ class SchematicMixin:
                 styles, net_styles = ({}, {})     # decoration only
         tints = self._schematic_tints()
         aliases = self._schematic_aliases()
+        # the selected compensation suggestion, localized to this page
+        # (entries whose nets have no name here are dropped; the
+        # composer additionally skips nets without wires)
+        proposed = []
+        for na, nb, text, with_r in getattr(self, "_sch_proposed", ()):
+            la = self._sch_localize_net(na)
+            lb = self._sch_localize_net(nb) if nb is not None else None
+            if la is not None and (nb is None or lb is not None):
+                proposed.append((la, lb, text, with_r))
+        proposed = tuple(proposed)
         # a solve restyles the analysis state on every _show, but most
         # of the time nothing the drawing encodes has changed: same
         # page, same styles, same tints, same aliases, same blocks --
         # skip the whole re-compose then, and the view (zoom, pan,
         # highlights) is untouched by construction
         key = (defname, self._sch_state_chk.isChecked(), styles,
-               net_styles, tints, aliases, self._sch_blocks,
+               net_styles, tints, aliases, self._sch_blocks, proposed,
                str(self._sch_lib.root) if self._sch_lib else "")
         if key == getattr(self, "_sch_last_render_key", None):
             return
@@ -422,7 +470,7 @@ class SchematicMixin:
                           proposed_cells=self._schematic_proposed(pg,
                                                                   subckts),
                           tints=tints, tex_labels=True,
-                          aliases=aliases)
+                          aliases=aliases, proposed=proposed)
         except (ComposeError, KeyError, ValueError) as e:
             self._sch_status.setText(f"{defname}: {e}")
             self._schematic_crumbs()

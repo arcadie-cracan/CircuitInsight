@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import sympy as sp
 
-from ..engine.mna import MnaError, S, MnaSystem
+from ..engine.mna import MnaError, S, MnaSystem, scaled_roots
 
 __all__ = ["PoleOwner", "PoleAttribution", "pole_attribution"]
 
@@ -68,15 +68,16 @@ def _den_roots(A_num: sp.Matrix) -> np.ndarray:
     L = _s_degree_bound(A_num) + 1
     vals, _ = s_sweep_det(A_num, L)
     coeffs = _matvec(_vinv_rows([sp.Rational(v) for v in range(L)]), vals)
-    c = np.array([float(sp.Float(sp.Rational(int(x.numerator),
-                                             int(x.denominator)), 30))
-                  if x else 0.0 for x in coeffs], dtype=float)
-    nz = np.nonzero(c)[0]
-    if nz.size == 0:
+    # coeffs are EXACT rationals (flint fmpq -- convert to sympy: its
+    # is_zero is a METHOD, truthy even at zero), ASCENDING in s-power;
+    # the shared frequency-scaled rooting takes highest power first.
+    # The old Float(30) -> float64 squeeze lost exactly what the exact
+    # arithmetic had just preserved once the ladder outgrew float64
+    hi_first = [sp.Rational(int(x.numerator), int(x.denominator))
+                if x else sp.Integer(0) for x in coeffs][::-1]
+    if all(c.is_zero for c in hi_first):
         raise MnaError("zero denominator")
-    c = c[: nz[-1] + 1]
-    scale = np.abs(c[np.nonzero(c)]).max()
-    r = np.roots((c / scale)[::-1])
+    r = scaled_roots(hi_first)
     r = r[np.abs(r) > 0]
     return r[np.argsort(np.abs(r))]
 

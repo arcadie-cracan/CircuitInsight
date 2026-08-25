@@ -1311,6 +1311,23 @@ class SessionController:
             self._cache.clear()      # cached overlays describe the other truth
         self.ac_loop_gain = out_net
 
+    def loop_reference(self):
+        """The run's loop-gain ground truth ALONE: (freqs, T, label,
+        margins) from stb results, else from the declared-AC curve,
+        else None. margins carries pm_deg/pm_freq_hz/gm_db/gm_freq_hz
+        for the plot annotation, extracted from the curve itself. The
+        loop benches' first light: simulator truth needs no model
+        solve."""
+        fr, h, _m, label = self._stb_reference(None)
+        if fr is None:
+            return None
+        from .analysis.sensitivity import loop_margins
+
+        pm, f1, gm, f2 = loop_margins(fr, h)
+        margins = types.SimpleNamespace(pm_deg=pm, pm_freq_hz=f1,
+                                        gm_db=gm, gm_freq_hz=f2)
+        return fr, h, label, margins
+
     def _stb_reference(self, points_freqs):
         """(freqs, loopGain, margins, label) from the run's stb results,
         else from the DECLARED return-ratio AC data, else (None,)*4."""
@@ -2188,8 +2205,10 @@ class SessionController:
         return adv
 
     def suggest_compensation(self, probe: str, *, goal: str = "mfm",
-                             pm_target: float = 60.0, exclude=(),
-                             candidates=None, top: int = 5, **kw):
+                             pm_target: float = 60.0,
+                             flat_tol_db: float = 1.0, exclude=(),
+                             candidates=None, top: int = 5,
+                             progress=None, **kw):
         """OP-invariant compensation suggestions at the designated loop
         probe (docs/compensation-synthesis-plan.md): sized C / series-RC
         branches ranked by area among goal achievers. goal="mfm" places the
@@ -2218,18 +2237,21 @@ class SessionController:
         # collide with it
         if candidates is None and not kw:
             key = self._key("suggest", probe, goal, pm_target,
-                            tuple(sorted(exclude)), top)
+                            flat_tol_db, tuple(sorted(exclude)), top)
             if key in self._cache:
                 return self._cache[key]
         out = _suggest(system, probe, goal=goal, pm_target=pm_target,
-                       candidates=candidates, top=top, **kw)
+                       flat_tol_db=flat_tol_db,
+                       candidates=candidates, top=top,
+                       torn=(prims, an.flat.ground, None),
+                       cache=self._tear_cache, progress=progress, **kw)
         if key is not None:
             self._cache[key] = out
         return out
 
     def suggest_multi_compensation(self, probe: str, *, goal: str = "pm",
                                    k_max: int = 2, exclude=(),
-                                   candidates=None, **kw):
+                                   candidates=None, progress=None, **kw):
         """Grow a MULTI-branch (nested-Miller / NMC) compensation network at
         the probe, one OP-invariant branch at a time (analysis.compensate.
         suggest_multi_compensation): each step installs the least-area branch
@@ -2257,7 +2279,7 @@ class SessionController:
         return _multi(system, probe, goal=goal, k_max=k_max,
                       candidates=candidates,
                       torn=(prims, an.flat.ground, None),
-                      cache=self._tear_cache, **kw)
+                      cache=self._tear_cache, progress=progress, **kw)
 
     def _guard_cost(self, inp, out, keep, max_seconds) -> None:
         """Refuse a solve we can see will not finish, instead of hanging.

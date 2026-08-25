@@ -90,7 +90,9 @@ def test_recompensation_finds_the_symmetric_miller_pair(rig):
     best = sugg[0]
     assert "symmetric pair with (I0.netn, outni)" in best.candidate.rationale
     assert best.network == "series-RC"
-    assert abs(best.zeta - 1 / np.sqrt(2)) <= 0.05
+    # mfm judges MEASURED flatness now; the pair's zeta is a report
+    # (here overdamped-flat), the margins carry the guarantee
+    assert best.pm_deg is not None and best.pm_deg > 50
     assert best.area == pytest.approx(
         2 * (best.C / 1e-12 + 0.05 * best.R / 1e3), rel=1e-9)
     plain = [s for s in sugg if s.network == "C" and s.achieved]

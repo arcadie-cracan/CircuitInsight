@@ -749,6 +749,58 @@ def test_tool_dropdown_offers_the_loop_family_only_with_stb_truth(
         win.close()
 
 
+def test_loop_bench_first_light_plots_the_stb_truth(qapp, tmp_path):
+    """An stb run opens into Loop gain -- and the plot must not be
+    empty: the stb loopGain is already in the run, so it draws as the
+    bench's first light (dashed truth, margins annotated), no model
+    solve needed. The declared-AC curve serves the same way."""
+    from circuitinsight.gui.app import MainWindow
+
+    spectre = FIX.parent
+    MainWindow.settings_path = str(tmp_path / "gui.ini")
+    try:
+        win = MainWindow()
+    finally:
+        MainWindow.settings_path = None
+
+    def ref_labels():
+        return [ln.get_label()
+                for ax in win.canvas.figure.axes
+                for ln in ax.get_lines()]
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win.open_session(
+                str(spectre / "miller" / "tb_ota2s_stb.cin.json"),
+                str(spectre / "miller" / "psf_stb"))
+        assert win.mode_combo.currentText() == "Loop gain"
+        assert "Spectre stb loopGain" in ref_labels()
+        fr, h, label, margins = win.controller.loop_reference()
+        assert label == "Spectre stb loopGain"
+        assert margins.pm_deg is not None
+        # the reference BORROWED the plot from the transfer first
+        # light; re-entering Transfer gives it back
+        if win.result is not None:
+            win.mode_combo.setCurrentText("Transfer")
+            assert "Spectre stb loopGain" not in ref_labels()
+            win.mode_combo.setCurrentText("Loop gain")
+            assert "Spectre stb loopGain" in ref_labels()
+
+        # declared-AC run: the declared curve is the first light
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win.open_session(str(spectre / "miller" / "tb_ota2s.cin.json"),
+                             str(spectre / "miller" / "psf"))
+        win.result = None
+        win.controller.declare_ac_loop_gain("vout")
+        win._refresh_tools()
+        win.mode_combo.setCurrentText("Loop gain")
+        assert any("AC declared as T" in l for l in ref_labels())
+    finally:
+        win.close()
+
+
 def test_declared_return_ratio_is_the_loop_reference():
     """Session side of the declaration: with no stb in the run, the
     declared net's AC trace becomes the loop-gain reference — labeled as
@@ -1933,6 +1985,123 @@ def test_reduce_tool_shows_the_contract_it_gates_with(qapp, tmp_path):
         win.form_combo.setCurrentText("Exact")
         assert not win._strategy_act.isVisible()
         assert not win.band_row.isVisibleTo(win)
+    finally:
+        win.close()
+
+
+def test_declare_return_ratio_offers_the_current_transfer(qapp, monkeypatch):
+    """The expected gesture is 'my current transfer IS the loop gain':
+    the dialog preselects the Transfer out net and names the run's AC
+    input in the prompt, instead of an anonymous v(input) and a hunt
+    from '(no declaration)'."""
+    from PySide6.QtWidgets import QInputDialog
+
+    from circuitinsight.gui.app import build_window
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win = build_window(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"))
+    try:
+        win.out_combo.setCurrentText("vout")
+        seen = {}
+
+        def fake(parent, title, label, items, cur, editable):
+            seen.update(label=label, items=items, cur=cur)
+            return items[cur], True
+        monkeypatch.setattr(QInputDialog, "getItem", staticmethod(fake))
+        win.declare_return_ratio()
+        assert seen["items"][seen["cur"]] == "vout"     # preselected
+        inp = win.controller.suggested_input()
+        assert f"v({inp})" in seen["label"]             # concrete input
+        assert win.controller.ac_loop_gain == "vout"
+        # already-declared wins over the current selection
+        win.out_combo.setCurrentText("net1")
+        win.declare_return_ratio()
+        assert seen["items"][seen["cur"]] == "vout"
+    finally:
+        win.close()
+
+
+def test_log_holds_the_stage_and_results_return(qapp, tmp_path):
+    """A launch brings the Log tab forward (the narration lives
+    there); a finished computation surfaces the tool's result tab --
+    Expression for the solving benches, Suggestions for Compensate,
+    the Log itself where the result tab is hidden (Reduce). The
+    bottom tabs are SHARED under the Analysis/Schematic pages."""
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    try:
+        # one strip of tabs under both pages
+        assert win.right_split.widget(0) is win.main_tabs
+        assert win.right_split.widget(1) is win.tabs
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win.open_session(str(FIX / "tb_ota5t.cin.json"),
+                             str(FIX / "psf"))
+        win.mode_combo.setCurrentText("Transfer")
+        win._show_result_tab()
+        assert win.tabs.currentWidget() is win._expr_tab
+        win.mode_combo.setCurrentText("Reduce circuit")
+        win.tabs.setCurrentWidget(win.logview)
+        win._show_result_tab()                # target hidden: Log stays
+        assert win.tabs.currentWidget() is win.logview
+    finally:
+        win.close()
+
+
+def test_symbol_variant_resolves_switch_state():
+    """The devtypes join the pane hands the composer: switches carry
+    their resolved AC state (the solver's own rule) in the variant
+    slot, everything else its polarity."""
+    from circuitinsight.gui.benches.schematic import _symbol_variant
+
+    assert _symbol_variant("switch",
+                           {"ac_position": "0", "position": "1"}) == "open"
+    assert _symbol_variant("switch", {"position": "1"}) == "closed"
+    assert _symbol_variant("switch", {}) is None    # symmap: closed
+    assert _symbol_variant("mosfet", {"polarity": "n"}) == "n"
+
+
+@pytest.mark.skipif(not _have_symlib(),
+                    reason="no symbol library (CIN_SYMLIB unset, symbols "
+                           "submodule not checked out)")
+def test_proposed_branch_localizes_and_draws(qapp, tmp_path):
+    """The compensation overlay through the pane: session net names
+    localize per page (prefix strip on the block's page, terminal
+    translation for a parent net entering it, globals pass), and a
+    set _sch_proposed reaches the composed SVG on the page that owns
+    the nets."""
+    from circuitinsight.gui.app import MainWindow
+    from circuitinsight.schematic import compose
+
+    FC = Path(__file__).resolve().parent / "fixtures" / "spectre" / "fc"
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(FC / "tb_fc.cin.json"), str(FC / "psf"))
+    try:
+        # top page: own nets pass, block-internal names have no name
+        assert win._sch_localize_net("vout") == "vout"
+        assert win._sch_localize_net("I0.net1") is None
+        win._sch_proposed = (("vin_dm", "vout", "1.1 pF", False),)
+        win._schematic_render()
+        assert compose.last_proposed_drawn == 1
+        # descend into the OTA: prefixed nets localize, the parent
+        # net entering through the port takes the port's name, and
+        # the overlay follows the branch to ITS page
+        win._sch_path.append(("I0", "ota_folded_cascode"))
+        assert win._sch_localize_net("I0.net1") == "net1"
+        assert win._sch_localize_net("vout") == "vout"   # port name
+        win._sch_proposed = (("I0.net1", None, "2.2 pF", False),)
+        win._schematic_render()
+        assert compose.last_proposed_drawn == 1
+        # a net with no name on this page drops the entry
+        win._sch_proposed = (("vin_dm", "I0.net1", "3 pF", False),)
+        win._schematic_render()
+        assert compose.last_proposed_drawn == 0
     finally:
         win.close()
 

@@ -47,7 +47,14 @@ SYMBOLS = {
                                  "n": "s-"}, scalable=True),
     # sp1tswitch: the exporter maps its CDF terminals positionally,
     # t0 -> p (drawn on the right), t1 -> n (left); the library's
-    # anchors are 1 (left) and 2 (right)
+    # anchors are 1 (left) and 2 (right). The polarity slot carries the
+    # resolved AC state (models.small_signal.switch_ac_state) so the
+    # drawing shows the configuration the solver actually sees; a
+    # switch with no stated position falls back to closed
+    ("switch", "open"): SymbolSpec("switch-open.svg",
+                                   {"p": "2", "n": "1"}),
+    ("switch", "closed"): SymbolSpec("switch-closed.svg",
+                                     {"p": "2", "n": "1"}),
     ("switch", None): SymbolSpec("switch-closed.svg",
                                  {"p": "2", "n": "1"}),
 }
@@ -69,6 +76,11 @@ CELL_SYMBOLS = {
     "opin": SymbolSpec("pin-out.svg", {"@origin": "p"}),
     "noConn": SymbolSpec("no-connect.svg", {"@origin": "1"}),
 }
+
+#: cells that draw anonymously: a ground, supply or no-connect symbol
+#: is pure decoration, its instance name (I3, I14, ...) names nothing
+#: anyone references, so the composer writes no designator for it
+UNLABELLED_CELLS = frozenset({"vdd", "vss", "gnd", "noConn"})
 
 
 #: harvested (Virtuoso pin) names -> CIN canonical terminal names. The

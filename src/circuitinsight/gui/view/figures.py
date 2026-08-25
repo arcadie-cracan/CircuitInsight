@@ -135,6 +135,44 @@ def bode_figure(result, fig=None, overlays=(), labels=None):
     figure_legend(fig, ax1)
     return fig
 
+def reference_figure(freqs, h, label, margins=None, fig=None):
+    """The run's loop-gain ground truth ALONE -- the loop benches'
+    first light: an stb (or declared-AC) curve needs no model solve,
+    so it shows the moment the bench opens, in its overlay styling
+    (dashed black), with margins annotated from the curve. The model's
+    solid line joins it after the first Solve."""
+    from matplotlib.figure import Figure
+
+    fig = fig if fig is not None else Figure(figsize=(5.2, 4.0))
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*non-positive.*",
+                                category=UserWarning)
+        warnings.filterwarnings("ignore", message=".*identical low and high.*",
+                                category=UserWarning)
+        fig.clear()
+    ax1 = fig.add_subplot(2, 1, 1)
+    ax2 = fig.add_subplot(2, 1, 2, sharex=ax1)
+    f = np.asarray(freqs, dtype=float)
+    hr = np.asarray(h)
+    ax1.semilogx(f, 20 * np.log10(np.abs(hr)), color="k", ls="--", lw=1.0,
+                 label=label)
+    ax2.semilogx(f, np.degrees(np.unwrap(np.angle(hr))), color="k",
+                 ls="--", lw=1.0)
+    ax1.set_ylabel("|H| (dB)")
+    ax2.set_ylabel("phase (deg)")
+    ax2.set_xlabel("frequency (Hz)")
+    ax1.tick_params(labelbottom=False)
+    for ax in (ax1, ax2):
+        ax.grid(True, which="both", alpha=0.25, lw=0.4)
+        ax.margins(x=0)
+    if margins is not None:
+        _annotate_margins(ax1, ax2, margins)
+    fig.tight_layout(rect=(0, 0.06, 1, 1), pad=0.35)
+    fig.subplots_adjust(right=0.985)
+    figure_legend(fig, ax1)
+    return fig
+
+
 def figure_legend(fig, ax1):
     """The legend on ONE line right below the frequency-axis label,
     center-aligned to the axis (the axes are offset right by the y

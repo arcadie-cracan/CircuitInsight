@@ -6,7 +6,7 @@ the GUI launcher whose whole point is showing a banner before the
 heavy imports are paid for. ``from circuitinsight import Analyzer``
 works exactly as before; it just pays on first use."""
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 _EXPORTS = {
     "Analyzer": ".analyzer", "PortEquivalent": ".analyzer",

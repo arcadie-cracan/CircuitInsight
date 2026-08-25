@@ -307,6 +307,13 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.reduce_col.setMinimumWidth(120)
         self.reduce_col.setVisible(False)
         left.addWidget(self.reduce_col)
+        # the Compensate bench's controls take the same slot: the
+        # suggester never reads the keep set, so the symbols column
+        # would only invite ticking into a pointless hybrid Solve
+        self.comp_col = self._comp_controls_col()
+        self.comp_col.setMinimumWidth(120)
+        self.comp_col.setVisible(False)
+        left.addWidget(self.comp_col)
         left.setSizes([300, 330])
         self.left_split = left
 
@@ -399,7 +406,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         tabs.addTab(self.err_canvas, "Error")
         self._whatif_tab = self._whatif_page()
         tabs.addTab(self._whatif_tab, "What-if")
-        tabs.addTab(self._comp_page(), "Compensation")
+        tabs.addTab(self._comp_page(), "Suggestions")
         tabs.addTab(self._gft_page(), "GFT")
         tabs.addTab(self.logview, "Log")
         self.tabs = tabs
@@ -462,30 +469,30 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.canvas.mpl_connect("draw_event",
                                 lambda _ev: self._sync_band_row())
 
-        right = RestoringSplitter(Qt.Vertical)
-        right.setObjectName("right_split")
-        right._default_sizes = [500, 240]
-        right.addWidget(plot_area)
-        right.addWidget(tabs)
-        right.setSizes([500, 240])
-        self.right_split = right
-
-        # the right column is TWO pages: the analysis view (plots + the
-        # result tabs) and the schematic, each taking the whole column.
-        # The schematic needs room to be read; a strip at the bottom
-        # could not give it that, a page beside the analysis can.
+        # the right column: TWO pages up top (the analysis plots and
+        # the schematic, each needing the full width to be read) over
+        # ONE shared strip of result tabs -- the Log, Suggestions or
+        # Expression concern the run, not the page you happen to view
         self._schematic_tab = self._schematic_page()
         self.main_tabs = QTabWidget()
         self.main_tabs.setDocumentMode(True)
-        self.main_tabs.addTab(right, "Analysis")
+        self.main_tabs.addTab(plot_area, "Analysis")
         self.main_tabs.addTab(self._schematic_tab, "Schematic")
         self.main_tabs.currentChanged.connect(self._on_main_tab)
+
+        right = RestoringSplitter(Qt.Vertical)
+        right.setObjectName("right_split")
+        right._default_sizes = [500, 240]
+        right.addWidget(self.main_tabs)
+        right.addWidget(tabs)
+        right.setSizes([500, 240])
+        self.right_split = right
 
         split = RestoringSplitter(Qt.Horizontal)
         split.setObjectName("h_split")
         split._default_sizes = [640, 900]
         split.addWidget(left)
-        split.addWidget(self.main_tabs)
+        split.addWidget(right)
         # panes may collapse to nothing (a wide plot is worth it), so
         # the handle must stay findable when one has: wider, and drawn
         for sp in (split, left, keep_col):
@@ -1217,6 +1224,15 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         """(label, action, done) per step. "Done" is judged by what exists,
         so the crumb needs no bookkeeping calls sprinkled through the app —
         callers just _update_crumb() after anything user-visible."""
+        if self.mode_combo.currentText() == "Compensate":
+            # no symbols to choose, no Solve: the bench's verb is Suggest
+            return [
+                ("Open", "open", self.controller is not None),
+                ("Match", "match", bool(self._match_groups)),
+                ("Suggest", "suggest",
+                 bool(getattr(self, "_comp_suggestions", [])
+                      or getattr(self, "_comp_multi", None))),
+            ]
         return [
             ("Open", "open", self.controller is not None),
             ("Match", "match", bool(self._match_groups)),
@@ -1257,6 +1273,8 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             self._update_crumb()
         elif action == "solve" and self.controller is not None:
             self.solve()
+        elif action == "suggest" and self.controller is not None:
+            self.suggest_comp()
 
     def _surface_match_conflicts(self, baseline=None):
         """Say OUT LOUD when matches overwrite reality, with the price
@@ -1542,6 +1560,25 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             self.probe_combo.blockSignals(False)
         self._rerank_for_z()
 
+    def _show_loop_reference(self) -> bool:
+        """Loop-bench first light: the run's ground-truth loop gain
+        (stb results, or the declared-AC curve) plotted alone -- it is
+        already in the run, so it shows without a model solve. Draws
+        nothing and returns False when the run carries no truth."""
+        c = self.controller
+        ref = c.loop_reference() if c is not None else None
+        if ref is None:
+            return False
+        freqs, h, label, margins = ref
+        view.reference_figure(freqs, h, label, margins,
+                              fig=self.canvas.figure)
+        theme.style_figure(self.canvas.figure)
+        self.canvas.draw_idle()
+        # the figure no longer shows self.result (e.g. the transfer
+        # first light): remember, so re-entering Transfer restores it
+        self._ref_on_screen = True
+        return True
+
     def _on_mode_changed(self, mode: str):
         probed = mode in ("Loop gain", "Compensate", "Modes", "GFT",
                           "Impedance")
@@ -1556,8 +1593,14 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             if have != list(want):
                 self.probe_combo.clear()
                 self.probe_combo.addItems(want)
-        self._probe_lbl_act.setVisible(probed)
-        self._probe_act.setVisible(probed)
+        # Compensate owns the probe in ITS panel (the toolbar combo
+        # stays the state, populated above; the panel mirrors it)
+        show_probe = probed and mode != "Compensate"
+        self._probe_lbl_act.setVisible(show_probe)
+        self._probe_act.setVisible(show_probe)
+        if mode == "Compensate":
+            self._comp_sync_probe(self.probe_combo.currentText())
+        self._update_crumb()          # the steps are the MODE's steps
         self._probe2_act.setVisible(mode == "Modes")
         # GFT needs the input/output designations alongside the probe;
         # the Reduce bench prices grounding against the in->out transfer
@@ -1575,6 +1618,18 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         if mode == "Transfer" and self.result is None \
                 and getattr(self, "_first_light_result", None) is not None:
             self._show(self._first_light_result, push_history=False)
+        elif mode == "Transfer" and self.result is not None \
+                and getattr(self, "_ref_on_screen", False):
+            # the loop reference borrowed the plot: give it back
+            self._show(self.result, push_history=False)
+        elif mode in ("Loop gain", "Compensate") and \
+                (self.result is None
+                 or getattr(self.result, "pm_deg", None) is None):
+            # these benches have their own first light: the run's
+            # ground-truth loop gain, no model solve needed -- shown
+            # whenever the plot holds no loop result (a transfer on a
+            # loop bench says nothing about the loop)
+            self._show_loop_reference()
         # the result-form selector serves the two tools that solve a
         # response: Transfer and Impedance (parity -- one contract
         # ladder, wherever a response is solved)
@@ -1664,20 +1719,47 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         to the front: it is where a net is AC-grounded by hand and
         where the applied state shows its earth marks."""
         reduce = mode == "Reduce circuit"
+        comp = mode == "Compensate"
         vis = {
             self._whatif_tab: mode == "Transfer",
-            self._comp_tab: mode == "Compensate",
+            self._comp_tab: comp,
             self._gft_tab: mode == "GFT",
-            self.summary: not reduce,
-            self._expr_tab: not reduce,
+            # Summary/Expression/Error are views of a SOLVED response;
+            # Compensate has no Solve any more, so they say nothing
+            # about what this bench does
+            self.summary: not reduce and not comp,
+            self._expr_tab: not reduce and not comp,
+            self.err_canvas: not comp,
         }
         for w, on in vis.items():
             idx = self.tabs.indexOf(w)
             if idx >= 0:
                 self.tabs.setTabVisible(idx, on)
-        self._solve_act.setVisible(not reduce)
-        self._keep_col.setVisible(not reduce)     # the whole symbols column
+        # Compensate is a SUGGESTION tool: its search is numeric (no
+        # tick changes it) and Suggest is its one verb -- the keep
+        # column and Solve both invited a 10-minute hybrid that buys
+        # the bench nothing, so its own controls take the column
+        self._solve_act.setVisible(not reduce and not comp)
+        self._keep_col.setVisible(not reduce and not comp)
         self.reduce_col.setVisible(reduce)        # the candidates take over
+        self.comp_col.setVisible(comp)
+        if not comp:
+            self._comp_clear_proposed()           # overlay leaves with it
+        # a splitter child shown for the first time inherits size 0 --
+        # the column then exists but cannot be seen; hand it the hidden
+        # symbols column's room
+        shown = self.reduce_col if reduce else self.comp_col if comp else None
+        if shown is not None:
+            sizes = self.left_split.sizes()
+            i = self.left_split.indexOf(shown)
+            if 0 <= i < len(sizes) and sizes[i] < 120:
+                want = 280
+                j = max((k for k in range(len(sizes)) if k != i),
+                        key=lambda k: sizes[k])
+                give = min(want, max(0, sizes[j] - 120))
+                sizes[j] -= give
+                sizes[i] = max(want, give)
+                self.left_split.setSizes(sizes)
         if reduce:
             self.dev_tabs.setCurrentWidget(self.nets_tree)
 
@@ -1697,9 +1779,21 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         none_ = "(no declaration)"
         items = [none_] + list(c.nets)
         cur = items.index(c.ac_loop_gain) if c.ac_loop_gain in items else 0
+        if cur == 0:
+            # the obvious candidate: the out net the user is looking at
+            # -- declaring "my current transfer IS the loop gain" is the
+            # expected gesture, so it is the preselection, not a hunt
+            # through the net list
+            _, out = self._io()
+            if out in items:
+                cur = items.index(out)
+        try:
+            inp = c.suggested_input()    # the ratio's denominator: the
+        except Exception:                # run's AC source, not a choice
+            inp = "input"
         choice, ok = QInputDialog.getItem(
             self, "Declare AC as return ratio",
-            "v(net)/v(input) in this run's AC sweep IS the loop gain:",
+            f"v(net)/v({inp}) in this run's AC sweep IS the loop gain:",
             items, cur, False)
         if not ok:
             return
@@ -1919,9 +2013,15 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         if probe and self.probe_combo.findText(probe) >= 0:
             self.mode_combo.setCurrentText("Loop gain")
             self.probe_combo.setCurrentText(probe)
+            # the bench's own first light: the stb truth is already in
+            # the run, so it plots immediately -- the model joins it
+            # after the first Solve (field report: an stb-only run
+            # opened into Loop gain onto an empty plot)
+            shown = self._show_loop_reference()
             self.statusBar().showMessage(
-                f"stb analysis found: probe {probe} preselected "
-                f"— Solve for the loop gain")
+                f"stb analysis found: probe {probe} preselected — "
+                + ("stb loop gain plotted; Solve adds the model"
+                   if shown else "Solve for the loop gain"))
         if self.controller.reductions:
             # NON-modal: a modal .information() blocks on its own event loop
             # until the user clicks OK, which hangs any headless/automated open.
@@ -2160,6 +2260,8 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             self._job_finished()
             if not live():
                 return
+            if self.mode_combo.currentText() == "Transfer":
+                self._show_result_tab()   # the shown first light's tab
             self._first_light_result = r
             if self.mode_combo.currentText() == "Transfer":
                 self._show(r, push_history=False)
@@ -3216,8 +3318,20 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
     #: keep the log bounded -- it is a session record, not a data store
     _LOG_MAX_LINES = 2000
 
+    def _show_result_tab(self):
+        """A finished computation surfaces its result tab (the Log held
+        the stage while it ran); a tool whose result tab is hidden
+        (Reduce) stays on the Log, which carries its findings."""
+        w = {"Compensate": self._comp_tab,
+             "GFT": self._gft_tab}.get(self.mode_combo.currentText(),
+                                       self._expr_tab)
+        idx = self.tabs.indexOf(w)
+        if idx >= 0 and self.tabs.isTabVisible(idx):
+            self.tabs.setCurrentWidget(w)
+
     def _on_done(self, result):
         self._log_finish("DONE")
+        self._show_result_tab()
         self._learn_from_solve()
         self._tick.stop()
         self._t0 = None
@@ -3283,11 +3397,13 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                   self.a_solve, self.a_simplify, self.a_reduce):
             b.setEnabled(True)
         self._log_finish("FAILED")
+        self.tabs.setCurrentWidget(self.logview)  # the error is HERE
         self.statusBar().showMessage("solve failed")
         self._set_strip("solve failed: " + msg, "error")
 
     def _show(self, result, overlays=(), push_history=True):
         self.result = result
+        self._ref_on_screen = False
         card = getattr(self, "op_card", None)
         if card is not None and card.name:
             self._show_op_card(card.name)

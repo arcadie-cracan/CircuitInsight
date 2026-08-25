@@ -256,13 +256,19 @@ class TransferFunction:
         scale = max(mags)
         return [complex((c / scale).evalf()) for c in coeffs]
 
+    def _roots_rad(self, poly: sp.Poly) -> np.ndarray:
+        """Roots of an exact-coefficient polynomial, in rad/s: values
+        substituted, then the shared frequency-scaled rooting."""
+        subs = self._subs_map()
+        return scaled_roots([c.xreplace(subs) for c in poly.all_coeffs()])
+
     def poles(self) -> np.ndarray:
         """Numeric poles in Hz (complex), sorted by magnitude."""
-        r = np.roots(self._float_coeffs(self.num_den[1])) / (2 * np.pi)
+        r = self._roots_rad(self.num_den[1]) / (2 * np.pi)
         return r[np.argsort(np.abs(r))]
 
     def zeros(self) -> np.ndarray:
-        r = np.roots(self._float_coeffs(self.num_den[0])) / (2 * np.pi)
+        r = self._roots_rad(self.num_den[0]) / (2 * np.pi)
         return r[np.argsort(np.abs(r))]
 
     def simplify(self, **kwargs):
@@ -271,6 +277,83 @@ class TransferFunction:
         from ..analysis.simplify import simplify_tf
 
         return simplify_tf(self, **kwargs)
+
+
+def scaled_roots(coeffs) -> np.ndarray:
+    """Roots of the polynomial with sympy-number `coeffs` (highest power
+    first), via FREQUENCY SCALING. A full-circuit polynomial can span
+    more decades than float64 holds: normalized by its largest
+    coefficient, the leading term lands denormal (np.roots then divides
+    the companion matrix by it -- LinAlgError on a 36th-order stb loop
+    gain) or underflows to exact zero (np.roots strips it: the fastest
+    or SLOWEST roots silently lost -- pole_participation dropped the fc
+    dominant pole this way and proposed shunt compensation at the wrong
+    nodes). Rooting in sigma = s/w0 with w0 = (|c_0|/|c_N|)^(1/N)
+    balances the ladder's ends; the middle never overflows, and terms
+    below 1e-308 of the max are genuinely negligible. ONE rooting for
+    every consumer: TransferFunction.poles()/zeros() and the analysis
+    screens."""
+    coeffs = [c if isinstance(c, sp.Basic) else sp.sympify(c)
+              for c in coeffs]
+    # is_zero, not == 0: sympy's Float(0.0) compares UNEQUAL to the
+    # exact zero (a simplified numerator's pruned coefficient), and
+    # a missed zero sends log to zoo below
+    while coeffs and coeffs[0].is_zero:           # zero leading
+        coeffs.pop(0)
+    n_origin = 0
+    while coeffs and coeffs[-1].is_zero:          # roots at s = 0
+        coeffs.pop()
+        n_origin += 1
+    deg = len(coeffs) - 1
+    if deg < 1:
+        return np.zeros(n_origin, dtype=complex)
+    if any(not c.is_real for c in coeffs):        # not a real circuit:
+        mags = [sp.Abs(c) for c in coeffs if not c.is_zero]
+        scale = max(mags)                          # the legacy path
+        r = np.roots([complex((c / scale).evalf()) for c in coeffs])
+        return np.concatenate([r, np.zeros(n_origin)])
+    # FAST BULK PATH -- sympy logs are only NEEDED when a coefficient
+    # cannot survive float64 (paying log.evalf per coefficient of
+    # every rooting doubled the compensation screen: ~400 sizing
+    # rootings per candidate, ~40 coefficients each). When every
+    # coefficient converts faithfully, the whole scaling is numpy;
+    # a nonzero coefficient underflowing to 0.0 falls through.
+    try:
+        arr = np.array([float(c) for c in coeffs], dtype=float)
+    except (OverflowError, TypeError):
+        arr = None
+    if arr is not None and np.all(np.isfinite(arr)) and \
+            all(coeffs[i].is_zero for i in np.nonzero(arr == 0.0)[0]) and \
+            np.all((arr == 0.0) | (np.abs(arr) >= np.finfo(float).tiny)):
+        # NORMAL floats only: a denormal (the 40-pole ladder's leading
+        # coefficient) keeps a handful of mantissa bits and cost 6e-4
+        # relative error on the fast poles -- those go the exact way
+        mask = arr != 0.0
+        logs_v = np.full(len(arr), -np.inf)
+        logs_v[mask] = np.log10(np.abs(arr[mask]))
+        log_w0 = (logs_v[-1] - logs_v[0]) / deg
+        sc = logs_v + (deg - np.arange(len(arr))) * log_w0
+        top = sc[mask].max()
+        vals_v = np.zeros(len(arr))
+        vals_v[mask] = (np.sign(arr[mask])
+                        * 10.0 ** np.minimum(sc[mask] - top, 0.0))
+        r = np.roots(vals_v) * 10.0 ** log_w0
+        return np.concatenate([r, np.zeros(n_origin, dtype=complex)])
+
+    # arbitrary-precision path: the exact values may not convert to
+    # float64 at all (interior zeros stay zeros)
+    logs = [None if c.is_zero
+            else float(sp.log(sp.Abs(c), 10).evalf(15)) for c in coeffs]
+    log_w0 = (logs[-1] - logs[0]) / deg
+    scaled = [None if lg is None else lg + (deg - i) * log_w0
+              for i, lg in enumerate(logs)]
+    top = max(lg for lg in scaled if lg is not None)
+    vals = [0.0 if lg is None
+            else (1.0 if c > 0 else -1.0) * 10.0 ** min(lg - top, 0.0)
+            for c, lg in zip(coeffs, scaled)]
+    sigma = np.roots(np.asarray(vals, dtype=float))
+    r = sigma * 10.0 ** log_w0
+    return np.concatenate([r, np.zeros(n_origin, dtype=complex)])
 
 
 def numeric_eval(expr: sp.Expr, s: sp.Symbol, f) -> np.ndarray:

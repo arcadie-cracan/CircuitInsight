@@ -157,10 +157,12 @@ class ProbeReport:
 def _dominant_poles(A_v: sp.Matrix, f_lo=1.0, f_hi=1e11, n=12):
     """Closed-loop natural frequencies from det A, windowed and sorted by
     magnitude (rad/s)."""
+    from ..engine.mna import scaled_roots
+
     den = sp.Poly(_det(A_v), S)
-    coeffs = [complex(c) for c in den.all_coeffs()]
-    scale = max(abs(c) for c in coeffs if c != 0)
-    roots = np.roots([c / scale for c in coeffs])
+    # frequency-scaled rooting: the max-scaled float64 conversion loses
+    # roots outright once the det ladder outgrows float64
+    roots = scaled_roots(den.all_coeffs())
     w = np.abs(roots)
     keep = (w > 2 * np.pi * f_lo) & (w < 2 * np.pi * f_hi)
     roots = roots[keep]

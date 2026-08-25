@@ -43,7 +43,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import sympy as sp
 
-from ..engine.mna import MnaError, MnaSystem, S, _det, hybrid_split
+from ..engine.mna import (MnaError, MnaSystem, S, _det, hybrid_split,
+                          scaled_roots)
 
 
 def _numeric_A(system: MnaSystem) -> sp.Matrix:
@@ -91,9 +92,7 @@ def cap_pole_screen(system: MnaSystem, n_poles: int = 4,
     P = np.array(A_v.xreplace({S: sp.Integer(0)}).tolist(), dtype=complex)
 
     den = sp.Poly(_det(A_v), S)
-    coeffs = [complex(c) for c in den.all_coeffs()]
-    scale = max(abs(c) for c in coeffs if c != 0)
-    roots = np.roots([c / scale for c in coeffs])
+    roots = scaled_roots(den.all_coeffs())      # the full det ladder
     roots = roots[np.argsort(np.abs(roots))]
     roots = roots[np.abs(roots) > 0][:n_poles]
 
@@ -149,9 +148,12 @@ def port_impedance_rational(system: MnaSystem, node_a: str,
 
 
 def _scaled_roots(poly: sp.Poly) -> np.ndarray:
-    coeffs = [complex(c) for c in poly.all_coeffs()]
-    scale = max((abs(c) for c in coeffs if c != 0), default=1.0)
-    r = np.roots([c / scale for c in coeffs])
+    """Sorted roots of a sympy Poly through the engine's frequency-scaled
+    rooting -- ONE algorithm. The max-normalized float64 conversion that
+    lived here loses roots once the ladder outgrows float64 (the poles()
+    lesson), and these polys carry the full det-of-A ladder INSIDE the
+    sizing loop."""
+    r = scaled_roots(poly.all_coeffs())
     return r[np.argsort(np.abs(r))]
 
 
@@ -282,9 +284,11 @@ def pole_participation(system: MnaSystem, n_poles: int = 4):
     Q = np.array(A_v.diff(S).tolist(), dtype=complex)
     P = np.array(A_v.xreplace({S: sp.Integer(0)}).tolist(), dtype=complex)
     den = sp.Poly(_det(A_v), S)
-    coeffs = [complex(c) for c in den.all_coeffs()]
-    scale = max(abs(c) for c in coeffs if c != 0)
-    roots = np.roots([c / scale for c in coeffs])
+    # frequency-scaled rooting on the SYMPY coefficients: the max-scaled
+    # float64 conversion loses roots outright once the coefficient
+    # ladder outgrows float64 (the poles() lesson) -- these are the
+    # CLOSED-loop natural frequencies, a wide ladder on any full bench
+    roots = scaled_roots(den.all_coeffs())
     roots = roots[np.argsort(np.abs(roots))]
     roots = roots[np.abs(roots) > 0][:n_poles]
 
@@ -570,6 +574,10 @@ def multi_locus(system: MnaSystem, pairs, pole_scale: float | None = None):
         nz = np.nonzero(np.abs(hi) > tol)[0]
         if nz.size == 0 or hi.size - nz[0] < 2:
             return np.array([], dtype=complex)       # degenerate (no roots)
+        # plain np.roots ON PURPOSE: these coefficients are already
+        # scaled by construction (the circle interpolation in u = s/rho
+        # IS the frequency scaling), float, and per-grid-point hot --
+        # engine.scaled_roots pays sympy log evalfs it does not need
         u = np.roots(hi[nz[0]:])
         w = rho * u
         return w[np.argsort(np.abs(w))] / (2 * np.pi)
@@ -651,6 +659,31 @@ def generate_candidates(system: MnaSystem, n_poles: int = 3,
             "generic", pair[0], pair[1],
             f"strongest remaining mover of the dominant pole "
             f"(|dp/dC| = {abs(dp):.2g} rad/s per F)", abs(dp)))
+
+    # load compensation: the nodes already carrying the largest
+    # capacitance to GROUND are the design's declared loads, and more
+    # of the same capacitance slows the dominant pole -- the
+    # single-stage (folded-cascode) compensation. Invisible to the
+    # templates above: fc field case, 1 pF at the CL node gave PM 66
+    # deg while no bridge in the vocabulary topped 61
+    A_v = _numeric_A(system)
+    Qm = np.array(A_v.diff(S).tolist(), dtype=complex)
+    n = len(system.node_index)
+    nodes = sorted(system.node_index, key=system.node_index.get)
+    cg = np.real(Qm[:n, :n].sum(axis=1))      # row sum = cap to ground
+    for i in np.argsort(-cg)[:2]:
+        if cg[i] <= 0:
+            break
+        key = (nodes[i], None)
+        if key in seen:
+            continue
+        seen.add(key)
+        cands.append(Candidate(
+            "load", nodes[i], None,
+            f"the node already carries the largest capacitance to "
+            f"ground ({cg[i] * 1e12:.2g} pF): more of it slows the "
+            f"dominant pole (single-stage / load compensation)",
+            float(cg[i])))
     return cands
 
 
@@ -696,6 +729,7 @@ class Suggestion:
     gm_db: float | None = None
     f_unity_hz: float | None = None
     spec_dev: float | None = None    # peak sensitivity Ms (goal="spec")
+    flat_db: float | None = None     # measured servo peaking (goal="mfm")
 
     def describe(self) -> str:
         net = (f"{self.C * 1e12:.3g} pF"
@@ -704,6 +738,8 @@ class Suggestion:
         where = (f"{self.candidate.node_a} to "
                  f"{self.candidate.node_b or 'ground'}")
         pm = f", PM {self.pm_deg:.1f} deg" if self.pm_deg is not None else ""
+        if self.flat_db is not None:
+            pm = f", peaking {self.flat_db:+.1f} dB" + pm
         return (f"[{self.candidate.kind}] {net} across {where}: dominant "
                 f"pair {self.f0_hz / 1e6:.2f} MHz at zeta={self.zeta:.2f} "
                 f"({self.f0_hz / self.budget_hz:.0%} of the "
@@ -727,19 +763,41 @@ def _peak_sensitivity(freqs, T) -> float:
     return float(np.max(np.abs(S)))
 
 
+def _flatness_db(T) -> float:
+    """Peaking of the closed-loop servo magnitude |T / (1 - T)| over
+    the sweep, in dB above its low-frequency value -- the MEASURED
+    maximally-flat-magnitude criterion. The dominant-pair-zeta proxy
+    certified fc designs that peaked +6.6 dB off a ~120 MHz doublet
+    the two-pole picture cannot see, and rejected the flattest design
+    on the bench for reading overdamped (zeta 0.89). Same stb-sign
+    convention as _peak_sensitivity: instability is T = +1."""
+    H = np.asarray(T, dtype=complex)
+    H = H / (1.0 - H)
+    m = 20.0 * np.log10(np.abs(H) + 1e-300)
+    return float(np.max(m) - m[0])
+
+
 def suggest_compensation(system: MnaSystem, probe: str, *,
                          goal: str = "mfm", pm_target: float = 60.0,
                          n_budget: int = 2, zeta_tol: float = 0.05,
                          candidates=None, kappa: float = 0.05,
                          c_grid=None, r_grid=None, mirror=None,
-                         ms_target: float = 1.3, top: int = 5) -> list[Suggestion]:
+                         ms_target: float = 1.3, top: int = 5,
+                         flat_tol_db: float = 1.0,
+                         torn=None, cache: dict | None = None,
+                         progress=None) -> list[Suggestion]:
     """Size every candidate against the goal and rank by AREA among the
     achievers (then by goal deviation for the rest).
 
-    goal="mfm" (default, the structured-design formulation): place the
-    dominant closed-loop pair at Butterworth damping zeta = 1/sqrt(2)
-    (within zeta_tol), all natural frequencies LHP; among the feasible
+    goal="mfm" (default, the structured-design formulation): hold the
+    MEASURED closed-loop servo magnitude |T/(1-T)| flat -- peaking at
+    most flat_tol_db above its low-frequency value (Butterworth peaks
+    0 dB) -- with all natural frequencies LHP; among the feasible
     (C, R) family of each candidate, pick the LEAST-AREA point. The
+    dominant-pair (f0, zeta) is reported for reading, no longer the
+    criterion: the zeta proxy certified fc designs that peaked
+    +6.6 dB off a doublet the two-pole picture cannot see, and
+    rejected the flattest design on the bench as 'overdamped'. The
     attainable-bandwidth budget f_h = |(1-L_MB) prod p_i|^(1/n) is
     computed from the UNCOMPENSATED loop gain and reported for context
     (budget utilization), not enforced.
@@ -767,10 +825,43 @@ def suggest_compensation(system: MnaSystem, probe: str, *,
     """
     from .loopgain import loop_gain
 
-    T0 = loop_gain(system, probe, [])
+    def _say(msg, done=None, total=None):
+        # the search's narration channel: a GUI forwards it to its log
+        # (a nine-minute screen used to show nothing after the start)
+        if progress is not None:
+            progress(msg, done, total)
+
+    # `torn`/`cache`: the symbolic prelude (T0, the candidate screen)
+    # served through the tearing latency cache, same wiring and keys as
+    # suggest_multi_compensation -- the f1ec066 cache branch below read
+    # `cache`/`fp` without these parameters ever existing, so the
+    # DEFAULT candidates path raised NameError (field: first Suggest
+    # on the fc stb bench; every test passed candidates explicitly)
+    fp = None
+    _say("uncompensated loop gain T0 (symbolic prelude, cached across "
+         "re-runs)…")
+    if torn is not None:
+        from .tearing import _fingerprint, split_loop_gain
+        t_prims, t_ground, t_cut = torn
+        fp = _fingerprint(t_prims, t_ground)
+        if t_cut is not None:
+            T0 = split_loop_gain(t_prims, t_ground, probe, t_cut, keep=[],
+                                 cache=cache)
+        elif cache is not None:
+            key = ("suggest_T0", fp, probe)
+            T0 = cache.get(key)
+            if T0 is None:
+                T0 = loop_gain(system, probe, [])
+                cache[key] = T0
+        else:
+            T0 = loop_gain(system, probe, [])
+    else:
+        T0 = loop_gain(system, probe, [])
     budget = servo_bandwidth(T0, n_budget)
+    _say(f"T0 done; attainable-bandwidth budget f_h = {budget:.3g} Hz")
 
     if candidates is None:
+        _say("generating candidate branch positions…")
         if cache is not None and fp is not None:
             key = ("suggest_candidates", fp)
             candidates = cache.get(key)
@@ -835,8 +926,19 @@ def suggest_compensation(system: MnaSystem, probe: str, *,
     def pm_at(pair, C, R, twin=None):
         return _margins_of(upd.freqs, _T_of(pair, C, R, twin))
 
+    kinds: dict = {}
+    for c in candidates:
+        kinds[c.kind] = kinds.get(c.kind, 0) + 1
+    _say(f"{len(candidates)} candidates ("
+         + ", ".join(f"{v} {k}" for k, v in sorted(kinds.items())) + ")"
+         + ("; each sized over the C and series-RC grids" if candidates
+            else ""))
+
     out: list[Suggestion] = []
-    for cand in candidates:
+    for i_cand, cand in enumerate(candidates):
+        _say(f"screening {i_cand + 1}/{len(candidates)}: {cand.kind} "
+             f"{cand.node_a} ↔ {cand.node_b or 'gnd'}",
+             i_cand, len(candidates))
         pair = (cand.node_a, cand.node_b)
         twin = twins.get(id(cand))
         mult = 1 if twin is None else 2
@@ -862,8 +964,11 @@ def suggest_compensation(system: MnaSystem, probe: str, *,
                     f0, zeta = _dominant_pair(poles)
                     sdev = None
                     if goal == "mfm":
-                        ok = abs(zeta - zeta_star) <= zeta_tol
-                        dev = abs(zeta - zeta_star)
+                        # MEASURED flatness, not the dominant-pair
+                        # zeta proxy: hidden dynamics (the fc doublet)
+                        # peak while the pair sits on the circle
+                        dev = _flatness_db(_T_of(pair, C, R, twin))
+                        ok = dev <= flat_tol_db
                     elif goal == "pm":
                         pm, fu, gm = pm_at(pair, C, R, twin)
                         ok = pm is not None and pm >= pm_target
@@ -888,6 +993,8 @@ def suggest_compensation(system: MnaSystem, probe: str, *,
                 continue
             _, C, R, f0, zeta, ok, sdev = best
             pm, fu, gm = pm_at(pair, C, R, twin)
+            flat = (float(_flatness_db(_T_of(pair, C, R, twin)))
+                    if goal == "mfm" else None)
             scand = cand
             if twin is not None:
                 scand = Candidate(cand.kind, cand.node_a, cand.node_b,
@@ -898,9 +1005,13 @@ def suggest_compensation(system: MnaSystem, probe: str, *,
                 achieved=bool(ok), f0_hz=f0, zeta=zeta,
                 area=float(mult * (C / 1e-12 + kappa * R / 1e3)),
                 budget_hz=budget, pm_deg=pm, gm_db=gm, f_unity_hz=fu,
-                spec_dev=(float(sdev) if sdev is not None else None)))
+                spec_dev=(float(sdev) if sdev is not None else None),
+                flat_db=flat))
 
     out.sort(key=lambda s: (not s.achieved, s.area))
+    n_ok = sum(1 for s in out if s.achieved)
+    _say(f"screen done: {n_ok} goal achiever(s) of {len(out)} sized "
+         f"branches; keeping the {min(top, len(out))} best by area")
     return out[:top]
 
 
@@ -973,8 +1084,9 @@ def suggest_multi_compensation(system: MnaSystem, probe: str, *,
                                candidates=None, kappa: float = 0.05,
                                c_grid=None, r_grid=None, mirror=None,
                                min_gain_improve: float = 0.02,
-                               torn=None,
-                               cache: dict | None = None) -> MultiSuggestion:
+                               flat_tol_db: float = 1.0,
+                               torn=None, cache: dict | None = None,
+                               progress=None) -> MultiSuggestion:
     """Grow a multi-branch compensation network greedily -- the nested-Miller
     (NMC) story -- when one OP-invariant branch cannot meet the goal alone.
 
@@ -1112,8 +1224,11 @@ def suggest_multi_compensation(system: MnaSystem, probe: str, *,
         f0, zeta = _dominant_pair(poles)
         pm = gm = fu = sdev = None
         if goal == "mfm":
-            dev = abs(zeta - zeta_star)
-            ok = dev <= zeta_tol
+            # MEASURED flatness (see _flatness_db), margins reported
+            T = upd.with_branches(Ybr)
+            pm, fu, gm = _margins_of(upd.freqs, T)
+            dev = _flatness_db(T)
+            ok = dev <= flat_tol_db
         else:
             T = upd.with_branches(Ybr)
             pm, fu, gm = _margins_of(upd.freqs, T)
@@ -1135,7 +1250,14 @@ def suggest_multi_compensation(system: MnaSystem, probe: str, *,
     prev_dev = np.inf
     last = None
 
+    def _say(msg, done=None, total=None):
+        if progress is not None:
+            progress(msg, done, total)
+
     for step in range(k_max):
+        _say(f"growth step {step + 1}/{k_max}: screening "
+             f"{len(candidates)} candidate branches given "
+             f"{len(installed)} installed…", step, k_max)
         placed = set()
         for b in installed:
             for na, nb in b.physical():
@@ -1189,6 +1311,7 @@ def suggest_multi_compensation(system: MnaSystem, probe: str, *,
         steps.append(f"step {step + 1}: add "
                      f"{installed[-1].describe()} -> dev {dev:.3g}"
                      + (" (goal met)" if ok else ""))
+        _say(steps[-1])
         if ok:
             break
 

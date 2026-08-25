@@ -58,6 +58,7 @@ from .figures import (  # noqa: F401
     expr_figure,
     fidelity,
     figure_legend,
+    reference_figure,
     refresh_legend,
     whatif_fn,
 )

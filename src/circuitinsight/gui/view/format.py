@@ -272,7 +272,10 @@ def _factor_tex(kind, r, sig: int = 3) -> str:
     """One factor of the pole/zero product, normalized to 1 at DC.
 
     Real root at f:      (1 - s/2*pi*f)   -> LHP roots read as (1 + s/2*pi*|f|).
-    Conjugate pair:      (1 + s/2*pi*Q*f0 + (s/2*pi*f0)^2), Q from the real part.
+    Conjugate pair:      the canonical second-order section with ONE f0
+    and an EXPLICIT Q numeral, (1 + s/(Q * 2*pi*f0) + (s/2*pi*f0)^2) --
+    folding Q*f0 into a second frequency hid the damping (field
+    request: 107 MHz beside 201 MHz read as two unrelated corners).
     """
     if kind == "real":
         f = r.real
@@ -285,8 +288,9 @@ def _factor_tex(kind, r, sig: int = 3) -> str:
         return rf"\left(1 + \left(\frac{{s}}{{2\pi\cdot {_eng_tex(f0)}}}\right)^2\right)"
     q = f0 / (2 * abs(r.real))               # Q of the pair
     sign = "+" if r.real < 0 else "-"
-    return (rf"\left(1 {sign} \frac{{s}}{{2\pi\cdot {_eng_tex(q * f0)}}} + "
-            rf"\left(\frac{{s}}{{2\pi\cdot {_eng_tex(f0)}}}\right)^2\right)")
+    w0 = rf"2\pi\cdot {_eng_tex(f0)}"
+    return (rf"\left(1 {sign} \frac{{s}}{{{q:.3g} \cdot {w0}}} + "
+            rf"\left(\frac{{s}}{{{w0}}}\right)^2\right)")
 
 def _product_tex(roots) -> str:
     facs = [_factor_tex(k, r) for k, r in _pair_roots(roots)]

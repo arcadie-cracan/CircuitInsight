@@ -497,3 +497,16 @@ def test_impedance_dc_renders_as_z0_in_ohms():
     tl = view._expr_lines(rt)
     assert tl[0][0] == "A_0 = "
     assert any(lab == "H(s) = " for lab, _ in tl)
+
+
+def test_conjugate_pair_factor_reads_q_explicitly():
+    """The second-order section is written in canonical form -- one f0
+    shared by both terms and the Q numeral explicit in the linear
+    term. Folding Q*f0 into a second frequency read as two unrelated
+    corners (field request: 107 MHz beside 201 MHz)."""
+    from circuitinsight.gui.view.format import _factor_tex
+
+    tex = _factor_tex("pair", complex(-95e6, 177e6))   # |r| ~ 201 MHz
+    assert tex.count("201") == 2          # ONE f0, in both denominators
+    assert "1.06 \cdot" in tex           # Q, visible as itself
+    assert "1 +" in tex                   # LHP pair reads with + signs

@@ -147,6 +147,7 @@ class GFTBenchMixin:
         self.progress.hide()
         self.cancel_btn.hide()
         self._job_finished(self.gft_btn)
+        self._show_result_tab()
         f = payload["freqs"]
         q = payload["q"]
         T = q["T"]

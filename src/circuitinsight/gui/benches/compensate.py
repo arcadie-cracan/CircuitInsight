@@ -8,30 +8,54 @@ from .. import theme
 from .. import view
 
 class CompensateBenchMixin:
-    def _comp_page(self):
-        page = QWidget()
-        v = QVBoxLayout(page)
-        row = QHBoxLayout()
-        row.addWidget(QLabel("goal:"))
+    def _comp_controls_col(self):
+        """The bench's controls as a LEFT-COLUMN panel: it takes the
+        keep-symbolic column's slot while Compensate is active (the
+        suggester never reads the keep set -- rank-one screening on the
+        numeric operating point -- so showing the symbols list there
+        invited ticking symbols into a 10-minute hybrid Solve that buys
+        the tool nothing)."""
+        from PySide6.QtWidgets import QFormLayout, QGroupBox
+
+        box = QGroupBox("Compensate")
+        form = QFormLayout(box)
+        self.comp_probe_combo = QComboBox()
+        self.comp_probe_combo.setToolTip(
+            "The loop to compensate: the probe cutting it. One probe in\n"
+            "the run (the stb probe) needs no choice; a multi-loop design\n"
+            "(nmc3: three iprobes) picks its loop here.")
+        # ONE probe state, two views: the toolbar combo (hidden in this
+        # bench) stays the source of truth for every loop bench
+        self.comp_probe_combo.currentTextChanged.connect(
+            lambda t: t and self.probe_combo.setCurrentText(t))
+        self.probe_combo.currentTextChanged.connect(self._comp_sync_probe)
+        form.addRow("loop:", self.comp_probe_combo)
         self.goal_combo = QComboBox()
         self.goal_combo.addItems(["mfm", "pm", "spec"])
         self.goal_combo.setToolTip(
-            "mfm: place the dominant closed-loop pair at Butterworth damping\n"
+            "mfm: hold the measured closed-loop magnitude FLAT (peaking\n"
+            "     ≤ 1 dB; Butterworth peaks 0 dB)\n"
             "pm: meet a phase-margin floor\n"
             "spec: hold the peak sensitivity Ms = max|1/(1-T)| (Middlebrook's\n"
             "      discrepancy target; Ms 1.3 ~ PM 50°, 1.2 ~ PM 60°)")
         self.goal_combo.currentTextChanged.connect(self._on_goal_changed)
-        row.addWidget(self.goal_combo)
+        form.addRow("goal:", self.goal_combo)
+        self.flat_lbl = QLabel("peaking ≤:")
+        self.flat_spin = self._spin(1.0, 0.1, 3.0, 0.1, " dB")
+        self.flat_spin.setDecimals(1)
+        self.flat_spin.setToolTip(
+            "The mfm flatness budget: measured closed-loop |T/(1-T)|\n"
+            "peaking above its low-frequency value. Butterworth peaks\n"
+            "0 dB; 1 dB admits the mild ringing a series-R zero trades\n"
+            "for capacitance.")
+        form.addRow(self.flat_lbl, self.flat_spin)
         self.pm_lbl = QLabel("PM target:")
-        row.addWidget(self.pm_lbl)
         self.comp_pm_spin = self._spin(60.0, 30.0, 85.0, 1.0, " °")
-        row.addWidget(self.comp_pm_spin)
+        form.addRow(self.pm_lbl, self.comp_pm_spin)
         self.ms_lbl = QLabel("Ms target:")
-        row.addWidget(self.ms_lbl)
         self.ms_spin = self._spin(1.3, 1.0, 3.0, 0.05, "")
         self.ms_spin.setDecimals(2)
-        row.addWidget(self.ms_spin)
-        row.addWidget(QLabel("branches:"))
+        form.addRow(self.ms_lbl, self.ms_spin)
         self.kmax_spin = QSpinBox()
         self.kmax_spin.setRange(1, 3)
         self.kmax_spin.setValue(1)
@@ -39,33 +63,57 @@ class CompensateBenchMixin:
             "1: rank single OP-invariant branches by area.\n"
             ">1: grow a nested (NMC) network one branch at a time, stopping\n"
             "when the goal is met or a further branch does not pay its area.")
-        row.addWidget(self.kmax_spin)
-        row.addWidget(QLabel("strip:"))
+        form.addRow("branches:", self.kmax_spin)
         self.exclude_edit = QLineEdit()
         self.exclude_edit.setPlaceholderText("I0.Cc, I0.Rz")
-        self.exclude_edit.setMaximumWidth(140)
         self.exclude_edit.setToolTip(
             "Existing compensation instances to remove before suggesting:\n"
             "the re-compensate workflow. Removing a C or series-RC branch is\n"
             "operating-point invariant, so the reconstruction stays exact and\n"
             "one DC solve still spans the whole design space.")
-        row.addWidget(self.exclude_edit)
+        form.addRow("strip:", self.exclude_edit)
         self.mirror_chk = QCheckBox("mirrored")
         self.mirror_chk.setToolTip(
             "Fully-differential: install each branch as a matched symmetric\n"
             "pair (itself plus its mirror image, same value). The map is\n"
             "derived from p/n node names; self-symmetric positions such as\n"
             "CMFB or tail stay single-ended.")
-        row.addWidget(self.mirror_chk)
+        form.addRow("", self.mirror_chk)
         self.suggest_btn = QPushButton("Suggest compensation")
         self.suggest_btn.clicked.connect(self.suggest_comp)
-        row.addWidget(self.suggest_btn)
-        row.addStretch(1)
-        v.addLayout(row)
+        form.addRow(self.suggest_btn)
+        self._on_goal_changed(self.goal_combo.currentText())
+        return box
+
+    def _comp_sync_probe(self, text: str):
+        """Toolbar probe -> panel mirror (population and cross-bench
+        changes land here); a single-probe run shows a fixed loop."""
+        combo = getattr(self, "comp_probe_combo", None)
+        if combo is None:
+            return
+        items = [self.probe_combo.itemText(i)
+                 for i in range(self.probe_combo.count())]
+        have = [combo.itemText(i) for i in range(combo.count())]
+        if items != have:
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(items)
+            combo.blockSignals(False)
+        if text and combo.currentText() != text:
+            combo.blockSignals(True)
+            combo.setCurrentText(text)
+            combo.blockSignals(False)
+        combo.setEnabled(combo.count() > 1)
+
+    def _comp_page(self):
+        page = QWidget()
+        v = QVBoxLayout(page)
         self.comp_tbl = QTableWidget(0, 8)
         self.comp_tbl.setHorizontalHeaderLabels(
-            ["pair", "network", "C", "R", "area", "ζ",
-             "PM", "ok"])
+            ["pair", "network", "C", "R", "area", "ζ", "PM", "peak"])
+        self.comp_tbl.horizontalHeaderItem(7).setToolTip(
+            "The measured criterion value: closed-loop peaking (mfm) "
+            "or peak sensitivity Ms (spec)")
         self.comp_tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.comp_tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.comp_tbl.itemSelectionChanged.connect(self._on_comp_selected)
@@ -84,11 +132,13 @@ class CompensateBenchMixin:
         self._comp_probe = None
         self._comp_upd = None
         self._comp_tab = page
-        self._on_goal_changed(self.goal_combo.currentText())
         return page
 
     def _on_goal_changed(self, goal):
-        """PM and Ms targets are alternatives; mfm needs neither."""
+        """Each goal shows ITS target: flatness (mfm), PM floor (pm),
+        peak sensitivity (spec)."""
+        for w in (self.flat_lbl, self.flat_spin):
+            w.setVisible(goal == "mfm")
         for w in (self.pm_lbl, self.comp_pm_spin):
             w.setVisible(goal == "pm")
         for w in (self.ms_lbl, self.ms_spin):
@@ -106,7 +156,9 @@ class CompensateBenchMixin:
         session cache key."""
         goal = self.goal_combo.currentText()
         kw = {"goal": goal}
-        if goal == "pm":
+        if goal == "mfm":
+            kw["flat_tol_db"] = self.flat_spin.value()
+        elif goal == "pm":
             kw["pm_target"] = self.comp_pm_spin.value()
         elif goal == "spec":
             kw["ms_target"] = self.ms_spin.value()
@@ -133,16 +185,30 @@ class CompensateBenchMixin:
         what = "network" if k_max > 1 else "branches"
 
         def fn(_cb):
+            # the search narrates through the worker's note signal
+            # (queued -- Log lines land on the GUI thread), the
+            # screening counter through the progress channel
+            def prog(msg, done=None, total=None):
+                self.worker_note(msg)
+                if done is not None and total:
+                    _cb(done, total)
+
+            prog("baseline loop gain (numeric, no kept symbols)…")
             baseline = self.controller.loop_gain(probe)
+            pm = baseline.pm_deg
+            prog("baseline done"
+                 + (f": PM {pm:.1f}°" if pm is not None else ""))
             if k_max > 1:
                 res = self.controller.suggest_multi_compensation(
-                    probe, k_max=k_max, **kw)
+                    probe, k_max=k_max, progress=prog, **kw)
             else:
-                res = self.controller.suggest_compensation(probe, **kw)
+                res = self.controller.suggest_compensation(
+                    probe, progress=prog, **kw)
             return (baseline, res)
 
         self._launch(fn, f"searching compensation {what} at {probe} "
-                         f"({kw['goal']})…", on_done=self._on_comp_done)
+                         f"({kw['goal']})…", est_s=None,
+                     on_done=self._on_comp_done)
 
     def suggest_sync(self, probe, *, k_max=1, **kw):
         """Blocking search, for tests and scripting. k_max > 1 grows a
@@ -164,6 +230,7 @@ class CompensateBenchMixin:
         self.progress.hide()
         self.cancel_btn.hide()
         self._job_finished(self.suggest_btn)
+        self._comp_clear_proposed()           # old selection's overlay
         baseline, res = payload
         self._comp_baseline = baseline
         self._comp_upd = None                     # rebuilt lazily on select
@@ -187,6 +254,7 @@ class CompensateBenchMixin:
                          "—", "—", "—")
                 for j, text in enumerate(cells):
                     tbl.setItem(i, j, QTableWidgetItem(text))
+                self._comp_tint_row(i, res.achieved)
             self._comp_steps.setText("  ·  ".join(res.steps))
             ms = (f", Ms {res.spec_dev:.2f}" if res.spec_dev is not None
                   else "")
@@ -197,6 +265,7 @@ class CompensateBenchMixin:
                 f"ζ {res.zeta:.3f}{pm}{ms} — {verdict}. "
                 f"Select any row to preview the whole network.")
             self.tabs.setCurrentWidget(self._comp_tab)
+            self._update_crumb()      # the Suggest step just completed
             self.statusBar().showMessage(
                 f"{len(rows)}-branch network at {self._comp_probe} "
                 f"({verdict})")
@@ -208,17 +277,34 @@ class CompensateBenchMixin:
         tbl.setRowCount(len(self._comp_suggestions))
         for i, sg in enumerate(self._comp_suggestions):
             pair = f"{sg.candidate.node_a} ↔ "                    f"{sg.candidate.node_b or 'gnd'}"
+            peak = ("—" if sg.flat_db is None and sg.spec_dev is None
+                    else f"{sg.flat_db:+.1f} dB" if sg.flat_db is not None
+                    else f"Ms {sg.spec_dev:.2f}")
             cells = (pair, sg.network, view.eng(sg.C, "F"),
                      view.eng(sg.R, "Ω"),
                      f"{sg.area:.1f}", f"{sg.zeta:.3f}",
-                     f"{sg.pm_deg:.1f}°" if sg.pm_deg else "—",
-                     "✓" if sg.achieved else "✗")
+                     f"{sg.pm_deg:.1f}°" if sg.pm_deg else "—", peak)
             for j, text in enumerate(cells):
                 tbl.setItem(i, j, QTableWidgetItem(text))
+            self._comp_tint_row(i, sg.achieved)
         self.tabs.setCurrentWidget(self._comp_tab)
+        self._update_crumb()          # the Suggest step just completed
         self.statusBar().showMessage(
             f"{len(self._comp_suggestions)} suggestions at "
             f"{self._comp_probe}; select one to preview")
+
+    def _comp_tint_row(self, row: int, achieved: bool):
+        """The verdict is the row's COLOR, not a column: green tint
+        within the goal, red tint outside it (the SEVERITY tints the
+        strip already speaks)."""
+        from PySide6.QtGui import QBrush, QColor
+
+        key = "ok" if achieved else "error"
+        brush = QBrush(QColor(theme.SEVERITY[key][0]))
+        for j in range(self.comp_tbl.columnCount()):
+            it = self.comp_tbl.item(row, j)
+            if it is not None:
+                it.setBackground(brush)
 
     def _comp_updater(self):
         """Preview updater on the SAME system the search ran on. When the
@@ -300,4 +386,47 @@ class CompensateBenchMixin:
             note += f",  GM {gm:.1f} dB"
         if len(branches) > 1:
             note += f"  ({len(branches)} branches installed)"
+        note += self._comp_show_on_schematic(min(rows), branches)
         self._comp_hint.setText(note)
+
+    def _comp_show_on_schematic(self, row, branches) -> str:
+        """Overlay the selected suggestion's physical branches on the
+        Schematic pane (accent glyph between its nets, sized label);
+        returns a short note for the hint line. Quietly nothing when
+        the run has no schematic hints."""
+        entries = []
+        if self._comp_multi is not None:
+            for b in self._comp_multi.branches:
+                lbl = view.eng(b.C, "F") + (
+                    f" + {view.eng(b.R, 'Ω')}" if b.R else "")
+                for na, nb in b.physical():
+                    entries.append((na, nb, lbl, bool(b.R)))
+        else:
+            sg = self._comp_suggestions[row]
+            lbl = view.eng(sg.C, "F") + (
+                f" + {view.eng(sg.R, 'Ω')}" if sg.R else "")
+            for na, nb, _y in branches:
+                entries.append((na, nb, lbl, bool(sg.R)))
+        self._sch_proposed = tuple(entries)
+        if not getattr(self, "_sch_hints", None):
+            return ""
+        try:
+            from ...schematic import compose
+            self._schematic_render()
+            drawn = int(getattr(compose, "last_proposed_drawn", 0))
+        except Exception:                     # noqa: BLE001
+            return ""                         # decoration only
+        if drawn:
+            return "  — drawn on the Schematic page"
+        return ("  — branch nets are not on the current Schematic "
+                "page (descend to the block that owns them)")
+
+    def _comp_clear_proposed(self):
+        """Withdraw the schematic overlay (new results, bench left)."""
+        if getattr(self, "_sch_proposed", ()):
+            self._sch_proposed = ()
+            if getattr(self, "_sch_hints", None):
+                try:
+                    self._schematic_render()
+                except Exception:             # noqa: BLE001
+                    pass

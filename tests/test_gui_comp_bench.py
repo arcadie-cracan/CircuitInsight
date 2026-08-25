@@ -52,24 +52,29 @@ def _win(tmp_path, cin, psf):
 
 # ------------------------------------------------------ goal / target UI
 def test_target_spin_follows_the_goal(qapp, tmp_path):
-    """PM and Ms targets are alternatives; mfm needs neither."""
+    """Each goal exposes ITS target: flatness budget (mfm), PM floor
+    (pm), peak sensitivity (spec) -- alternatives, one at a time."""
     w = _win(tmp_path, FIX / "miller" / "tb_ota2s_stb.cin.json",
              FIX / "miller" / "psf_stb")
     try:
         # isHidden() is the explicit hide state the goal handler sets;
         # isVisibleTo() would also depend on which tab is current
         w.goal_combo.setCurrentText("pm")
-        assert not w.comp_pm_spin.isHidden() and w.ms_spin.isHidden()
+        assert not w.comp_pm_spin.isHidden()
+        assert w.ms_spin.isHidden() and w.flat_spin.isHidden()
         w.goal_combo.setCurrentText("spec")
-        assert not w.ms_spin.isHidden() and w.comp_pm_spin.isHidden()
+        assert not w.ms_spin.isHidden()
+        assert w.comp_pm_spin.isHidden() and w.flat_spin.isHidden()
         w.goal_combo.setCurrentText("mfm")
+        assert not w.flat_spin.isHidden()
         assert w.comp_pm_spin.isHidden() and w.ms_spin.isHidden()
         # only the active target reaches the search
         w.goal_combo.setCurrentText("spec")
         w.ms_spin.setValue(1.25)
         assert w._comp_kw() == {"goal": "spec", "ms_target": 1.25}
         w.goal_combo.setCurrentText("mfm")
-        assert w._comp_kw() == {"goal": "mfm"}
+        w.flat_spin.setValue(0.5)
+        assert w._comp_kw() == {"goal": "mfm", "flat_tol_db": 0.5}
     finally:
         w.close()
         type(w).settings_path = None
@@ -90,6 +95,26 @@ def test_spec_goal_runs_and_reports_ms(qapp, tmp_path):
                                       "Miller port", 1.0)])
         assert sugg and w.comp_tbl.rowCount() == len(sugg)
         assert any(s.achieved and s.spec_dev is not None for s in sugg)
+        # the verdict is the row's COLOR, not an ok column
+        from circuitinsight.gui import theme
+        assert w.comp_tbl.columnCount() == 8
+        # spec rows report the measured criterion in the peak column
+        assert w.comp_tbl.item(0, 7).text().startswith("Ms ")
+        for i, s in enumerate(sugg):
+            key = "ok" if s.achieved else "error"
+            assert (w.comp_tbl.item(i, 0).background().color().name()
+                    == theme.SEVERITY[key][0])
+        # selecting a row proposes its branch to the Schematic pane
+        # (this run ships no hints, so nothing renders -- the state
+        # still sets, and it clears with fresh results)
+        w.comp_tbl.selectRow(0)
+        assert w._sch_proposed
+        na, nb, lbl, _wr = w._sch_proposed[0]
+        assert (na, nb) == (sugg[0].candidate.node_a,
+                            sugg[0].candidate.node_b)
+        assert "F" in lbl
+        w._on_comp_done((w._comp_baseline, sugg))
+        assert w._sch_proposed == ()
     finally:
         w.close()
         type(w).settings_path = None
@@ -257,3 +282,68 @@ def test_cross_probe_toggle_is_remembered(qapp, tmp_path):
             w2.close()
     finally:
         MainWindow.settings_path = None
+
+
+# ------------------------------------------------- one-column bench
+def test_compensate_presents_its_own_column(qapp, tmp_path):
+    """Compensate is a suggestion tool: the keep set never enters the
+    search, so the symbols column and Solve hide, the bench's controls
+    take the column, the probe lives in the panel (mirroring the
+    toolbar state), and the crumb's last step reads Suggest."""
+    w = _win(tmp_path, FIX / "miller" / "tb_ota2s_stb.cin.json",
+             FIX / "miller" / "psf_stb")
+    try:
+        w.mode_combo.setCurrentText("Compensate")
+        # toolbar widgets never report visible on an unshown window:
+        # the ACTIONS carry the state the mode logic controls
+        assert not w._keep_col.isVisibleTo(w)
+        assert not w._solve_act.isVisible()
+        assert not w._probe_act.isVisible()
+        assert w.comp_col.isVisibleTo(w)
+        assert w.comp_probe_combo.currentText() == \
+            w.probe_combo.currentText()
+        # several Tian candidates in this run (iprobe + vsources):
+        # the loop stays choosable, in the panel
+        assert w.comp_probe_combo.isEnabled()
+        assert w.comp_probe_combo.count() == w.probe_combo.count()
+        assert "Suggest" in w.crumb.text()
+        assert "Choose symbols" not in w.crumb.text()
+        idx = w.tabs.indexOf(w._comp_tab)
+        assert w.tabs.tabText(idx) == "Suggestions"
+        # Summary/Expression/Error describe a SOLVED response; the
+        # bench has no Solve, so they hide with it
+        for view_tab in (w.summary, w._expr_tab, w.err_canvas):
+            assert not w.tabs.isTabVisible(w.tabs.indexOf(view_tab))
+
+        w.mode_combo.setCurrentText("Loop gain")
+        assert w._keep_col.isVisibleTo(w)
+        assert w._solve_act.isVisible()
+        assert w._probe_act.isVisible()
+        assert not w.comp_col.isVisibleTo(w)
+        assert "Choose symbols" in w.crumb.text()
+    finally:
+        w.close()
+
+
+def test_search_narrates_through_the_log(qapp, tmp_path):
+    """The suggester's progress callback lands in the Log: a
+    nine-minute screen used to show nothing after the start line."""
+    w = _win(tmp_path, FIX / "miller" / "tb_ota2s_stb.cin.json",
+             FIX / "miller" / "psf_stb")
+    try:
+        events = []
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            w.controller.suggest_compensation(
+                "IPRB0", goal="pm", pm_target=55.0, exclude=("I0.Cc",),
+                c_grid=np.array([1e-12, 5e-12]),
+                r_grid=np.array([0.0, 2e3]),
+                progress=lambda msg, done=None, total=None:
+                    events.append((msg, done, total)))
+        text = "  ".join(m for m, _d, _t in events)
+        assert "T0" in text and "candidates" in text
+        assert any("screening" in m and d is not None
+                   for m, d, _t in events)
+        assert "screen done" in text
+    finally:
+        w.close()

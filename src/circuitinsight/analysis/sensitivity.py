@@ -110,8 +110,12 @@ def sensitivities(analyzer, inp: str, out: str,
     dc.sort(key=lambda t: -abs(t[1]))
 
     # ---------------- poles: null-vector perturbation formula -------------
+    from ..engine.mna import scaled_roots
+
     den = sp.Poly(_det(A_v), S)
-    roots = np.roots([complex(c) for c in den.all_coeffs()])
+    # frequency-scaled rooting: the plain complex() conversion loses
+    # roots outright once the det ladder outgrows float64
+    roots = scaled_roots(den.all_coeffs())
     roots = roots[np.argsort(np.abs(roots))]
     roots = roots[np.abs(roots) > 0][:n_poles]
 
@@ -436,24 +440,44 @@ def loop_margins(freqs, h):
     respective crossing is not in the band. THE margin extraction: the
     session's loop-gain reporting, the Stability criterion, and (via
     compensate._margins_of) the compensation, modes and probe-adequacy
-    advisors all read margins through this function."""
+    advisors all read margins through this function.
+
+    WORST crossing, folded phase. A loop whose magnitude dips through
+    0 dB, rises over a resonant doublet and falls again crosses unity
+    three times; the first crossing read 125 deg while the last had
+    28 deg in hand -- robustness is the loop's CLOSEST approach to the
+    critical point, so PM is the minimum over every unity crossing and
+    GM the minimum over every critical-phase crossing (any multiple of
+    360: unwrap banks turns, and each 0 mod 360 line is critical).
+    The fold to (-180, 180] keeps PM an angular distance -- 'PM 386'
+    once ranked a compensation 26 deg from oscillation as an achiever."""
     f = np.asarray(freqs, dtype=float)
     m = 20 * np.log10(np.abs(h))
     ph = np.degrees(np.unwrap(np.angle(h)))
     x = np.log10(f)
     pm = fpm = gm = fgm = None
-    k = np.where(np.diff(np.sign(m)))[0]
-    if k.size:
-        k = k[0]
-        xu = np.interp(0, [m[k + 1], m[k]], [x[k + 1], x[k]])
-        pm = float(np.interp(xu, [x[k], x[k + 1]], [ph[k], ph[k + 1]]))
-        fpm = float(10 ** xu)
-    j = np.where(np.diff(np.sign(ph)))[0]
-    if j.size:
-        j = j[0]
-        xj = np.interp(0, [ph[j + 1], ph[j]], [x[j + 1], x[j]])
-        gm = float(-np.interp(xj, [x[j], x[j + 1]], [m[j], m[j + 1]]))
-        fgm = float(10 ** xj)
+    def _cross(v, k):
+        # x and the OTHER trace at v's zero between samples k, k+1 --
+        # by hand: a rising crossing feeds np.interp descending xp
+        t = v[k] / (v[k] - v[k + 1])
+        return x[k] + t * (x[k + 1] - x[k]), t
+
+    for k in np.where(np.diff(np.sign(m)))[0]:
+        xu, t = _cross(m, k)
+        p = float(ph[k] + t * (ph[k + 1] - ph[k]))
+        p = ((p + 180.0) % 360.0) - 180.0
+        if pm is None or p < pm:
+            pm, fpm = p, float(10 ** xu)
+    # critical-phase crossings on the FOLDED phase: sign changes of the
+    # fold are the 0-mod-360 lines; its artificial +-180 jumps are not
+    phf = ((ph + 180.0) % 360.0) - 180.0
+    dj = np.diff(phf)
+    for j in np.where((np.diff(np.sign(phf)) != 0)
+                      & (np.abs(dj) < 180.0))[0]:
+        xj, t = _cross(phf, j)
+        g = float(-(m[j] + t * (m[j + 1] - m[j])))
+        if gm is None or g < gm:
+            gm, fgm = g, float(10 ** xj)
     return pm, fpm, gm, fgm
 
 

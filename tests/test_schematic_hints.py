@@ -286,6 +286,52 @@ def test_balun_and_switch_register_on_their_pins():
 
 
 @needs_lib
+def test_switch_state_and_rail_labels_follow_the_ac_circuit():
+    """The drawing shows the configuration the solver sees: a switch's
+    symbol follows its resolved AC state (fc: S1 open, S0 closed --
+    the same ac_position-dominates-position rule the small-signal
+    model applies), and ground/supply glyphs carry no designator
+    (I3, I14, ... name nothing anyone references)."""
+    import json
+
+    from circuitinsight.models.small_signal import switch_ac_state
+    from circuitinsight.schematic import SymbolLibrary, compose, page
+    from circuitinsight.schematic.symmap import resolve
+
+    assert resolve("switch", "open").file == "switch-open.svg"
+    assert resolve("switch", "closed").file == "switch-closed.svg"
+    assert resolve("switch").file == "switch-closed.svg"  # stateless
+    assert switch_ac_state({"ac_position": "0", "position": "1"}) == 0
+    assert switch_ac_state({"position": "1"}) == 1
+    assert switch_ac_state({}) is None
+
+    fc = FIX / "spectre" / "fc"
+    h = load_hints(fc / "tb_fc.hints.json")
+    cin = json.loads((fc / "tb_fc.cin.json").read_text(encoding="utf-8"))
+    cdef = cin["definitions"]["tb_ota_folded_cascode"]
+    state = {0: "open", 1: "closed"}
+    dt = {}
+    for i in cdef["instances"]:
+        if "device_type" not in i:
+            continue
+        p = i.get("params") or {}
+        dt[i["name"]] = (i["device_type"],
+                         state.get(switch_ac_state(p))
+                         if i["device_type"] == "switch"
+                         else p.get("polarity"))
+    svg = compose(page(h, "tb_ota_folded_cascode"), dt, SymbolLibrary(),
+                  subckts=frozenset(cin["definitions"]))
+    # switch-closed.svg is switch-open.svg plus the closing bar: with
+    # S0 closed and S1 open the bar is drawn exactly once
+    closing_bar = "M 114.40235,84.56692 L 131.07797,84.56692"
+    assert svg.count(closing_bar) == 1
+    # rails stay anonymous; a referenced device keeps its label
+    assert ">VSUP" in svg
+    for rail in ("I3", "I4", "I9", "I10", "I11", "I14"):
+        assert f">{rail}<" not in svg
+
+
+@needs_lib
 def test_designator_spot_comes_from_the_library_placeholder():
     """The library author placed a designator placeholder in every
     symbol (lib:role=equation); the loader reads its spot through the
@@ -408,3 +454,38 @@ def test_match_plates_sit_under_the_wires():
     first_wire = svg.index('<path d="M ')
     assert plate < first_wire
     assert svg.count('rx="1.2"') == 2
+
+
+@needs_lib
+def test_proposed_branch_overlays_the_page():
+    """A selected compensation suggestion draws ONTO the schematic:
+    accent glyph between the two nets' wires (cap bars, resistor box
+    for series-RC, earth for a ground branch) with the sized label;
+    a branch whose nets have no wires here is skipped and the drawn
+    count says so."""
+    import json
+
+    from circuitinsight.schematic import SymbolLibrary, compose, page
+
+    fc = FIX / "spectre" / "fc"
+    h = load_hints(fc / "tb_fc.hints.json")
+    cin = json.loads((fc / "tb_fc.cin.json").read_text(encoding="utf-8"))
+    cdef = cin["definitions"]["tb_ota_folded_cascode"]
+    dt = {i["name"]: (i["device_type"],
+                      (i.get("params") or {}).get("polarity"))
+          for i in cdef["instances"] if "device_type" in i}
+    branches = (("vin_dm", "vout", "1.2 pF + 3 kΩ", True),
+                ("vout", None, "2.25 pF", False),
+                ("nope", "vout", "9 pF", False))     # absent: skipped
+    svg = compose(page(h, "tb_ota_folded_cascode"), dt, SymbolLibrary(),
+                  subckts=frozenset(cin["definitions"]),
+                  proposed=branches)
+    assert 'id="proposed-branches"' in svg
+    assert "1.2 pF + 3 kΩ" in svg and "2.25 pF" in svg
+    assert "9 pF" not in svg
+    assert compose.last_proposed_drawn == 2
+    # and none of it without the parameter
+    svg2 = compose(page(h, "tb_ota_folded_cascode"), dt, SymbolLibrary(),
+                   subckts=frozenset(cin["definitions"]))
+    assert 'id="proposed-branches"' not in svg2
+    assert compose.last_proposed_drawn == 0

@@ -229,3 +229,28 @@ def test_rc_ladder_20_nodes_hybrid():
     H = an.tf("V1", "n20", keep=["C10"])
     assert H.num_den[1].degree() == 20
     assert sp.simplify(H.dc_gain()) == 1
+
+
+def test_poles_survive_a_wide_coefficient_ladder():
+    """A full-circuit denominator can span more decades than float64:
+    normalized by its largest coefficient, the leading term lands
+    denormal and np.roots blows the companion matrix up to inf
+    (LinAlgError on a 36th-order stb loop gain in the field) -- or
+    underflows to exact zero and the fastest poles silently vanish.
+    The frequency-scaled rooting recovers every pole."""
+    import numpy as np
+
+    from circuitinsight.engine.mna import S, TransferFunction
+
+    taus = [sp.Float(10.0 ** (-5 - 6 * k / 39.0), 30) for k in range(40)]
+    tf = TransferFunction(expr=1 / sp.prod([1 + S * t for t in taus]))
+    p = tf.poles()
+    assert len(p) == 40
+    want = np.sort([1.0 / (2 * np.pi * float(t)) for t in taus])
+    got = np.sort(np.abs(p))
+    assert np.max(np.abs(got - want) / want) < 1e-6
+    assert len(tf.zeros()) == 0
+    # roots at the origin survive the scaling (trailing zero coeffs)
+    tfz = TransferFunction(expr=S ** 2 / (1 + S * sp.Float("1e-6")))
+    z = tfz.zeros()
+    assert len(z) == 2 and np.allclose(np.abs(z), 0.0)

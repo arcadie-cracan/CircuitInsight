@@ -99,3 +99,62 @@ def _miller():
     p = (Path(__file__).resolve().parent / "golden" / "circuits"
          / "miller_ota.cin.json")
     return json.loads(p.read_text())
+
+
+def test_loop_margins_fold_the_unwrap_turn():
+    """PM is an angular DISTANCE, not the unwrapped running phase: a
+    sharply peaked loop pushes the phase up through +180 before the
+    unity crossing, unwrap banks a full turn, and the crossing read
+    360 deg high -- 'PM 386' ranked a compensation 26 deg from
+    oscillation as an achiever."""
+    import numpy as np
+
+    from circuitinsight.analysis.sensitivity import loop_margins
+
+    f = np.geomspace(1e4, 1e9, 400)
+    x = np.linspace(0.0, 1.0, f.size)
+    mag_db = 40.0 - 80.0 * x                 # unity crossing mid-band
+    # continuous phase rising through +180 (a resonant peak) before
+    # settling toward +386 at the crossing region
+    ph = 170.0 + 260.0 * np.clip(x / 0.4, 0.0, 1.0) - 44.0 * x
+    h = 10.0 ** (mag_db / 20.0) * np.exp(1j * np.radians(ph))
+    pm, fpm, _gm, _fgm = loop_margins(f, h)
+    assert pm is not None and fpm is not None
+    assert -180.0 < pm <= 180.0              # folded, never 360-high
+    truth = float(np.interp(np.log10(fpm), np.log10(f), ph))
+    assert abs(pm - (((truth + 180.0) % 360.0) - 180.0)) < 2.0
+
+    # an ordinary loop is untouched: phase falls 175 -> 40 at crossing
+    ph2 = 175.0 - 135.0 * x
+    h2 = 10.0 ** (mag_db / 20.0) * np.exp(1j * np.radians(ph2))
+    pm2, _f2, _g2, _fg2 = loop_margins(f, h2)
+    assert 100.0 < pm2 < 110.0               # mid-band crossing value
+
+
+def test_loop_margins_take_the_worst_crossing():
+    """A dip-peak-rolloff magnitude crosses unity three times: the
+    first crossing carried 125 deg while the last had 28 -- robustness
+    is the closest approach to the critical point, so PM reports the
+    minimum over every crossing (fc field case: the net13-net3 Miller
+    row wore PM 125 while grazing instability past the doublet)."""
+    import numpy as np
+
+    from circuitinsight.analysis.sensitivity import loop_margins
+
+    f = np.geomspace(1e5, 1e9, 800)
+    x = np.linspace(0.0, 1.0, f.size)
+    # magnitude: falls through 0 dB, resonant bump back above, falls
+    mag_db = 40.0 - 90.0 * x + 18.0 * np.exp(-((x - 0.62) / 0.05) ** 2)
+    # phase: high early, cliff under the bump's far side
+    ph = 130.0 - 20.0 * x - 100.0 / (1.0 + np.exp(-(x - 0.60) / 0.02))
+    h = 10.0 ** (mag_db / 20.0) * np.exp(1j * np.radians(ph))
+    m = mag_db
+    crossings = np.where(np.diff(np.sign(m)))[0]
+    assert len(crossings) == 3               # the scenario is real
+    pm, fpm, _gm, _fgm = loop_margins(f, h)
+    # the first crossing carries ~110 deg; the WORST (last) ~10-30
+    first_ph = ph[crossings[0]]
+    last_ph = ph[crossings[-1] + 1]
+    assert first_ph > 100.0 and last_ph < 40.0
+    assert pm < 40.0                          # worst, not first
+    assert fpm > float(f[crossings[1]])      # at the late crossing

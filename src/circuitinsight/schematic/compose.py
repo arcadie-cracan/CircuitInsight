@@ -23,8 +23,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .hints import ORIENTS, FlatHints
-from .symmap import (CELL_SYMBOLS, SymbolSpec, anchor_for, resolve,
-                     resolve_cell)
+from .symmap import (CELL_SYMBOLS, UNLABELLED_CELLS, SymbolSpec, anchor_for,
+                     resolve, resolve_cell)
 
 CELL_GLYPHS = frozenset(CELL_SYMBOLS)
 
@@ -491,7 +491,8 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
             overlay: bool = False, block_symbols: dict | None = None,
             styles: dict | None = None, net_styles: dict | None = None,
             proposed_cells=frozenset(), tints: dict | None = None,
-            tex_labels: bool = False, aliases: dict | None = None) -> str:
+            tex_labels: bool = False, aliases: dict | None = None,
+            proposed=()) -> str:
     """SVG document string for one page (a definition, or the flat
     view).
 
@@ -1003,6 +1004,8 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
             continue
         if inst.cell in block_symbols:
             continue
+        if inst.cell in UNLABELLED_CELLS:
+            continue                   # rails/no-connects: anonymous
         cx_, cy_, pts_ = anchor_world[inst.name]
         r = _symbol_rect(cx_, cy_, sym, inst.m)
         if inst.cell in PORT_CELLS:
@@ -1166,6 +1169,8 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
             if inst.name in port_label_pos:
                 px, py, an, bl, txt = port_label_pos[inst.name]
                 parts.append(label(px, py, txt, PORT_FONT_MM, an, bl))
+        elif inst.cell in UNLABELLED_CELLS:
+            pass                       # rails/no-connects: anonymous
         elif inst.cell in block_symbols:
             # under the body, centered: the sides carry the bridges
             ext = max(sym.w, sym.h) / 2.0
@@ -1219,9 +1224,264 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
     if overlay:
         parts.append(_overlay_svg(flat, blocks, placed, raw_wires, mm_raw))
 
+    # ---- proposed compensation branches: the selected suggestion
+    # drawn ONTO the page it would change, in the Bode preview's
+    # accent, so a table row has a physical place, not just a curve
+    compose.last_proposed_drawn = 0
+    if proposed:
+        svg_p, n_drawn = _proposed_svg(proposed, net_wires, lib,
+                                       sym_rects + label_boxes)
+        if n_drawn:
+            parts.append(svg_p)
+        compose.last_proposed_drawn = n_drawn
+
     parts[plate_slot:plate_slot] = plates
     parts.append("</svg>")
     return "\n".join(parts)
+
+
+#: the Bode preview's accent (Okabe-Ito vermilion): the proposed branch
+#: on the schematic and the preview curve on the plot are ONE object
+PROPOSED_COLOR = "#D55E00"
+
+
+def _proposed_body(sym, a1, a2, p1, theta) -> str:
+    """The library symbol's own artwork as the proposed-branch body:
+    anchor `a1` lands on world point p1 with the a1->a2 axis rotated
+    onto `theta`, natural size, recolored to the accent (black is the
+    installed circuit's color; the proposal must not wear it)."""
+    la1 = sym.local(a1)
+    la2 = sym.local(a2) if a2 is not None else (la1[0], la1[1] + 1.0)
+    phi = math.degrees(math.atan2(la2[1] - la1[1], la2[0] - la1[0]))
+    delta = math.degrees(theta) - phi
+    vb = [float(v) for v in sym.viewbox.split()]
+    sx = sym.w / (vb[2] or 1.0)
+    sy = sym.h / (vb[3] or 1.0)
+    inner = sym.inner.replace("#000000", PROPOSED_COLOR).replace(
+        "#000", PROPOSED_COLOR)
+    return (f'<g transform="translate({p1[0]:.3f}, {p1[1]:.3f}) '
+            f'rotate({delta:.2f}) '
+            f'translate({-la1[0]:.3f}, {-la1[1]:.3f}) '
+            f'scale({sx:.6f}, {sy:.6f}) '
+            f'translate({-vb[0]:.3f}, {-vb[1]:.3f})">{inner}</g>')
+
+
+def _seg_block(p, q, rects) -> float:
+    """Length of the axis-aligned segment p-q lying INSIDE any of the
+    rectangles -- the routing score's currency (diagonals score 0;
+    the fallback diagonal is already the last resort)."""
+    total = 0.0
+    if abs(p[1] - q[1]) < 1e-6:                   # horizontal
+        y, x0, x1 = p[1], min(p[0], q[0]), max(p[0], q[0])
+        for rx0, ry0, rx1, ry1 in rects:
+            if ry0 <= y <= ry1:
+                total += max(0.0, min(x1, rx1) - max(x0, rx0))
+    elif abs(p[0] - q[0]) < 1e-6:                 # vertical
+        x, y0, y1 = p[0], min(p[1], q[1]), max(p[1], q[1])
+        for rx0, ry0, rx1, ry1 in rects:
+            if rx0 <= x <= rx1:
+                total += max(0.0, min(y1, ry1) - max(y0, ry0))
+    return total
+
+
+def _proposed_svg(branches, net_wires, lib, rects=()) -> tuple[str, int]:
+    """Proposed compensation branches drawn between their nets'
+    existing wires: dashed accent leads joining the LIBRARY's own
+    capacitor / resistor / ground artwork (recolored to the accent),
+    the sized value as a label. `branches`: (net_a, net_b_or_None,
+    label, with_r) with PAGE-LOCAL net names; entries whose nets have
+    no wires on this page are skipped (the count of DRAWN branches is
+    returned beside the markup)."""
+    C = PROPOSED_COLOR
+    try:
+        cap = lib.load("cap.svg")
+        res = lib.load("res.svg") if any(b[3] for b in branches) else None
+        gnd = (lib.load("gnd.svg")
+               if any(b[1] is None for b in branches) else None)
+    except Exception:                             # noqa: BLE001
+        return "", 0
+
+    def points_of(net):
+        """Candidate tap points with their segment's unit direction."""
+        pts = []
+        for poly in net_wires.get(net, []):
+            for i in range(len(poly) - 1):
+                (x1, y1), (x2, y2) = poly[i], poly[i + 1]
+                ln = math.hypot(x2 - x1, y2 - y1)
+                dr = ((x2 - x1) / ln, (y2 - y1) / ln) if ln else (1.0, 0.0)
+                pts.append((((x1 + x2) / 2.0, (y1 + y2) / 2.0), dr))
+                pts.append(((x1, y1), dr))
+                pts.append(((x2, y2), dr))
+        return pts
+
+    def longest_mid(net):
+        """(midpoint, unit direction) of the net's longest segment."""
+        best, bdir, blen = None, (1.0, 0.0), -1.0
+        for poly in net_wires.get(net, []):
+            for i in range(len(poly) - 1):
+                (x1, y1), (x2, y2) = poly[i], poly[i + 1]
+                ln = math.hypot(x2 - x1, y2 - y1)
+                if ln > blen:
+                    blen = ln
+                    best = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+                    bdir = ((x2 - x1) / ln, (y2 - y1) / ln) if ln else bdir
+        return best, bdir
+
+    out = [f'<g id="proposed-branches" fill="none" stroke="{C}" '
+           f'stroke-width="0.22" stroke-linecap="round">']
+    n_drawn = 0
+    cap_pitch = math.dist(cap.local("1"), cap.local("2"))
+    res_pitch = math.dist(res.local("1"), res.local("2")) if res else 0.0
+    def dash(p, q):
+        out.append(f'<path d="M {p[0]:.2f} {p[1]:.2f} '
+                   f'L {q[0]:.2f} {q[1]:.2f}" '
+                   f'stroke-dasharray="1.1,0.7"/>')
+
+    def dot(p):
+        out.append(f'<circle cx="{p[0]:.2f}" cy="{p[1]:.2f}" r="0.55" '
+                   f'fill="{C}" stroke="none"/>')
+
+    for net_a, net_b, text, with_r in branches:
+        body = cap_pitch + (res_pitch if with_r else 0.0)
+        if net_b is None:
+            pa, sdir = longest_mid(net_a)
+            if pa is None:
+                continue
+            # a branch to ground JOGS off the tapped wire first -- one
+            # dropped straight down a vertical wire drew ON it -- then
+            # the body runs down in clear space, on the side where the
+            # column stays OUT of the symbols, label on the free side
+            if abs(sdir[1]) > abs(sdir[0]):        # vertical wire
+                options = [(pa[0] + 6.0, pa[1]), (pa[0] - 6.0, pa[1])]
+            else:                                   # horizontal: below
+                options = [(pa[0], pa[1] + 3.0)]
+
+            def col_score(pc):
+                bot = (pc[0], pc[1] + body + 5.0)
+                return (_seg_block(pa, pc, rects)
+                        + 2.0 * _seg_block(pc, bot, rects))
+
+            pc = min(options, key=col_score)
+            dash(pa, pc)
+            dot(pa)
+            t = pc
+            if with_r:
+                out.append(_proposed_body(res, "1", "2", t, math.pi / 2))
+                t = (t[0], t[1] + res_pitch)
+            out.append(_proposed_body(cap, "1", "2", t, math.pi / 2))
+            t = (t[0], t[1] + cap_pitch)
+            out.append(_proposed_body(gnd, "1", None, t, math.pi / 2))
+            side = -1.0 if pc[0] < pa[0] else 1.0
+            out.append(f'<text x="{pc[0] + side * 3.0:.2f}" '
+                       f'y="{pc[1] + body / 2.0:.2f}" font-size="2.4" '
+                       f'fill="{C}" stroke="none" text-anchor='
+                       f'"{"start" if side > 0 else "end"}" '
+                       f'dominant-baseline="middle">{text}</text>')
+            n_drawn += 1
+            continue
+        ca, cb = points_of(net_a), points_of(net_b)
+        if not ca or not cb:
+            continue
+        (pa, da), (pb, db) = min(
+            ((a, b) for a in ca for b in cb),
+            key=lambda q: math.hypot(q[0][0][0] - q[1][0][0],
+                                     q[0][0][1] - q[1][0][1]))
+
+        def jog(p, sd, sign):
+            # perpendicular off the tapped segment
+            return (p[0] - 6.0 * sd[1] * sign, p[1] + 6.0 * sd[0] * sign)
+
+        # Manhattan routes between the jogs (both sides of each wire,
+        # both L corners; nearly-collinear jogs take the straight
+        # run), each carrying the body on its LONGEST leg. Scored by
+        # how much of the route -- the body leg doubly -- lies inside
+        # symbol rectangles: the first cut ran the branch straight
+        # through the OTA block. Ties break on total length. The
+        # direct diagonal is the last resort of a cramped page.
+        cands = []
+        for sa in (1.0, -1.0):
+            ja = jog(pa, da, sa)
+            for sb in (1.0, -1.0):
+                jb = jog(pb, db, sb)
+                if abs(ja[0] - jb[0]) < 1.0 or abs(ja[1] - jb[1]) < 1.0:
+                    routes = [([pa, ja, jb, pb], (ja, jb))]
+                else:
+                    routes = []
+                    for m in ((jb[0], ja[1]), (ja[0], jb[1])):
+                        legs = ((ja, m), (m, jb))
+                        routes.append(
+                            ([pa, ja, m, jb, pb],
+                             max(legs,
+                                 key=lambda s: math.dist(s[0], s[1]))))
+                if rects and abs(ja[0] - jb[0]) >= body + 1.0:
+                    # Z detours over/under every symbol: when the L
+                    # corners are walled in, going around beats going
+                    # through -- the length term keeps them honest
+                    for Y in (min(r[1] for r in rects) - 4.0,
+                              max(r[3] for r in rects) + 4.0):
+                        routes.append(
+                            ([pa, ja, (ja[0], Y), (jb[0], Y), jb, pb],
+                             ((ja[0], Y), (jb[0], Y))))
+                if rects and abs(ja[1] - jb[1]) >= body + 1.0:
+                    for X in (min(r[0] for r in rects) - 4.0,
+                              max(r[2] for r in rects) + 4.0):
+                        routes.append(
+                            ([pa, ja, (X, ja[1]), (X, jb[1]), jb, pb],
+                             ((X, ja[1]), (X, jb[1]))))
+                for path, leg in routes:
+                    if math.dist(leg[0], leg[1]) < body + 1.0:
+                        continue
+                    score = sum(_seg_block(p, q, rects)
+                                for p, q in zip(path, path[1:]))
+                    score += 2.0 * _seg_block(leg[0], leg[1], rects)
+                    length = sum(math.dist(p, q)
+                                 for p, q in zip(path, path[1:]))
+                    cands.append((round(score, 1), length, path, leg))
+        if cands:
+            _s, _l, path, (s0, s1) = min(cands,
+                                         key=lambda c: (c[0], c[1]))
+        else:
+            path, (s0, s1) = [pa, pb], (pa, pb)   # the direct diagonal
+        dx, dy = s1[0] - s0[0], s1[1] - s0[1]
+        d = math.hypot(dx, dy) or 1.0
+        ux, uy = dx / d, dy / d              # along the body's run
+        vx, vy = -uy, ux                     # across it
+        theta = math.atan2(uy, ux)
+        cx_, cy_ = (s0[0] + s1[0]) / 2.0, (s0[1] + s1[1]) / 2.0
+
+        def at(t, w=0.0):
+            return (cx_ + t * ux + w * vx, cy_ + t * uy + w * vy)
+
+        # the LIBRARY's own artwork, centered on the body's run: R
+        # then C for a series-RC, value pitch straight from the anchors
+        t0 = -body / 2.0
+        if with_r:
+            out.append(_proposed_body(res, "1", "2", at(t0), theta))
+            t0 += res_pitch
+        out.append(_proposed_body(cap, "1", "2", at(t0), theta))
+        # dashed leads: the route with the body's span cut out of its run
+        b0, b1 = at(-body / 2.0), at(body / 2.0)
+        pts = list(path)
+        i0 = pts.index(s0)
+        pts[i0 + 1:i0 + 1] = [b0, b1]
+        for p, q in zip(pts, pts[1:]):
+            if (p, q) == (b0, b1):
+                continue                     # the body sits here
+            if math.dist(p, q) > 0.05:
+                dash(p, q)
+        dot(pa)
+        dot(pb)
+        lx, ly = at(0.0, 3.0)
+        # grow the text AWAY from the body: sideways-displaced labels
+        # anchor at their near edge
+        anchor = ("middle" if abs(vx) <= abs(vy)
+                  else "start" if vx > 0 else "end")
+        out.append(f'<text x="{lx:.2f}" y="{ly:.2f}" font-size="2.4" '
+                   f'fill="{C}" stroke="none" text-anchor="{anchor}" '
+                   f'dominant-baseline="middle">{text}</text>')
+        n_drawn += 1
+    out.append("</g>")
+    return "\n".join(out), n_drawn
 
 
 def _overlay_svg(flat, blocks, placed, raw_wires, mm) -> str:
