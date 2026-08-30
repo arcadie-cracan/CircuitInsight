@@ -2,7 +2,6 @@
 No Qt imports, ever."""
 from __future__ import annotations
 import warnings
-from ...keep import is_all
 import numpy as np
 from ...units import eng  # noqa: E402,F401  (re-exported: view.eng)
 from .simplify import _expr_lines
@@ -11,26 +10,57 @@ from .simplify import _expr_lines
 #: overlay palette after the primary blue (Okabe-Ito, colorblind-safe)
 _OVERLAY_COLORS = ("#D55E00", "#009E73", "#CC79A7", "#E69F00")
 
+#: theme-dependent DATA colors, plain strings so this module stays
+#: Qt-free: the reference trace and zero lines were literal black, and
+#: the pole/zero ticks a dark grey -- invisible on a dark ground. The
+#: app switches these with the chrome theme (set_fig_theme); the
+#: Okabe-Ito cycle and the primary blue read on both grounds and stay.
+_FIGPALS = {
+    "light": {"reference": "k", "muted": "#666666", "rhp": "#D00000"},
+    "dark": {"reference": "#d0d0d0", "muted": "#9aa0a6", "rhp": "#ff6e5e"},
+}
+FIGPAL = dict(_FIGPALS["light"])
+
+
+def set_fig_theme(name: str) -> None:
+    """Point the data colors at the named theme ('light' | 'dark')."""
+    FIGPAL.update(_FIGPALS[name])
+
 def _annotate_margins(ax1, ax2, result):
     """PM/GM markers for a loop-gain Result (pm_deg set by
     session.loop_gain); silently nothing for ordinary transfers."""
     pm = getattr(result, "pm_deg", None)
     if pm is None:
         return
-    ax1.axhline(0.0, color="k", lw=0.5, ls=":", alpha=0.6)
+    ax1.axhline(0.0, color=FIGPAL["reference"], lw=0.5, ls=":",
+                alpha=0.6)
     if result.pm_freq_hz:
         for ax in (ax1, ax2):
             ax.axvline(result.pm_freq_hz, color="#009E73", lw=0.7, ls="--",
                        alpha=0.8)
+        # the crossing's phase depends on the plotted convention: the
+        # stb trace sits at the folded PM itself (a 180-anchored
+        # loop), a rising-from-zero loop at pm - 360; the old fixed
+        # pm - 180 spot fell OUTSIDE the axis on stb plots and the
+        # label was silently clipped. Pick whichever candidate the
+        # axis holds, else pin near the top edge.
+        y0, y1 = ax2.get_ylim()
+        for y in (pm, pm - 360.0, pm - 180.0):
+            if y0 < y < y1:
+                break
+        else:
+            y = y1 - 0.1 * (y1 - y0)
         ax2.annotate(f"PM {pm:.1f}° @ {eng(result.pm_freq_hz, 'Hz')}",
-                     xy=(result.pm_freq_hz, pm - 180.0),
+                     xy=(result.pm_freq_hz, y),
                      xytext=(4, 4), textcoords="offset points",
                      fontsize=7, color="#009E73")
     gm = getattr(result, "gm_db", None)
     if gm is not None and result.gm_freq_hz:
         ax1.axvline(result.gm_freq_hz, color="#CC79A7", lw=0.7, ls=":",
                     alpha=0.8)
-        ax1.annotate(f"GM {gm:.1f} dB", xy=(result.gm_freq_hz, -gm),
+        y0, y1 = ax1.get_ylim()
+        ygm = -gm if y0 < -gm < y1 else y0 + 0.1 * (y1 - y0)
+        ax1.annotate(f"GM {gm:.1f} dB", xy=(result.gm_freq_hz, ygm),
                      xytext=(4, 4), textcoords="offset points",
                      fontsize=7, color="#CC79A7")
 
@@ -47,7 +77,7 @@ def _pole_zero_ticks(ax1, result, f):
                 continue
             rhp = complex(r).real > 0
             ax1.plot([fr], [y], marker=marker, ms=4,
-                     color=("#D00000" if rhp else "#666666"),
+                     color=(FIGPAL["rhp"] if rhp else FIGPAL["muted"]),
                      mew=1.0, ls="none", clip_on=False)
 
 def bode_figure(result, fig=None, overlays=(), labels=None):
@@ -89,9 +119,11 @@ def bode_figure(result, fig=None, overlays=(), labels=None):
     ax2.semilogx(f, np.degrees(np.unwrap(np.angle(h))), color="#0072B2", lw=1.4)
     if result.h_ref is not None:
         hr = np.asarray(result.h_ref)
-        ax1.semilogx(f, 20 * np.log10(np.abs(hr)), color="k", ls="--", lw=1.0,
+        ax1.semilogx(f, 20 * np.log10(np.abs(hr)),
+                 color=FIGPAL["reference"], ls="--", lw=1.0,
                      label=result.ref_label or "sim")
-        ax2.semilogx(f, np.degrees(np.unwrap(np.angle(hr))), color="k",
+        ax2.semilogx(f, np.degrees(np.unwrap(np.angle(hr))),
+                 color=FIGPAL["reference"],
                      ls="--", lw=1.0)
     for i, other in enumerate(overlays):
         fo = np.asarray(other.freqs, dtype=float)
@@ -154,9 +186,11 @@ def reference_figure(freqs, h, label, margins=None, fig=None):
     ax2 = fig.add_subplot(2, 1, 2, sharex=ax1)
     f = np.asarray(freqs, dtype=float)
     hr = np.asarray(h)
-    ax1.semilogx(f, 20 * np.log10(np.abs(hr)), color="k", ls="--", lw=1.0,
+    ax1.semilogx(f, 20 * np.log10(np.abs(hr)),
+                 color=FIGPAL["reference"], ls="--", lw=1.0,
                  label=label)
-    ax2.semilogx(f, np.degrees(np.unwrap(np.angle(hr))), color="k",
+    ax2.semilogx(f, np.degrees(np.unwrap(np.angle(hr))),
+                 color=FIGPAL["reference"],
                  ls="--", lw=1.0)
     ax1.set_ylabel("|H| (dB)")
     ax2.set_ylabel("phase (deg)")
@@ -190,28 +224,34 @@ def figure_legend(fig, ax1):
     for lg in list(fig.legends):
         lg.remove()
     axb = fig.axes[1] if len(fig.axes) > 1 else ax1
-    pos = axb.get_position()
-    y = _legend_anchor_y(fig, axb)
-    # the box hangs DOWNWARD from the anchor; clamp it inside the figure
-    # or a canvas that shrank (certificate hint appearing, short panel)
-    # pushes it below the edge — clipped is indistinguishable from gone
     h_px = fig.get_size_inches()[1] * fig.dpi
+    need = 26.0 / max(h_px, 1.0)                 # one legend row + gap
+    y = _legend_anchor_y(fig, axb)
+    if y < need:
+        # no room under the frequency label (a short canvas): LIFT the
+        # axes grid to make some. The old fallback moved the legend
+        # into the axes' top-right corner instead -- two homes, and
+        # the corner one wandered and read badly (field audit: one
+        # home, always below the axis).
+        try:
+            lift = min(0.35, need - y + 2.0 / max(h_px, 1.0))
+            fig.subplots_adjust(bottom=fig.subplotpars.bottom + lift)
+            y = _legend_anchor_y(fig, axb)
+        except Exception:
+            pass
+        y = max(y, need)
+    pos = axb.get_position()
     fig._ci_legend_y = y                         # refresh_legend compares
-    if y < 24.0 / max(h_px, 1.0):
-        # no room under the frequency label (a short canvas): clamping
-        # the anchor up put the legend ON the label. Inside the
-        # magnitude axes' top-right corner instead, where the flat
-        # low-frequency gain leaves the space empty.
-        fig.legend(handles, labels, loc="upper right",
-                   bbox_to_anchor=(ax1.get_position().x1 - 0.004,
-                                   ax1.get_position().y1 - 0.01),
-                   ncol=max(1, len(labels)), frameon=False, fontsize=8,
-                   borderaxespad=0.0, columnspacing=1.4, handlelength=1.6)
-        return
-    fig.legend(handles, labels, loc="upper center",
-               bbox_to_anchor=((pos.x0 + pos.x1) / 2, y),
-               ncol=max(1, len(labels)), frameon=False, fontsize=8,
-               borderaxespad=0.0, columnspacing=1.4, handlelength=1.6)
+    leg = fig.legend(handles, labels, loc="upper center",
+                     bbox_to_anchor=((pos.x0 + pos.x1) / 2, y),
+                     ncol=max(1, len(labels)), frameon=False, fontsize=8,
+                     borderaxespad=0.0, columnspacing=1.4,
+                     handlelength=1.6)
+    # self-inked from the figure palette: the legend is REBUILT on
+    # every resize, long after theme.style_figure swept the figure --
+    # sweep-only inking left it black-on-dark (field report)
+    for t in leg.get_texts():
+        t.set_color(FIGPAL["reference"])
 
 def _legend_anchor_y(fig, axb) -> float:
     h_px = fig.get_size_inches()[1] * fig.dpi
@@ -223,6 +263,23 @@ def _legend_anchor_y(fig, axb) -> float:
     except Exception:
         pass
     return y
+
+def relayout(fig) -> None:
+    """Re-run the layout at the CURRENT canvas size. tight_layout
+    stores FRACTIONS, computed for whatever width the canvas had at
+    render time -- first light renders before the pane is laid out,
+    so a margin sized for a narrow moment survived as a dead strip
+    at full width (field report). Called from the canvases' resize
+    hook; the draw hooks re-anchor the legend and the Error
+    alignment afterwards."""
+    if not fig.axes:
+        return
+    try:
+        fig.tight_layout(rect=(0, 0.06, 1, 1), pad=0.35)
+        fig.subplots_adjust(right=0.985)
+    except Exception:                             # noqa: BLE001
+        pass          # a degenerate size mid-construction: next resize
+
 
 def refresh_legend(fig) -> None:
     """Re-anchor the bottom legend after a canvas resize: the xlabel's
@@ -344,7 +401,7 @@ def error_figure(result, fig=None):
     ax1.semilogx(f, dmag, color="#D55E00", lw=1.2)
     ax2.semilogx(f, dph, color="#D55E00", lw=1.2)
     for ax, budget in ((ax1, result.mag_err_db), (ax2, result.phase_err_deg)):
-        ax.axhline(0.0, color="k", lw=0.6, ls=":")
+        ax.axhline(0.0, color=FIGPAL["reference"], lw=0.6, ls=":")
         if result.simplified and budget is not None:
             for sign in (+1, -1):
                 ax.axhline(sign * budget, color="#0072B2", lw=0.8, ls="--")

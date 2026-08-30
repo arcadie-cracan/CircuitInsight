@@ -29,6 +29,10 @@ jobs:
         # If PySide6 still cannot load, its importorskip guard skips those tests
         # rather than failing the job.
         run: python -m pip install -e .[dev,gui]
+      - name: Lint (real errors only: undefined names, unused imports)
+        run: |
+          python -m pip install ruff
+          python -m ruff check .
       - name: Run test suite (no EDA licenses needed — checked-in fixtures)
         env:
           QT_QPA_PLATFORM: offscreen

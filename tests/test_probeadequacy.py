@@ -10,7 +10,6 @@ EXACTLY invisible to the DM probe.
 import warnings
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from circuitinsight.adapters.spectre import SpectreRun

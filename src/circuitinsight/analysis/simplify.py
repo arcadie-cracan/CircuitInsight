@@ -85,9 +85,13 @@ class SimplifiedTF(TransferFunction):
                 vals[n] = vals[n] * sgn
                 hs = SimplifiedTF(expr=self.expr, values=vals,
                                   symbols=dict(self.symbols)).numeric(freq)
+                # the full-original leg reads through the exact Horner:
+                # float64 on the big assembled expression cancels where
+                # |H| is small in-band (fc field case); the simplified
+                # legs are small forms and stay on float64
                 hf = TransferFunction(
                     expr=self.original.expr, values=vals,
-                    symbols=dict(self.original.symbols)).numeric(freq)
+                    symbols=dict(self.original.symbols)).numeric_hp(freq)
                 with np.errstate(divide="ignore", invalid="ignore"):
                     db = np.abs(20 * np.log10(np.abs(hs / hf)))
                 db = db[np.isfinite(db)]
@@ -326,7 +330,13 @@ def simplify_tf(
 
     freq = np.logspace(np.log10(fmin), np.log10(fmax), npoints)
     w = 2j * np.pi * freq
-    h0 = tf.numeric(freq)
+    # the base leg is the FULL assembled expression, where float64
+    # cancels catastrophically once |H| is small against its own terms
+    # (fc field case) -- a garbage reference mis-prices every candidate.
+    # The exact-coefficient Horner is ~ms at npoints; candidates stay on
+    # the float64 subset-sum path (small forms, evaluated thousands of
+    # times in the eps search).
+    h0 = tf.numeric_hp(freq)
     mask = np.abs(h0) > np.max(np.abs(h0)) * 1e-9
 
     num, den = tf.num_den

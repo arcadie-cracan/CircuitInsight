@@ -175,7 +175,9 @@ def flatten(h: Hints, descend=None) -> FlatHints:
                 net=w.net, points=[t.apply(*p) for p in w.points]))
         for lab in dd.labels:
             out.labels.append({"text": lab.get("text", ""),
-                               "xy": t.apply(*lab["xy"])})
+                               "xy": t.apply(*lab["xy"]),
+                               "just": lab.get("just", ""),
+                               "orient": lab.get("orient", "R0")})
         for inst in dd.instances:
             name = prefix + inst.name
             if inst.cell in h.definitions and (

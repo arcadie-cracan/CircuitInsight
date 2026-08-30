@@ -524,7 +524,6 @@ def _solve_numeric_s(tasks, cols, A, progress=None) -> list:
     known size, so a caller sees real progress and can cancel between
     determinants, neither of which is possible inside sympy's det()."""
     t0 = time.perf_counter()
-    sys0 = tasks[0][0]
     Aks = []
     for (system, _), col in zip(tasks, cols):
         Ak = A.copy()

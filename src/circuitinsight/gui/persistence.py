@@ -49,6 +49,13 @@ class PersistenceMixin:
         mode = s.value("ui/mode")
         if mode and self.mode_combo.findText(str(mode)) >= 0:
             self.mode_combo.setCurrentText(str(mode))
+        # the schematic overlay toggles are viewing preferences like
+        # the theme -- they come back the way they were left
+        for key, btn in (("sch/state", self._sch_state_chk),
+                         ("sch/matches", self._sch_match_chk)):
+            v = s.value(key)
+            if v is not None:
+                btn.setChecked(str(v).lower() in ("true", "1"))
         # the newer toolbar controls were NOT persisted while the older
         # mag/phase pair was -- the two persistence layers had drifted
         for key, combo in (("ui/form", self.form_combo),
@@ -56,11 +63,6 @@ class PersistenceMixin:
             v = s.value(key)
             if v and combo.findText(str(v)) >= 0:
                 combo.setCurrentText(str(v))
-        # cross-probe: restoring "on" re-attempts the connection, and the
-        # toggle handler already un-checks itself with a reason when Virtuoso
-        # is not there -- so a remembered "on" is safe with no session running
-        if str(s.value("ui/xprobe", "false")).lower() in ("true", "1"):
-            self.a_xprobe.setChecked(True)
         self._rebuild_recents()
 
     def closeEvent(self, event):
@@ -83,8 +85,17 @@ class PersistenceMixin:
         s.setValue("budget/band_lo", self.band_slider.values()[0])
         s.setValue("budget/band_hi", self.band_slider.values()[1])
         s.setValue("ui/mode", self.mode_combo.currentText())
-        s.setValue("ui/xprobe", self.a_xprobe.isChecked())
+        s.setValue("sch/state", self._sch_state_chk.isChecked())
+        s.setValue("sch/matches", self._sch_match_chk.isChecked())
         s.sync()
+        if hasattr(self.controller, "close_engine"):
+            # a DELIBERATE shutdown: disarm the idle watchdog first or
+            # its next tick sees a dead engine and raises the restart
+            # dialog into a closing window (hung the offscreen suite)
+            self._engine_down_handled = True
+            if hasattr(self, "_engine_log_timer"):
+                self._engine_log_timer.stop()
+            self.controller.close_engine()        # no orphan child
         super().closeEvent(event)
 
     # --------------------------------------------------------- recents
@@ -124,7 +135,7 @@ class PersistenceMixin:
             self.open_session(cin, psf)
         except Exception as exc:
             QMessageBox.critical(self, "Open failed",
-                                 f"{type(exc).__name__}: {exc}")
+                                 self._open_error_text(exc))
 
     # ---------------------------------------------------------- states
     def _state_manifest(self) -> dict:
@@ -141,6 +152,7 @@ class PersistenceMixin:
             "out": self.out_combo.currentText(),
             "mode": self.mode_combo.currentText(),
             "probe": self.probe_combo.currentText(),
+            "imp_spec": getattr(self, "_imp_spec", None),
             "form": self.form_combo.currentText(),
             "strategy": self.strategy_combo.currentText(),
             "mag_db": self.mag_spin.value(),
@@ -164,6 +176,13 @@ class PersistenceMixin:
         to a crash or an absent-minded close is the failure this
         prevents. Must never break the session itself."""
         if self.controller is None or not getattr(self, "_cin", None):
+            return
+        # while a session is OPENING, the last-state on disk is the
+        # PREVIOUS session's work -- first light's "shown result"
+        # autosave used to clobber it within seconds of the window
+        # appearing, before either the default tick restore or a
+        # File -> Restore last state could read it
+        if getattr(self, "_opening_guard", False):
             return
         try:
             from . import state as st
@@ -237,8 +256,19 @@ class PersistenceMixin:
             v = manifest.get(key)
             if v:
                 combo.setCurrentText(v)
-        self.mode_combo.setCurrentText(manifest.get("mode", "Transfer"))
+        # the impedance target restores BEFORE the mode switch, so
+        # entering Impedance finds it and the label says it. A legacy
+        # state carries only the old port-dropdown value: a marker
+        # name maps onto a port spec, the retired sentinel drops
+        spec = manifest.get("imp_spec")
         pv = manifest.get("probe")
+        if (spec is None and manifest.get("mode") == "Impedance"
+                and pv and pv != "user selected"
+                and pv in getattr(self.controller, "ports", [])):
+            spec = {"port": pv}
+        if spec is not None:
+            self._imp_spec = spec
+        self.mode_combo.setCurrentText(manifest.get("mode", "Transfer"))
         if pv and self.probe_combo.findText(pv) >= 0:
             self.probe_combo.setCurrentText(pv)
         self.form_combo.setCurrentText(manifest.get("form", "Exact"))
@@ -256,13 +286,15 @@ class PersistenceMixin:
         if band and len(band) == 2:
             self.band_slider.setValues(float(band[0]), float(band[1]))
         aliases = manifest.get("aliases") or {}
-        if aliases and hasattr(self.controller, "sym_aliases"):
-            self.controller.sym_aliases.update(aliases)
+        if aliases and hasattr(self.controller, "set_aliases"):
+            self.controller.set_aliases(aliases, merge=True)
         checked = list(manifest.get("keep", []))
         keep_ok = True
         if checked:
             try:
-                ranking = self.controller.rank_symbols(*self._io())
+                ranking = self.controller.rank_symbols(
+                    *self._io(), fmin=self.band_slider.values()[0],
+                    fmax=self.band_slider.values()[1])
                 self._fill_keep_table(ranking, checked=checked)
             except Exception as exc:
                 keep_ok = False
@@ -311,7 +343,7 @@ class PersistenceMixin:
         raw = self._settings().value(self._alias_key())
         if raw:
             try:
-                self.controller.sym_aliases = dict(json.loads(raw))
+                self.controller.set_aliases(dict(json.loads(raw)))
             except Exception:
                 # a corrupt alias entry silently reverting every LaTeX
                 # override would be invisible -- say so once in the Log

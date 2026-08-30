@@ -29,7 +29,7 @@ import sympy as sp
 from circuitinsight.adapters.spectre import SpectreRun
 from circuitinsight.analysis.compensate import (
     Candidate, LoopGainUpdater, _dominant_pair, _margins_of, _numeric_A,
-    _pair_incidence, _scaled_roots, locus_family, multi_locus,
+    _scaled_roots, locus_family, multi_locus,
     suggest_compensation, suggest_multi_compensation)
 from circuitinsight.engine.mna import S, _det, build_mna
 

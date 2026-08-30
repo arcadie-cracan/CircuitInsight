@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QGroupBox, QHBoxLayout, QLabel, QPushButton,
-    QSizePolicy, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout,
-    QWidget)
+    QAbstractItemView, QComboBox, QGroupBox, QHBoxLayout, QLabel,
+    QPushButton, QTableWidget, QTableWidgetItem, QTextEdit,
+    QVBoxLayout, QWidget)
 from .. import theme
 from .. import view
 
@@ -31,6 +31,23 @@ class ReduceBenchMixin:
         v = QVBoxLayout(col)
         v.setContentsMargins(2, 2, 2, 2)
         v.setSpacing(4)
+
+        # the contract's RESPONSE: an stb bench must preserve the loop
+        # gain, an ac bench its transfer -- the scans, the joint price,
+        # the plot and Apply all follow this choice
+        arow = QHBoxLayout()
+        arow.addWidget(QLabel("price against:"))
+        self.reduce_against = QComboBox()
+        self.reduce_against.addItems(["Transfer (in → out)", "Loop gain"])
+        self.reduce_against.setToolTip(
+            "The response every reduction is priced on.\n"
+            "Transfer: tf(in → out), the ac bench's contract.\n"
+            "Loop gain: the Tian loop gain at the stb probe -- what a\n"
+            "reduction must preserve on a stability bench.")
+        self.reduce_against.currentIndexChanged.connect(
+            self._on_reduce_against)
+        arow.addWidget(self.reduce_against, 1)
+        v.addLayout(arow)
 
         tabs = QTabWidget()
         tabs.setObjectName("reduce_cands")
@@ -225,9 +242,11 @@ class ReduceBenchMixin:
             return
         inp, out = self._io()
         kw = self._contract_kw()
+        target = (f"the loop gain at {kw['loop_probe']}"
+                  if "loop_probe" in kw else f"{inp} → {out}")
         self._launch(
             lambda cb: self.controller.scan_removals(inp, out, **kw),
-            f"pricing element removals for {inp} → {out} …",
+            f"pricing element removals against {target} …",
             on_done=self._on_removal_scan_done, est_s=None)
 
     def _on_removal_scan_done(self, rep):
@@ -248,7 +267,7 @@ class ReduceBenchMixin:
                 el_it.setCheckState(Qt.Checked if c.inst in recommended
                                     else Qt.Unchecked)
                 val_it = QTableWidgetItem(
-                    f"{c.value:.4g} {units.get(c.kind, '')}"
+                    view.eng(c.value, units.get(c.kind, ""), sig=4)
                     if c.value is not None else "—")
                 cost_it = QTableWidgetItem(
                     f"{c.score:.2f}×" if c.score is not None
@@ -342,8 +361,28 @@ class ReduceBenchMixin:
         if cur is not self.result:
             # the configuration moved since the shown solve (auto
             # matches landing is the common case): show the aligned
-            # result so the numerals ARE the ones the stories explain
+            # result so the numerals ARE the ones the stories explain.
+            # _show composes the summary WITH the (now cached) stories
             self._show(cur, push_history=False)
+        else:
+            # APPEND, never recompose: other advisories (scan, pole
+            # attribution) live in the summary as appended blocks and
+            # a recompose would drop them -- the composer covers the
+            # re-render paths, this covers the in-place one
+            txt = self.summary.toPlainText()
+            if "the numbers, explained" not in txt:
+                self.summary.setPlainText(
+                    txt + "\n\n" + self._stories_text(stories))
+        self.tabs.setCurrentIndex(0)             # Summary
+        self._render_expr()                      # numeral hovers go live
+        self.statusBar().showMessage(
+            f"numbers explained: {len(stories)} coefficients (see Summary "
+            f"— and hover the numerals in the Expression tab)")
+
+    def _stories_text(self, stories) -> str:
+        """The 'numbers, explained' summary block; composed by
+        _summary_with_extras wherever the summary renders, so the
+        stories survive later async re-renders."""
         from ...analysis.explain import ratio_lines
         lines = ["the numbers, explained (kept symbols excluded):",
                  "ratio attribution — what shapes each DISPLAYED numeral "
@@ -354,22 +393,51 @@ class ReduceBenchMixin:
                                         shown=self._shown_numerals())]
         lines += ["per-coefficient shares (the raw material):"]
         lines += ["  " + st.describe() for st in stories]
-        self.summary.setPlainText(self.summary.toPlainText()
-                                  + "\n\n" + "\n".join(lines))
-        self.tabs.setCurrentIndex(0)             # Summary
-        self._render_expr()                      # numeral hovers go live
-        self.statusBar().showMessage(
-            f"numbers explained: {len(stories)} coefficients (see Summary "
-            f"— and hover the numerals in the Expression tab)")
+        return "\n".join(lines)
 
     def _contract_kw(self) -> dict:
         """The toolbar's tolerance contract, as the scans consume it:
-        strategy + budgets + the user's band. THE one approximation
-        criterion for this bench."""
+        strategy + budgets + the user's band, and the contract's
+        RESPONSE (the loop probe when pricing against the loop gain).
+        THE one approximation criterion for this bench."""
         lo, hi = self.band_slider.values()
-        return dict(strategy=self._strategy(),
-                    strategy_opts=self._strategy_opts(),
-                    fmin=float(lo), fmax=float(hi))
+        kw = dict(strategy=self._strategy(),
+                  strategy_opts=self._strategy_opts(),
+                  fmin=float(lo), fmax=float(hi))
+        lp = self._reduce_loop_probe()
+        if lp is not None:
+            kw["loop_probe"] = lp
+        return kw
+
+    def _reduce_loop_probe(self):
+        """The probe of the loop contract, or None in transfer mode."""
+        combo = getattr(self, "reduce_against", None)
+        if combo is None or combo.currentIndex() != 1 \
+                or self.controller is None:
+            return None
+        return (self.controller.stb_probe()
+                or (self.controller.probes[0]
+                    if self.controller.probes else None))
+
+    def _on_reduce_against(self, i: int):
+        """Contract switch: prices in the tables describe the OTHER
+        response now -- clear them; the plot follows the new contract."""
+        if i == 1 and self._reduce_loop_probe() is None:
+            self.statusBar().showMessage(
+                "no loop probe in this run — pricing against the "
+                "transfer")
+            self.reduce_against.setCurrentIndex(0)
+            return
+        self.acg_tbl.setRowCount(0)
+        self.rm_tbl.setRowCount(0)
+        self.acg_joint_lbl.setText("")
+        self.acg_apply.setEnabled(False)
+        lp = self._reduce_loop_probe()
+        if lp is not None:
+            self.statusBar().showMessage(
+                f"reductions priced against the loop gain at {lp}")
+        if self.mode_combo.currentText() == "Reduce circuit":
+            self._plot_reduction([])
 
     @staticmethod
     def _cost_phrase(score, worst_db, worst_deg=None) -> str:
@@ -388,9 +456,11 @@ class ReduceBenchMixin:
         # a Nets-tree wish is ALWAYS priced: include carries it past the
         # structural filter, so the request cannot vanish silently
         kw["include"] = tuple(sorted(self._acg_pending))
+        target = (f"the loop gain at {kw['loop_probe']}"
+                  if "loop_probe" in kw else f"{inp} → {out}")
         self._launch(
             lambda cb: self.controller.scan_ac_grounds(inp, out, **kw),
-            f"scanning AC-ground candidates for {inp} → {out} …",
+            f"scanning AC-ground candidates against {target} …",
             on_done=self._on_acg_scan_done, est_s=None)
 
     def _on_acg_scan_done(self, rep):
@@ -605,13 +675,13 @@ class ReduceBenchMixin:
                 + ("…" if len(dp) > 8 else ""))
             gone = pv.get("devices_silenced") or []
             if gone:
-                lines.append(f"    devices left with nothing live: "
+                lines.append("    devices left with nothing live: "
                              + ", ".join(gone[:8])
                              + ("…" if len(gone) > 8 else ""))
             part = pv.get("devices_passive") or []
             if part:
-                lines.append(f"    devices reduced to loads (gds/caps "
-                             f"stay): " + ", ".join(part[:8])
+                lines.append("    devices reduced to loads (gds/caps "
+                             "stay): " + ", ".join(part[:8])
                              + ("…" if len(part) > 8 else ""))
         for g in pv["lump_groups"]:
             lines.append("  lump (exact): " + g)
@@ -729,7 +799,12 @@ class ReduceBenchMixin:
             self._fill_keep_table(ranking, checked=sorted(keep))
             self._update_estimate()
 
-        self._run_bg(ranker or (lambda: c.rank_symbols(inp, out)), land)
+        # rank over the band the plot shows (see _rerank_for_z: the
+        # feature-spanned default can collapse to a single resonance)
+        lo, hi = self.band_slider.values()
+        self._run_bg(ranker or (lambda: c.rank_symbols(inp, out,
+                                                       fmin=lo, fmax=hi)),
+                     land)
 
     def _plot_reduction(self, nodes, removals=()):
         """The bench's plot: the as-imported response (solid) against
@@ -748,30 +823,57 @@ class ReduceBenchMixin:
         removals = list(removals)
         seq = getattr(self, "_redplot_seq", 0) + 1
         self._redplot_seq = seq
+        lp = self._reduce_loop_probe()
 
         def compute():
+            if lp is not None:
+                import numpy as np
+
+                ref = c.loop_reference()   # the stb truth rides along
+                f = (np.asarray(ref[0], dtype=float) if ref is not None
+                     else np.geomspace(1.0, 1e10, 201))
+                hb, hr = c.reduction_responses(nodes, "", "", f,
+                                               removals=removals,
+                                               loop_probe=lp)
+                return ("loop", f, hb, hr, ref)
             r0 = c.solve(inp, out, [])            # freqs + the sim reference
             hb, hr = c.reduction_responses(nodes, inp, out, r0.freqs,
                                            removals=removals)
-            return r0, hb, hr
+            return ("tf", r0, hb, hr)
 
         def land(res):
             if res is None or seq != self._redplot_seq \
                     or self.controller is not c \
                     or self.mode_combo.currentText() != "Reduce circuit":
                 return
+            import types
             import numpy as np
             from dataclasses import replace
 
-            r0, hb, hr = res
-            base = replace(r0, h=np.asarray(hb), poles_hz=np.array([]),
-                           zeros_hz=np.array([]), simplified=False,
-                           pm_deg=None, gm_db=None, warnings=[])
-            red = replace(base, h=np.asarray(hr), h_ref=None)
+            if res[0] == "loop":
+                _tag, f, hb, hr, ref = res
+                base = types.SimpleNamespace(
+                    inp=lp, out="T", freqs=f, h=np.asarray(hb),
+                    h_ref=(np.asarray(ref[1]) if ref is not None
+                           else None),
+                    ref_label=(ref[2] if ref is not None else None),
+                    poles_hz=np.array([]), zeros_hz=np.array([]),
+                    simplified=False, pm_deg=None, gm_db=None,
+                    band_fmin=None, band_fmax=None, warnings=[])
+                red = types.SimpleNamespace(
+                    **{**base.__dict__, "h": np.asarray(hr),
+                       "h_ref": None})
+            else:
+                _tag, r0, hb, hr = res
+                base = replace(r0, h=np.asarray(hb),
+                               poles_hz=np.array([]),
+                               zeros_hz=np.array([]), simplified=False,
+                               pm_deg=None, gm_db=None, warnings=[])
+                red = replace(base, h=np.asarray(hr), h_ref=None)
             bits = ([f"{len(nodes)} net(s)"] if nodes else []) + \
                 ([f"{len(removals)} removal(s)"] if removals else [])
             any_tick = bool(nodes or removals)
-            labels = ("as imported",
+            labels = ("as imported T" if lp is not None else "as imported",
                       [f"ticked reduction ({', '.join(bits)})"]
                       if any_tick else [])
             self._reduce_plot_base = base

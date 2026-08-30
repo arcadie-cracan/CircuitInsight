@@ -263,3 +263,28 @@ def test_every_path_learns_on_its_own_key(tmp_path):
         assert est.get_calibration().k_parallel < 0.1
     finally:
         est.set_calibration(est._DEFAULT_CAL)
+
+
+def test_flush_calibration_forgets_file_and_process(tmp_path):
+    """The Options verb's primitive: the persistent file goes, the
+    in-process model returns to the built-in default -- ready for a
+    fresh measurement."""
+    from dataclasses import replace as _replace
+
+    from circuitinsight.analysis import estimate as est
+
+    cache = tmp_path / "calibration.json"
+    try:
+        cal = _replace(est._DEFAULT_CAL, platform=est._platform_id(),
+                       k_parallel=7.0, n_obs_parallel=5)
+        est.set_calibration(cal)
+        est.save_calibration(cal, cache)
+        assert cache.exists()
+        est.flush_calibration(cache)
+        assert not cache.exists()
+        fresh = est.get_calibration()
+        assert fresh.platform == "builtin-default"
+        assert fresh.k_parallel == 1.0 and fresh.n_obs_parallel == 0
+        est.flush_calibration(cache)          # idempotent: no file, no raise
+    finally:
+        est.set_calibration(est._DEFAULT_CAL)

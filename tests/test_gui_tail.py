@@ -222,8 +222,10 @@ def test_mode_and_band_shading_persist(qapp, tmp_path):
 
 def test_impedance_bench_with_xf_truth(qapp, tmp_path):
     """The Impedance bench: any isource/vsource is a port candidate
-    (IPORT first); the run's xf result is the overlay truth, and with the
-    GUI's matrix cap model the reconstruction tracks it to ~0.01 dB."""
+    (IPORT first in controller.ports -- the tool itself has no port
+    dropdown, its target is the toolbar sentence); the run's xf result
+    is the overlay truth, and with the GUI's matrix cap model the
+    reconstruction tracks it to ~0.01 dB."""
     import numpy as np
 
     w = _win(tmp_path, FIX / "follower3p" / "tb_follower3p.cin.json",
@@ -231,7 +233,10 @@ def test_impedance_bench_with_xf_truth(qapp, tmp_path):
     try:
         assert "xf" in w.controller.analyses()
         w.mode_combo.setCurrentText("Impedance")
-        assert w.probe_combo.itemText(0) == "IPORT"
+        assert w.controller.ports[0] == "IPORT"
+        # the probe combo is loop-gain vocabulary: hidden here, and
+        # never the impedance target
+        assert not w._probe_act.isVisible()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             r = w.impedance_sync("IPORT")

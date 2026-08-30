@@ -3,7 +3,9 @@ mirror."""
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+    QAbstractItemView, QCheckBox, QComboBox, QLabel, QLineEdit,
+    QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QWidget)
 from .. import theme
 from .. import view
 
@@ -79,6 +81,14 @@ class CompensateBenchMixin:
             "derived from p/n node names; self-symmetric positions such as\n"
             "CMFB or tail stay single-ended.")
         form.addRow("", self.mirror_chk)
+        self.robust_chk = QCheckBox("size at worst corner")
+        self.robust_chk.setToolTip(
+            "Size each branch so the goal holds at EVERY operating point\n"
+            "of the discovered set, not just the bound one -- the least-\n"
+            "area value that survives its worst corner. Shown only when\n"
+            "the run carries a point set; single branches only.")
+        self.robust_chk.setVisible(False)
+        form.addRow("", self.robust_chk)
         self.suggest_btn = QPushButton("Suggest compensation")
         self.suggest_btn.clicked.connect(self.suggest_comp)
         form.addRow(self.suggest_btn)
@@ -108,12 +118,20 @@ class CompensateBenchMixin:
     def _comp_page(self):
         page = QWidget()
         v = QVBoxLayout(page)
-        self.comp_tbl = QTableWidget(0, 8)
+        self.comp_tbl = QTableWidget(0, 10)
         self.comp_tbl.setHorizontalHeaderLabels(
-            ["pair", "network", "C", "R", "area", "ζ", "PM", "peak"])
+            ["pair", "network", "C", "R", "area", "ζ", "PM", "peak",
+             "worst PM", "worst peak"])
         self.comp_tbl.horizontalHeaderItem(7).setToolTip(
             "The measured criterion value: closed-loop peaking (mfm) "
             "or peak sensitivity Ms (spec)")
+        for j in (8, 9):
+            self.comp_tbl.horizontalHeaderItem(j).setToolTip(
+                "The same branch re-measured on EVERY operating point of "
+                "the set (corners, sweep points): the worst case, with "
+                "the point that set it in the cell's tooltip")
+            # shown only when the session has an operating-point set
+            self.comp_tbl.setColumnHidden(j, True)
         self.comp_tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.comp_tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.comp_tbl.itemSelectionChanged.connect(self._on_comp_selected)
@@ -131,6 +149,8 @@ class CompensateBenchMixin:
         self._comp_exclude = ()
         self._comp_probe = None
         self._comp_upd = None
+        self._comp_robust = None
+        self._comp_goal_kw = {}
         self._comp_tab = page
         return page
 
@@ -148,8 +168,8 @@ class CompensateBenchMixin:
         """The p/n mirror map for this design, or None when unchecked."""
         if not self.mirror_chk.isChecked() or self.controller is None:
             return None
-        an = self.controller._analyzer_ready()
-        return view.mirror_map(an.system(self._comp_probe).node_index) or None
+        return view.mirror_map(
+            self.controller.probe_node_index(self._comp_probe)) or None
 
     def _comp_kw(self):
         """Goal-specific keywords, so an unused target never reaches the
@@ -173,6 +193,7 @@ class CompensateBenchMixin:
             return
         self._comp_probe = probe
         kw = self._comp_kw()
+        self._comp_goal_kw = dict(kw)
         exclude = tuple(s.strip() for s in self.exclude_edit.text().split(",")
                         if s.strip())
         self._comp_exclude = exclude
@@ -201,27 +222,48 @@ class CompensateBenchMixin:
             if k_max > 1:
                 res = self.controller.suggest_multi_compensation(
                     probe, k_max=k_max, progress=prog, **kw)
+            elif (self.robust_chk.isChecked()
+                  and self.controller.op_points):
+                res = self.controller.suggest_robust_compensation(
+                    probe, progress=prog, **kw)
             else:
                 res = self.controller.suggest_compensation(
                     probe, progress=prog, **kw)
-            return (baseline, res)
+            robust = None
+            if k_max == 1 and self.controller.op_points and res:
+                n = len(self.controller.op_points)
+                prog(f"re-measuring the suggestions on all {n} "
+                     f"operating points…")
+                robust = self.controller.suggestion_robustness(
+                    probe, res, exclude=exclude, progress=prog)
+            return (baseline, res, robust)
 
         self._launch(fn, f"searching compensation {what} at {probe} "
                          f"({kw['goal']})…", est_s=None,
                      on_done=self._on_comp_done)
 
-    def suggest_sync(self, probe, *, k_max=1, **kw):
+    def suggest_sync(self, probe, *, k_max=1, robust=False, **kw):
         """Blocking search, for tests and scripting. k_max > 1 grows a
-        multi-branch (NMC) network instead of ranking single branches."""
+        multi-branch (NMC) network instead of ranking single branches;
+        robust=True sizes single branches at the worst operating point."""
         self._comp_probe = probe
         self._comp_exclude = tuple(kw.get("exclude", ()))
+        self._comp_goal_kw = {k: v for k, v in kw.items()
+                              if k in ("goal", "flat_tol_db", "pm_target",
+                                       "ms_target")}
         baseline = self.controller.loop_gain(probe)
         if k_max > 1:
             res = self.controller.suggest_multi_compensation(
                 probe, k_max=k_max, **kw)
+        elif robust:
+            res = self.controller.suggest_robust_compensation(probe, **kw)
         else:
             res = self.controller.suggest_compensation(probe, **kw)
-        self._on_comp_done((baseline, res))
+        robust = None
+        if k_max == 1 and self.controller.op_points and res:
+            robust = self.controller.suggestion_robustness(
+                probe, res, exclude=self._comp_exclude)
+        self._on_comp_done((baseline, res, robust))
         return self._comp_multi if k_max > 1 else self._comp_suggestions
 
     def _on_comp_done(self, payload):
@@ -231,7 +273,9 @@ class CompensateBenchMixin:
         self.cancel_btn.hide()
         self._job_finished(self.suggest_btn)
         self._comp_clear_proposed()           # old selection's overlay
-        baseline, res = payload
+        baseline, res, *rest = payload
+        robust = rest[0] if rest else None
+        self._comp_robust = robust
         self._comp_baseline = baseline
         self._comp_upd = None                     # rebuilt lazily on select
         if not self._comp_probe:
@@ -240,6 +284,8 @@ class CompensateBenchMixin:
         tbl = self.comp_tbl
 
         if hasattr(res, "branches"):              # MultiSuggestion (NMC)
+            for j in (8, 9):
+                tbl.setColumnHidden(j, True)
             self._comp_multi = res
             self._comp_suggestions = []
             rows = res.branches
@@ -274,6 +320,8 @@ class CompensateBenchMixin:
         self._comp_multi = None
         self._comp_suggestions = list(res)
         self._comp_steps.setText("")
+        for j in (8, 9):
+            tbl.setColumnHidden(j, robust is None)
         tbl.setRowCount(len(self._comp_suggestions))
         for i, sg in enumerate(self._comp_suggestions):
             pair = f"{sg.candidate.node_a} ↔ "                    f"{sg.candidate.node_b or 'gnd'}"
@@ -286,12 +334,42 @@ class CompensateBenchMixin:
                      f"{sg.pm_deg:.1f}°" if sg.pm_deg else "—", peak)
             for j, text in enumerate(cells):
                 tbl.setItem(i, j, QTableWidgetItem(text))
-            self._comp_tint_row(i, sg.achieved)
+            ok = sg.achieved
+            if robust is not None:
+                rb = robust[i]
+                wpm = rb["worst_pm_deg"]
+                it = QTableWidgetItem(
+                    f"{wpm:.1f}°" if wpm is not None else "no crossing")
+                it.setToolTip(f"at {rb['worst_pm_label']}")
+                tbl.setItem(i, 8, it)
+                if self._comp_goal_kw.get("goal") == "spec":
+                    it = QTableWidgetItem(f"Ms {rb['worst_ms']:.2f}")
+                    it.setToolTip(f"at {rb['worst_ms_label']}")
+                else:
+                    it = QTableWidgetItem(f"{rb['worst_flat_db']:+.1f} dB")
+                    it.setToolTip(f"at {rb['worst_flat_label']}")
+                tbl.setItem(i, 9, it)
+                ok = ok and self._comp_worst_ok(rb)
+            self._comp_tint_row(i, ok)
         self.tabs.setCurrentWidget(self._comp_tab)
         self._update_crumb()          # the Suggest step just completed
+        extra = (f" (worst case over {len(robust[0]['labels'])} operating "
+                 f"points shown)" if robust else "")
         self.statusBar().showMessage(
             f"{len(self._comp_suggestions)} suggestions at "
-            f"{self._comp_probe}; select one to preview")
+            f"{self._comp_probe}; select one to preview{extra}")
+
+    def _comp_worst_ok(self, rb: dict) -> bool:
+        """The launch-time goal, held at the WORST operating point: the
+        verdict tint demands the criterion everywhere, not at nominal."""
+        kw = self._comp_goal_kw
+        goal = kw.get("goal", "mfm")
+        if goal == "pm":
+            wpm = rb["worst_pm_deg"]
+            return wpm is not None and wpm >= kw.get("pm_target", 60.0)
+        if goal == "spec":
+            return rb["worst_ms"] <= kw.get("ms_target", 1.3)
+        return rb["worst_flat_db"] <= kw.get("flat_tol_db", 1.0)
 
     def _comp_tint_row(self, row: int, achieved: bool):
         """The verdict is the row's COLOR, not a column: green tint
@@ -312,20 +390,8 @@ class CompensateBenchMixin:
         too, or it would stack the suggestion on top of the branches the
         search had removed and report a margin nobody designed."""
         if self._comp_upd is None:
-            import numpy as np
-            from ...analysis.compensate import LoopGainUpdater
-            from ...engine.mna import build_mna
-
-            an = self.controller._analyzer_ready()
-            drop = set(self._comp_exclude)
-            if drop:
-                system = build_mna(
-                    [p for p in an.primitives if p.inst not in drop],
-                    an.flat.ground, self._comp_probe, an._alias)
-            else:
-                system = an.system(self._comp_probe)
-            self._comp_upd = LoopGainUpdater(
-                system, self._comp_probe, np.geomspace(1.0, 1e10, 300))
+            self._comp_upd = self.controller.loop_updater(
+                self._comp_probe, exclude=self._comp_exclude)
         return self._comp_upd
 
     @staticmethod
@@ -375,7 +441,7 @@ class CompensateBenchMixin:
                      ls="--", label="preview")
         ax2.semilogx(f, np.degrees(np.unwrap(np.angle(T))), color=theme.ORANGE,
                      lw=1.3, ls="--")
-        ax1.legend(fontsize=8, frameon=False, loc="lower left")
+        view.figure_legend(self.canvas.figure, ax1)
         theme.style_figure(self.canvas.figure)
         self.canvas.draw_idle()
         from ...analysis.sensitivity import loop_margins

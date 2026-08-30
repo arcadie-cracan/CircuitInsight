@@ -74,7 +74,7 @@ def compare_tf(
     f = freq[mask]
     h_sim = h_sim[mask]
 
-    h_model = tf.numeric(f)
+    h_model = getattr(tf, "numeric_min", tf.numeric)(f)
     mag_err = 20 * np.log10(np.abs(h_model)) - 20 * np.log10(np.abs(h_sim))
     phase_err = np.degrees(np.angle(h_model * np.conj(h_sim)))
     return ValidationReport(freq=f, mag_err_db=mag_err, phase_err_deg=phase_err)

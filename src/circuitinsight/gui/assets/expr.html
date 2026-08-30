@@ -14,16 +14,41 @@
 <script src="katex/katex.min.js"></script>
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 <style>
+  /* theme tokens: the light values on :root, the dark block swaps
+     them when Python calls setTheme('dark') (data-theme on <html>) */
+  :root{
+    --bg:#f2f2f2; --ink:#1a1a1a;
+    --hov:#cfe3ff; --pin:#ffe08a; --pin-edge:#d8ae38;
+    --num-hov:#f3e2bd;
+    --sb-track:#e4e4e4; --sb-thumb:#b0b0b0; --sb-thumb-h:#989898;
+  }
+  [data-theme="dark"]{
+    --bg:#26282c; --ink:#e2e2e2;
+    --hov:#2c4a6e; --pin:#6e5a1e; --pin-edge:#a8893a;
+    --num-hov:#4a3f28;
+    --sb-track:#2f3136; --sb-thumb:#55585e; --sb-thumb-h:#6a6d73;
+  }
+  /* the webview's scrollbars wear the app's chrome, not Chromium's */
+  ::-webkit-scrollbar{width:12px;height:12px;background:var(--sb-track)}
+  ::-webkit-scrollbar-thumb{background:var(--sb-thumb);
+    border:2px solid var(--sb-track);border-radius:6px}
+  ::-webkit-scrollbar-thumb:hover{background:var(--sb-thumb-h)}
+  ::-webkit-scrollbar-corner{background:var(--sb-track)}
   body{font-family:system-ui,"Segoe UI",sans-serif;margin:0;
-       background:#f2f2f2;color:#1a1a1a}
+       background:var(--bg);color:var(--ink)}
   #expr{padding:10px 14px}
   .line{padding:6px 2px;font-size:18px;overflow-x:auto}
   .katex{font-size:1.12em}
   [data-sym]{cursor:pointer;border-radius:3px}
-  [data-sym].hov{background:#cfe3ff}
-  [data-sym].pin{background:#ffe08a;outline:1px solid #d8ae38}
+  [data-sym].hov{background:var(--hov)}
+  [data-sym].pin{background:var(--pin);outline:1px solid var(--pin-edge)}
   [data-num]{cursor:help;border-radius:3px}
-  [data-num].hov{background:#f3e2bd}
+  [data-num].hov{background:var(--num-hov)}
+  /* theta terms in the PM sum link to their definition lines; the
+     f_p/f_z symbols light the root on the schematic and the plot */
+  [data-term],[data-froot]{cursor:pointer;border-radius:3px}
+  [data-term].hov,[data-froot].hov{background:var(--hov)}
+  .line.flash{background:var(--hov);transition:background .15s}
   /* KaTeX stacks fraction/script rows with full-width ~3em strut boxes that
      cover the denominator, swallowing hits (only glyph edges responded). Let
      hits pass through the row boxes; their real content stays hittable. */
@@ -50,6 +75,11 @@ if (typeof QWebChannel !== "undefined" && typeof qt !== "undefined"
   new QWebChannel(qt.webChannelTransport,
                   ch => { bridge = ch.objects.bridge || null; });
 }
+
+window.setTheme = function (name) {
+  document.documentElement.setAttribute(
+      "data-theme", name === "dark" ? "dark" : "light");
+};
 
 window.renderExpr = function (payload) {
   VALUES = payload.values || {};
@@ -90,15 +120,36 @@ function numAt(x, y) {
   }
   return null;
 }
+function termAt(x, y) {
+  for (const el of document.elementsFromPoint(x, y)) {
+    const hit = el.closest ? el.closest("[data-term]") : null;
+    if (hit) return hit;
+  }
+  return null;
+}
+function frootAt(x, y) {
+  for (const el of document.elementsFromPoint(x, y)) {
+    const hit = el.closest ? el.closest("[data-froot]") : null;
+    if (hit) return hit;
+  }
+  return null;
+}
 const tip = document.getElementById("tip");
 let hov = null;
 document.addEventListener("mousemove", e => {
-  const el = symAt(e.clientX, e.clientY) || numAt(e.clientX, e.clientY);
+  const el = symAt(e.clientX, e.clientY) || numAt(e.clientX, e.clientY)
+      || termAt(e.clientX, e.clientY) || frootAt(e.clientX, e.clientY);
   if (hov && hov !== el) hov.classList.remove("hov");
   hov = el;
   if (!el) { tip.style.opacity = 0; return; }
   el.classList.add("hov");
-  if (el.dataset.sym !== undefined) {
+  if (el.dataset.term !== undefined) {
+    tip.innerHTML = "<b>" + el.dataset.term
+      + "</b>: go to its expression (and its table row)";
+  } else if (el.dataset.froot !== undefined) {
+    tip.innerHTML = "<b>" + el.dataset.froot
+      + "</b>: light its contributors (schematic + plot cursor)";
+  } else if (el.dataset.sym !== undefined) {
     const n = el.dataset.sym;
     tip.innerHTML = "<b>" + n + "</b> = " + (VALUES[n] ?? "?");
   } else {
@@ -150,6 +201,30 @@ function clearPins() {
       .forEach(x => x.classList.remove("pin"));
 }
 document.addEventListener("click", e => {
+  /* a theta in the PM sum: scroll to its definition line, flash it,
+     and tell Python (which selects the root's table row) */
+  const term = termAt(e.clientX, e.clientY);
+  if (term) {
+    const nm = term.dataset.term;
+    const def = document.querySelector(
+        '[data-termdef="' + CSS.escape(nm) + '"]');
+    const line = def && def.closest(".line");
+    if (line) {
+      line.scrollIntoView({behavior: "smooth", block: "center"});
+      line.classList.add("flash");
+      setTimeout(() => line.classList.remove("flash"), 900);
+    }
+    if (bridge && bridge.on_term_click) bridge.on_term_click(nm);
+    return;
+  }
+  /* an f_p/f_z symbol: light the root (no scroll -- the reader is
+     already at the definition) */
+  const fr = frootAt(e.clientX, e.clientY);
+  if (fr) {
+    if (bridge && bridge.on_froot_click)
+      bridge.on_froot_click(fr.dataset.froot);
+    return;
+  }
   const el = symAt(e.clientX, e.clientY);
   const additive = e.ctrlKey || e.metaKey;
   if (!el) {                       // clicking blank space clears

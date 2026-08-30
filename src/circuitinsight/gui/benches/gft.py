@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QComboBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget)
-from .. import theme
+from .. import theme, view
 
 class GFTBenchMixin:
     # ----------------------------------------------------------------- gft
@@ -72,72 +72,10 @@ class GFTBenchMixin:
         return payload
 
     def _gft_compute(self, probe, inp, out, ref, c, reduce_kw=None):
-        import dataclasses
-
-        import numpy as np
-        import sympy as sp
-
-        from ...analysis import nested_gft
-        from ...analysis.gft import _probe_indices
-        from ...engine.mna import S
-
-        an = self.controller._analyzer_ready()
-        sys_in = an.system(inp)
-        sys_pr = an.system(probe)
-        headline = None
-        if reduce_kw is not None:
-            from ...analysis.criteria import make_criterion
-            from ...analysis.sensitivity import _reactive_symbols
-
-            strat = reduce_kw.get("strategy")
-            opts = dict(reduce_kw.get("strategy_opts") or {})
-            lo = float(reduce_kw.get("fmin", 1e3))
-            hi = float(reduce_kw.get("fmax", 1e7))
-            tol_db = float(reduce_kw.get("tol_db", 0.5))
-            red = an.dominant_reactances(inp, out, tol_db, lo, hi,
-                                         strategy=strat,
-                                         strategy_opts=opts)
-            dropped = set(_reactive_symbols(an)) - set(red.selected)
-
-            def _zero(sysm):
-                vals = dict(sysm.values)
-                for n in dropped:
-                    if n in vals:
-                        vals[n] = 0.0
-                return dataclasses.replace(sysm, values=vals)
-
-            sys_in = _zero(sys_in)
-            sys_pr = _zero(sys_pr)
-            crit = make_criterion(strategy=strat, strategy_opts=opts,
-                                  eps=None, tol_db=tol_db)
-            band_err = (float(red.errors_db[-1]) if red.errors_db
-                        else float(red.baseline_db))
-            headline = ("quartet of the REDUCED model: "
-                        + (crit.headline(red, band_err, lo, hi)
-                           if crit.name
-                           else crit.headline(red, band_err, lo, hi,
-                                              tol_db=tol_db)))
-        A = nested_gft._exact_A(sys_pr)
-        pr = _probe_indices(sys_pr, probe)
-        err = (nested_gft._node(sys_pr, ref), int(c))
-        io = nested_gft._node(sys_pr, out)
-        fn_A = sp.lambdify(S, A, "numpy")
-        z_in = np.asarray(sys_in.z, dtype=complex).ravel()
-        z_pr = np.asarray(sys_pr.z, dtype=complex).ravel()
-        freqs = np.geomspace(1.0, 1e10, 240)
-        qs = [nested_gft._num_quartet(np.asarray(fn_A(2j * np.pi * f), complex),
-                                z_in, z_pr, io, pr, err) for f in freqs]
-        pack = {k: np.array([q[k] for q in qs]) for k in qs[0]}
-        worst = 0.0
-        for sv in (2, 3):
-            A0 = A.xreplace({S: sp.Rational(sv)})
-            q = nested_gft._point_quartet(A0, sys_in.z, sys_pr.z, io, pr, err)
-            r = nested_gft._residual_of(q)
-            if r != 0:
-                worst = max(worst, abs(float((r / q["H"]).evalf())))
-        return {"freqs": freqs, "q": pack, "residual": worst,
-                "probe": probe, "ref": ref, "c": c, "inp": inp,
-                "out": out, "headline": headline}
+        # the quartet lives in SessionController now (it is analysis,
+        # and it used to take the analyzer raw -- plan E-A)
+        return self.controller.gft_quartet(probe, inp, out, ref, c,
+                                           reduce_kw=reduce_kw)
 
     def _on_gft_done(self, payload):
         import numpy as np
@@ -165,8 +103,8 @@ class GFTBenchMixin:
                 (ft_part, "feedthrough", theme.PINK, ":")):
             ax1.semilogx(f, db(arr), color=color, lw=1.2, ls=ls, label=lab)
         try:                       # ac truth for the closed-loop H
-            fr, packed = self.controller._reference(payload["inp"],
-                                                    payload["out"])
+            fr, packed = self.controller.ac_reference(payload["inp"],
+                                                      payload["out"])
             if packed is not None:
                 ax1.semilogx(fr, db(packed[0]), color="k", ls="--", lw=0.9,
                              label="AC sim")
@@ -179,9 +117,9 @@ class GFTBenchMixin:
         ax2.set_xlabel("frequency (Hz)")
         for ax in (ax1, ax2):
             ax.grid(True, which="both", alpha=0.25, lw=0.4)
-        ax1.legend(fontsize=8, frameon=False, loc="lower left", ncols=2)
-        fig.tight_layout()
-        theme.style_figure(fig)
+        fig.tight_layout(rect=(0, 0.06, 1, 1))
+        view.figure_legend(fig, ax1)      # one legend home: below the
+        theme.style_figure(fig)           # frequency axis, everywhere
         self.canvas.draw_idle()
         res = payload["residual"]
         sign = "+" if payload["c"] > 0 else "−"

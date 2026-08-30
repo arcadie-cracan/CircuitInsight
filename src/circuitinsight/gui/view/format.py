@@ -2,8 +2,6 @@
 engineering notation, root and region tables. No sympy transforms, no
 figures -- the leaf module of the view package."""
 from __future__ import annotations
-import warnings
-from ...keep import is_all
 import numpy as np
 from ...units import eng  # noqa: E402,F401  (re-exported: view.eng)
 

@@ -14,7 +14,6 @@ validated against `cap_model="matrix"`.
 import warnings
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from circuitinsight.adapters.spectre import SpectreRun

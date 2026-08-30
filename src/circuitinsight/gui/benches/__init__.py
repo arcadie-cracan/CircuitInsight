@@ -5,6 +5,7 @@ handlers and its drawing."""
 from .whatif import WhatIfMixin  # noqa: F401
 from .reduce import ReduceBenchMixin  # noqa: F401
 from .compensate import CompensateBenchMixin  # noqa: F401
+from .margins import MarginsBenchMixin  # noqa: F401
 from .modes import ModesBenchMixin  # noqa: F401
 from .gft import GFTBenchMixin  # noqa: F401
 from .schematic import SchematicMixin  # noqa: F401

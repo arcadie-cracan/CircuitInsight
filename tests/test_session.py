@@ -205,7 +205,6 @@ def test_reduction_is_a_named_revertible_session_state():
     reverts completely."""
     import warnings
 
-    import numpy as np
 
     from circuitinsight import SessionController
 
@@ -283,7 +282,6 @@ def test_enforcement_floor_is_an_absolute_level(ota5t):
     a 60 dB window stops at -4 dB, barely reaching unity gain, so the
     crossover region a phase margin lives in went unchecked. The floor
     is an ABSOLUTE level -- 0 dB enforces down to unity."""
-    import numpy as np
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
@@ -411,7 +409,6 @@ def test_reduce_strategies_speak_the_designer_language():
 def test_approximation_ledger_measures_not_sums(miller):
     """One contract prices every circuit-level approximation, and the
     total is MEASURED end to end -- never the sum of the entries."""
-    import numpy as np
 
     miller.set_matches(*miller.suggest_matches())
     try:
@@ -515,7 +512,6 @@ def test_snap_unity_divides_out_a_covered_leading_numeral():
     surviving lowest-order numerator is now gm*(0.999*gm + 6e-5) --
     a sum, nothing to snap -- so the fixture no longer exercises the
     feature."""
-    import numpy as np
     import sympy as sp
 
     from circuitinsight.analysis.criteria import PlainCriterion
@@ -566,7 +562,6 @@ def test_suggest_matches_requires_a_common_node(tmp_path):
     bulk ties to gnd!). A device identical in type and parameters but
     living on unrelated nets is not suggested."""
     import json
-    import shutil
     import warnings
 
     fx = FIX / "ota5t"
@@ -792,7 +787,6 @@ def test_impedance_forms_have_transfer_parity():
     assert abs(abs(fo.h[0]) / abs(ex.h[0]) - 1) < 0.05
     assert lo.simplified and lo.reduced_order
     # any simplified Z carries the exact solution as its reference
-    import numpy as np
     for r in (fo, lo):
         assert r.ref_label == "exact Z" and r.h_ref is not None
         dev = np.abs(np.asarray(r.h)) / np.abs(np.asarray(r.h_ref))
@@ -876,6 +870,29 @@ def test_impedance_ranking_reflects_z_contributors():
     assert tr[0] == "gm_I0_PM13"          # the transfer's lead
     assert zr[0] == "gm_I0_NM9"           # Z's own lead
     assert set(zr[:5]) != set(tr[:5])
+
+
+def test_rail_hung_port_and_seen_by_rank_as_z():
+    """The diode_bias field case: an isource from the vdd! rail into
+    a diode-connected bias node is a ground-referenced port in AC
+    (the rail is held by the ideal supply), so BOTH the port form and
+    'Z seen by' it rank Z at the bias node -- before, they raised and
+    the keep table silently fell back to a transfer ranking."""
+    import warnings
+
+    from circuitinsight.session import SessionController
+
+    d = FIX / "miller"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(d / "tb_ota2s.cin.json", d / "psf")
+        zn = [n for n, _, _ in c.rank_symbols_z({"node": "vbn"})]
+        zp = [n for n, _, _ in c.rank_symbols_z("IB")]
+        zs = [n for n, _, _ in c.rank_symbols_z({"seen_by": "IB"})]
+    # IB is an ideal isource (open in AC): removing it for seen_by
+    # changes nothing, so all three are THE SAME ranking
+    assert zp == zn and zs == zn
+    assert zn[0] == "gm_MN2"              # the diode device leads
 
 
 def test_loop_gain_cost_gate():

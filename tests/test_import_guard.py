@@ -61,3 +61,32 @@ def test_non_gui_test_modules_never_touch_the_gui():
         f"the Qt-less gate venv): {offenders} — move the assertion to a "
         f"GUI test file, use gui.view, or add the PySide6 importorskip "
         f"header")
+
+
+def test_no_fstring_expression_carries_a_backslash():
+    """pyproject declares 3.11, and a backslash inside an f-string
+    EXPRESSION is legal only from 3.12 (PEP 701). Developing on 3.12
+    hides it completely: the module imports here and raises
+    SyntaxError in the field, where it surfaced as a solve failing
+    against a freshly pushed engine. ast.parse cannot be asked to
+    reject it -- feature_version does not cover the tokenizer change --
+    so the expression sources are inspected directly."""
+    import ast
+
+    root = Path(__file__).resolve().parent.parent
+    bad = []
+    for sub in ("src", "tests", "scripts"):
+        for p in (root / sub).rglob("*.py"):
+            src = p.read_text(encoding="utf-8")
+            try:
+                tree = ast.parse(src)
+            except SyntaxError:                  # not this test's job
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.FormattedValue):
+                    continue
+                seg = ast.get_source_segment(src, node.value)
+                if seg and "\\" in seg:
+                    bad.append(f"{p.relative_to(root)}:{node.lineno}: "
+                               f"{seg[:60]}")
+    assert not bad, "backslash in an f-string expression:\n" + "\n".join(bad)

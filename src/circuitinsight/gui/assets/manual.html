@@ -56,6 +56,14 @@ first Solve is symbolic.</li>
 3 Choose symbols · 4 Solve</b> &ndash; shows where you are; every step is
 a click target.</p>
 
+<p><b>Options &rarr; Dark theme</b> switches the whole app &ndash; chrome,
+plots, the typeset expression and summary, and the schematic, which
+re-inks to light-on-dark the way Virtuoso's own editor draws &ndash;
+live, and the choice is remembered across launches
+(<code>--theme dark</code> on the command line does the same).
+Exported reports and schematic copies always keep the light paper for
+print.</p>
+
 <h2><a name="workflow"></a>The workflow</h2>
 
 <p>The intended loop, for a student meeting a circuit or a designer
@@ -265,13 +273,16 @@ unit probe current source turns Z into an ordinary transfer
 function, so the reactance pursuit, the collapse, the snap and the
 order certificate run unchanged. The lowest-order form needs a
 ground-referenced port; between-two-nets impedance offers Exact and
-full order. The trees offer three
-more ways to say where to look, and the port dropdown then reads
-<i>user selected</i>: right-click a net for <b>Impedance at</b> that
-net (to ground); Ctrl-select two nets for <b>Impedance between</b>
-them; right-click a two-terminal instance for <b>Impedance seen
-by</b> it &ndash; the element removed, sources zeroed, the Thevenin
-impedance it looks into. A net the applied reduction AC-grounds is
+full order. The target is chosen from the
+circuit, never from a dropdown, and the toolbar label spells it out
+(<i>seen by I0</i>, <i>from node smpl to gnd</i>, <i>between nodes
+reg and fdbk</i>): right-click a net for <b>Set as impedance
+target</b> (that net to ground); Ctrl-select two nets for the
+between-them form; right-click a two-terminal instance for the
+seen-by form &ndash; the element removed, sources zeroed, the
+Thevenin impedance it looks into. Choosing a target re-ranks the
+symbols immediately; the impedance itself is computed when
+<b>Solve</b> is pressed. A net the applied reduction AC-grounds is
 refused with the reason: Z there is 0 by construction.</p>
 
 <h3><a name="reduce"></a>Reduce circuit</h3>
@@ -513,8 +524,8 @@ numeral (coefficient of s<sup>k</sup> times each kept-letter monomial)
 individually. It costs a few multiples of the solve; afterwards each
 numeral's hover carries its own contributors.</li>
 <li><b>Expression</b> renders H(s) in publication form. Hover a symbol
-for its operating-point value; click it to select it in the keep table
-&ndash; and in the Virtuoso schematic when cross-probe is on. Hover a
+for its operating-point value; click it to select it in the keep table.
+Hover a
 <i>numeral</i> for its ranked contributors once Explain the numbers
 has run; before that, the hover tells you to run it. LaTeX aliases
 are editable via the instance context menu and the keep table.</li>
@@ -551,8 +562,9 @@ the skill directory with <code>circuitinsight-skill-path</code>:</p>
 <code>CInInstallMenu()</code>. <b>Analyze</b> exports the schematic,
 finds the current run's results, and launches the GUI preloaded; the
 topology and the operating point always come from the same session.
-With cross-probe enabled in the Devices menu, clicking a symbol in the
-Expression view highlights its device in the schematic.</p>
+Cross-probing happens inside the app: the Schematic pane redraws the
+circuit itself, and every tree, table and expression selection lights
+up there.</p>
 
 <h2><a name="schematic"></a>The Schematic pane</h2>
 
@@ -628,7 +640,7 @@ overlays exist to answer exactly that.</p>
 <tr><td>Ctrl+Shift+L</td><td>Bring back any pane dragged to nothing (in
 any splitter); when nothing is collapsed, collapse the left side for a
 wide plot. A double-click on a splitter handle brings back the pane
-it hides; File &rarr; Reset layout restores the default
+it hides; Options &rarr; Reset layout restores the default
 proportions</td></tr>
 <tr><td>F5</td><td>Rank symbols</td></tr>
 <tr><td>Ctrl+L</td><td>Copy H(s) as LaTeX</td></tr>

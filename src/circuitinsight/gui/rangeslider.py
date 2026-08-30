@@ -100,15 +100,18 @@ class RangeSlider(QWidget):
         y = self._y()
         xa, xb = self._x_of(self._a), self._x_of(self._b)
 
+        from . import theme
+        dark = theme.current == "dark"
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor("#c9c9c9"))                       # groove
+        p.setBrush(QColor("#55585e" if dark else "#c9c9c9"))    # groove
         p.drawRoundedRect(QRectF(_R, y - _GROOVE / 2,
                                  self.width() - 2 * _R, _GROOVE), 2, 2)
-        p.setBrush(QColor("#4a78a8"))                       # selected band
+        p.setBrush(QColor(theme.BAND_SPAN))                 # selected band
         p.drawRoundedRect(QRectF(xa, y - _GROOVE / 2, xb - xa, _GROOVE),
                           2, 2)
-        p.setPen(QPen(QColor("#2d5379"), 1.2))
-        p.setBrush(QColor("#f4f7fa"))
+        edge = QColor("#85b8e8" if dark else "#2d5379")
+        p.setPen(QPen(edge, 1.2))
+        p.setBrush(QColor("#26282c" if dark else "#f4f7fa"))
         for x in (xa, xb):                                  # handles
             p.drawEllipse(QRectF(x - _R, y - _R, 2 * _R, 2 * _R))
 
@@ -124,7 +127,7 @@ class RangeSlider(QWidget):
         xlb = min(max(xb - wb / 2, 0.0), self.width() - wb)
         if xla + wa + 4 > xlb:
             xla = max(0.0, xlb - wa - 4)
-        p.setPen(QColor("#2d5379"))
+        p.setPen(edge)
         p.drawText(QRectF(xla, 0, wa + 2, _LABEL_H), Qt.AlignLeft, la)
         p.drawText(QRectF(xlb, 0, wb + 2, _LABEL_H), Qt.AlignLeft, lb)
 

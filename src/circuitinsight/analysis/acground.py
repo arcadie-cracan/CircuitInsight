@@ -121,8 +121,8 @@ def _structural_candidates(primitives, ground) -> dict:
 def scan_ac_grounds(primitives, ground, inp: str, out: str, *,
                     freqs=None, budget_db: float = 0.1, alias=None,
                     max_report: int = 12, structural_only: bool = True,
-                    exclude=(), criterion=None,
-                    include=()) -> AcGroundReport:
+                    exclude=(), criterion=None, include=(),
+                    loop_probe: str | None = None) -> AcGroundReport:
     """Rank nodes by the EXACT error that declaring them AC grounds would
     introduce in tf(inp -> out), and recommend the largest set that fits
     `budget_db`.
@@ -142,8 +142,19 @@ def scan_ac_grounds(primitives, ground, inp: str, out: str, *,
     They are priced alongside the structural candidates -- same single
     inverse, zero extra cost -- and always survive into the report,
     past both the structural filter and the max_report cap: a request
-    must come back with a price, never vanish."""
-    system = build_mna(primitives, ground, inp, alias)
+    must come back with a price, never vanish.
+
+    loop_probe: price against the TIAN LOOP GAIN at this probe instead
+    of tf(inp -> out) -- the contract of an stb bench, where a
+    reduction must preserve T, not a transfer nobody measured. `inp`
+    and `out` are ignored; the same one-inverse-per-frequency
+    machinery reads T through NumericTian (two solves, six scalars)."""
+    system = build_mna(primitives, ground, loop_probe or inp, alias)
+    tian = None
+    if loop_probe is not None:
+        from .loopgain import NumericTian
+
+        tian = NumericTian(system, loop_probe)
     subs = {system.symbols[n]: sp.Float(v)
             for n, v in system.values.items() if n in system.symbols}
     A = system.A.xreplace(subs)
@@ -151,12 +162,19 @@ def scan_ac_grounds(primitives, ground, inp: str, out: str, *,
     if free:
         raise MnaError("ac-ground scan needs numeric values; missing "
                        f"{sorted(map(str, free))}")
-    if out not in system.node_index:
+    if tian is None and out not in system.node_index:
         raise MnaError(f"output node {out!r} not found (or it is ground)")
 
     struct = _structural_candidates(primitives, ground)
     gnd = set(ground) | {"0"}
-    skip = set(exclude) | gnd | {out}
+    skip = set(exclude) | gnd
+    if tian is None:
+        skip |= {out}
+    else:
+        # grounding a probe terminal would cut the very loop being
+        # priced: those two nodes are never candidates
+        inv_nodes = {i: n for n, i in system.node_index.items()}
+        skip |= {inv_nodes[tian.p], inv_nodes[tian.q]}
     # nodes held by an independent source are ALREADY ac grounds (or the
     # excitation itself): "grounding" them adds a second definition of the
     # same node and the modified matrix is singular, so they are not
@@ -186,7 +204,7 @@ def scan_ac_grounds(primitives, ground, inp: str, out: str, *,
     freqs = np.atleast_1d(np.asarray(freqs, dtype=float))
     fn = sp.lambdify(S, A, "numpy")
     z = np.array(system.z.tolist(), dtype=complex).ravel()
-    k_out = system.node_index[out]
+    k_out = system.node_index[out] if tian is None else None
     idx = [system.node_index[n] for n in names]
 
     # per frequency: ONE inverse scores every candidate (and any set)
@@ -197,18 +215,36 @@ def scan_ac_grounds(primitives, ground, inp: str, out: str, *,
     vouts = []                                   # the full response H(f)
     for f in freqs:
         Z = np.linalg.inv(np.asarray(fn(2j * np.pi * f), dtype=complex))
-        v = Z @ z
-        v_out = v[k_out]
-        vouts.append(v_out)
-        if v_out == 0:
+        if tian is not None:
+            resp, xv, xi = tian.response(Z, z)
+        else:
+            v = Z @ z
+            resp = v[k_out]
+        vouts.append(resp)
+        if resp == 0:
             ratios.append(np.zeros(len(names), dtype=complex))
             continue
         zkk = np.array([Z[k, k] for k in idx])
-        zok = np.array([Z[k_out, k] for k in idx])
-        vk = np.array([v[k] for k in idx])
         with np.errstate(divide="ignore", invalid="ignore"):
-            dv = -vk * zok / zkk
-        r = np.nan_to_num(dv / v_out, nan=0.0, posinf=1e12, neginf=1e12)
+            if tian is not None:
+                # grounding node k corrects BOTH Tian solves by the
+                # same rank-one column: x' = x - x[k] Z[:,k]/Z[k,k];
+                # only the six read rows are needed, per candidate
+                rd = {}
+                for tag, x in (("v", xv), ("i", xi)):
+                    xk = x[idx]
+                    for j in tian.rows:
+                        rd[tag, j] = x[j] - xk * Z[j, idx] / zkk
+                Tp = tian.combine(rd["v", tian.ib], rd["v", tian.p],
+                                  rd["i", tian.ib], rd["i", tian.q])
+                r = np.nan_to_num(Tp / resp - 1.0, nan=0.0,
+                                  posinf=1e12, neginf=1e12)
+            else:
+                zok = np.array([Z[k_out, k] for k in idx])
+                vk = np.array([v[k] for k in idx])
+                dv = -vk * zok / zkk
+                r = np.nan_to_num(dv / resp, nan=0.0,
+                                  posinf=1e12, neginf=1e12)
         ratios.append(r)
         db = np.abs(20 * np.log10(np.abs(1 + r)))
         deg = np.abs(np.degrees(np.angle(1 + r)))
@@ -254,7 +290,8 @@ def scan_ac_grounds(primitives, ground, inp: str, out: str, *,
         if not c.within_budget:
             break
         trial = chosen + [names.index(c.node)]
-        Hj = _joint_response(fn, z, k_out, [idx[t] for t in trial], freqs)
+        Hj = _joint_response(fn, z, k_out, [idx[t] for t in trial], freqs,
+                             tian=tian)
         with np.errstate(divide="ignore", invalid="ignore"):
             jdb = np.abs(20 * np.log10(np.abs(Hj / H_full)))
         j = float(np.nanmax(jdb[np.isfinite(jdb)])) if np.isfinite(
@@ -273,18 +310,34 @@ def scan_ac_grounds(primitives, ground, inp: str, out: str, *,
                           criterion_label=label)
 
 
-def _joint_response(fn, z, k_out, ks, freqs) -> np.ndarray:
+def _joint_response(fn, z, k_out, ks, freqs, tian=None) -> np.ndarray:
     """The MODIFIED response from grounding the SET ks, by the Woodbury
     form of the same rank-one identity (exact, no re-solve). An array so
-    any contract can price it."""
+    any contract can price it. With `tian`, the response is the Tian
+    loop gain: the Woodbury correction applies to BOTH probe solves and
+    the six corrected reads combine into T."""
     out = np.empty(len(freqs), dtype=complex)
     for i, f in enumerate(freqs):
         Z = np.linalg.inv(np.asarray(fn(2j * np.pi * f), dtype=complex))
+        Zkk = Z[np.ix_(ks, ks)]
+        if tian is not None:
+            _t, xv, xi = tian.response(Z, z)
+            try:
+                rd = {}
+                for tag, x in (("v", xv), ("i", xi)):
+                    cv = np.linalg.solve(Zkk, x[ks])
+                    for j in tian.rows:
+                        rd[tag, j] = x[j] - Z[j, ks] @ cv
+            except np.linalg.LinAlgError:
+                out[i] = np.inf
+                continue
+            out[i] = tian.combine(rd["v", tian.ib], rd["v", tian.p],
+                                  rd["i", tian.ib], rd["i", tian.q])
+            continue
         v = Z @ z
         if v[k_out] == 0:
             out[i] = 0.0
             continue
-        Zkk = Z[np.ix_(ks, ks)]
         try:
             corr = Z[k_out, ks] @ np.linalg.solve(Zkk, v[ks])
         except np.linalg.LinAlgError:

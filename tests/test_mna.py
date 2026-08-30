@@ -55,7 +55,6 @@ def test_rc_lowpass_symbolic_and_numeric():
     H = an.tf("V1", "vout")
     R1, C1 = H.symbols["R1"], H.symbols["C1"]
     assert sp.simplify(H.expr - 1 / (1 + s * R1 * C1)) == 0
-    import pytest
     fc = 1 / (2 * 3.141592653589793 * 1e3 * 1e-9)
     assert abs(H.numeric([fc])[0]) == pytest.approx(0.70710678, rel=1e-6)
     (p,) = H.poles()
@@ -212,7 +211,6 @@ def test_hybrid_missing_value_errors():
     an = Analyzer.from_cin(circuit([
         vsrc("V1", "vin", "0"), inst, cap("C1", "vout", "0", "1n"),
     ]))
-    import pytest
 
     from circuitinsight.engine.mna import MnaError
     with pytest.raises(MnaError, match="R1"):

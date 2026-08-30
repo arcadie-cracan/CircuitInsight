@@ -4,7 +4,6 @@ Fast, simulator-free checks on a single common-emitter stage with
 hand-set operating-point parameters. The full-uA741 exercise of the same
 option lives in test_ua741; here we pin the structure and the physics.
 """
-import numpy as np
 import pytest
 
 from circuitinsight import Analyzer

@@ -75,6 +75,8 @@ def test_target_spin_follows_the_goal(qapp, tmp_path):
         w.goal_combo.setCurrentText("mfm")
         w.flat_spin.setValue(0.5)
         assert w._comp_kw() == {"goal": "mfm", "flat_tol_db": 0.5}
+        # a single-psf session offers no worst-corner sizing
+        assert w.robust_chk.isHidden()
     finally:
         w.close()
         type(w).settings_path = None
@@ -97,7 +99,9 @@ def test_spec_goal_runs_and_reports_ms(qapp, tmp_path):
         assert any(s.achieved and s.spec_dev is not None for s in sugg)
         # the verdict is the row's COLOR, not an ok column
         from circuitinsight.gui import theme
-        assert w.comp_tbl.columnCount() == 8
+        assert w.comp_tbl.columnCount() == 10
+        # a single-point session shows no worst-case columns
+        assert w.comp_tbl.isColumnHidden(8) and w.comp_tbl.isColumnHidden(9)
         # spec rows report the measured criterion in the peak column
         assert w.comp_tbl.item(0, 7).text().startswith("Ms ")
         for i, s in enumerate(sugg):
@@ -115,6 +119,52 @@ def test_spec_goal_runs_and_reports_ms(qapp, tmp_path):
         assert "F" in lbl
         w._on_comp_done((w._comp_baseline, sugg))
         assert w._sch_proposed == ()
+    finally:
+        w.close()
+        type(w).settings_path = None
+
+
+def test_worst_case_columns_span_the_point_set(qapp, tmp_path):
+    """A session over an operating-point SET re-measures every sized
+    suggestion on every point: the worst-case columns show, carry the
+    setting point in their tooltips, and the verdict tint gates on the
+    worst point, not the nominal one. The synthetic tree copies one
+    psf, so worst must equal nominal."""
+    import shutil
+
+    root = tmp_path / "ExplorerRun.0"
+    for i, corner in ((1, "tt 27"), (2, "ss -40")):
+        psf = root / str(i) / "work_tb" / "psf"
+        shutil.copytree(FIX / "miller" / "psf_stb", psf)
+        (psf / "runObjFile").write_text(
+            'HEADER\n'
+            f'"#maeCorner" "{corner}"\n'
+            f' "#maeDesignPoint" {i}\n')
+    w = _win(tmp_path, FIX / "miller" / "tb_ota2s_stb.cin.json", root)
+    try:
+        w.mode_combo.setCurrentText("Compensate")
+        w.probe_combo.setCurrentText("IPRB0")
+        # a point-set session offers worst-corner sizing, and defaults
+        # to it -- the corners were run to be held
+        assert not w.robust_chk.isHidden() and w.robust_chk.isChecked()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sugg = w.suggest_sync(
+                "IPRB0", goal="mfm", robust=True, exclude=("I0.Cc",),
+                candidates=[Candidate("miller", "I0.net1", "vout",
+                                      "Miller port", 1.0)])
+        assert sugg and w._comp_robust is not None
+        assert not w.comp_tbl.isColumnHidden(8)
+        assert not w.comp_tbl.isColumnHidden(9)
+        assert w.comp_tbl.item(0, 9).text().endswith("dB")
+        assert w.comp_tbl.item(0, 9).toolTip().startswith("at ")
+        # identical copied points: worst equals nominal
+        assert w.comp_tbl.item(0, 9).text() == w.comp_tbl.item(0, 7).text()
+        rb = w._comp_robust[0]
+        assert rb["labels"] == ["tt 27", "ss -40"]
+        assert rb["worst_flat_db"] == pytest.approx(sugg[0].flat_db,
+                                                    abs=1e-6)
+        assert w._comp_worst_ok(rb) == (rb["worst_flat_db"] <= 1.0)
     finally:
         w.close()
         type(w).settings_path = None
@@ -194,94 +244,6 @@ def test_preview_honours_the_strip(qapp, tmp_path, _fd_cands):
     finally:
         w.close()
         type(w).settings_path = None
-
-
-# ------------------------------------------------------- cross-probe (M10)
-def test_cross_probe_resolves_and_sends(qapp, tmp_path):
-    """Clicking a symbol or selecting a device row sends that instance to
-    Virtuoso; with probing off both are silent no-ops."""
-    from circuitinsight.virtuoso import xprobe
-
-    class FakeWs:
-        def __init__(self):
-            self.calls = []
-
-        def __getitem__(self, name):
-            def call(*args):
-                self.calls.append((name, args))
-                return True
-            return call
-
-        def close(self):
-            pass
-
-    w = _win(tmp_path, FIX / "miller" / "tb_ota2s_stb.cin.json",
-             FIX / "miller" / "psf_stb")
-    try:
-        assert w._xprobe is None
-        assert w.xprobe_symbol("gm_I0_MN0") is False      # off: no-op
-
-        ws = FakeWs()
-        w._xprobe = xprobe.CrossProbe(ws)
-        assert w.xprobe_symbol("gm_I0_MN0")
-        assert ws.calls[-1] == ("CInHighlight", (["I0.MN0"],))
-        assert w.xprobe_symbol("I0_Cc")                   # passive: own path
-        assert ws.calls[-1] == ("CInHighlight", (["I0.Cc"],))
-        assert w.xprobe_symbol("gm_NOTADEVICE") is False  # unknown: no send
-
-        n = len(ws.calls)
-        w.devices.setCurrentItem(w.devices.leaf_items()[0])
-        qapp.processEvents()
-        assert len(ws.calls) > n                          # selection probes
-    finally:
-        w.close()
-        type(w).settings_path = None
-
-
-def test_cross_probe_toggle_unchecks_itself_when_unavailable(qapp, tmp_path):
-    """A failed connection must not leave the menu claiming cross-probe is on;
-    the reason goes to the message strip."""
-    w = _win(tmp_path, FIX / "miller" / "tb_ota2s_stb.cin.json",
-             FIX / "miller" / "psf_stb")
-    try:
-        w.a_xprobe.setChecked(True)          # no Virtuoso in a test run
-        qapp.processEvents()
-        assert not w.a_xprobe.isChecked()
-        assert w._xprobe is None
-        assert "cross-probe unavailable" in w.msg_strip.text()
-    finally:
-        w.close()
-        type(w).settings_path = None
-
-
-def test_cross_probe_toggle_is_remembered(qapp, tmp_path):
-    """The toggle persists like the cap model and the last mode. Restoring
-    "on" with no Virtuoso running must re-attempt, fail gracefully and end up
-    unchecked -- never a checked toggle with no connection behind it."""
-    from circuitinsight.gui.app import MainWindow
-
-    ini = str(tmp_path / "gui.ini")
-    w = _win(tmp_path, FIX / "miller" / "tb_ota2s_stb.cin.json",
-             FIX / "miller" / "psf_stb")
-    try:
-        MainWindow.settings_path = ini
-        w.a_xprobe.blockSignals(True)      # pretend a session had it on
-        w.a_xprobe.setChecked(True)
-        w.a_xprobe.blockSignals(False)
-        w.close()                          # closeEvent persists it
-    finally:
-        type(w).settings_path = None
-
-    MainWindow.settings_path = ini
-    try:
-        w2 = MainWindow()                  # restores; no Virtuoso here
-        try:
-            assert not w2.a_xprobe.isChecked()   # honest about the failure
-            assert w2._xprobe is None
-        finally:
-            w2.close()
-    finally:
-        MainWindow.settings_path = None
 
 
 # ------------------------------------------------- one-column bench

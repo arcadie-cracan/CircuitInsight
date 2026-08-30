@@ -168,14 +168,15 @@ class OpCard(QGroupBox):
         self.body.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.body.setStyleSheet(f"color: {theme.MUTED};")
         self.body.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        # the card must not starve the trees above it: a capped,
-        # scrolling body
+        # a scrolling body with a small MINIMUM only: the height cap
+        # moved to the splitter the card lives in, whose handle the
+        # user drags (a fixed 240 px could not be changed at all)
         from PySide6.QtWidgets import QScrollArea
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
         scroll.setWidget(self.body)
-        scroll.setMaximumHeight(240)
+        scroll.setMinimumHeight(60)
         v.addWidget(scroll)
         row = QHBoxLayout()
         row.addStretch(1)

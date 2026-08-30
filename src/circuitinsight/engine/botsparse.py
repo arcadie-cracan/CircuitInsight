@@ -43,8 +43,8 @@ import numpy as np
 import sympy as sp
 from sympy import QQ
 
-from .zpbatch import (ZpBatchError, _batch_det_modp, _confirm,
-                      _eval_dets_slab, _lift, _primes, _transform_modp)
+from .zpbatch import (_batch_det_modp, _eval_dets_slab, _primes,
+                      _transform_modp)
 
 __all__ = ["solve_tensors_sparse", "BotError"]
 

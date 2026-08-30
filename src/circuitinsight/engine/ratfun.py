@@ -49,12 +49,10 @@ import math
 import random
 
 import numpy as np
-import sympy as sp
 from sympy import QQ
 
 from .botsparse import (BotError, _bm, _pow_seq, _proot, _tvand_solve)
-from .zpbatch import (_batch_det_modp, _confirm, _eval_dets_slab, _lift,
-                      _powmod_arr, _primes)
+from .zpbatch import (_batch_det_modp, _eval_dets_slab, _powmod_arr, _primes)
 
 __all__ = ["solve_tensors_ratfun", "RatFunError"]
 

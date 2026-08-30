@@ -96,13 +96,19 @@ def _admittance(kind: str, value: float, w: complex):
 def scan_removals(primitives, ground, inp: str, out: str, *,
                   freqs=None, budget_db: float = 0.1, alias=None,
                   max_report: int = 12, protect=(),
-                  criterion=None) -> RemovalReport:
+                  criterion=None,
+                  loop_probe: str | None = None) -> RemovalReport:
     """Price the removal of every EXPLICIT two-terminal passive in
     tf(inp -> out), and recommend the largest jointly-removable set inside
     `budget_db`. `protect` names instances never to propose (e.g. the load
     the spec is defined against). With a BandCriterion in `criterion`,
     pricing AND gating run under that contract (same unit and window as
-    the order reduction); pass `freqs` spanning its band."""
+    the order reduction); pass `freqs` spanning its band.
+
+    loop_probe: price against the TIAN LOOP GAIN at this probe instead
+    of tf(inp -> out) -- the contract of an stb bench. `inp`/`out` are
+    ignored; the same Sherman-Morrison update corrects both probe
+    solves and the six NumericTian reads give the modified T."""
     explicit = [p for p in primitives
                 if p.kind in ("c", "r", "g", "l") and not p.param
                 and p.value is not None and p.inst not in protect
@@ -110,13 +116,18 @@ def scan_removals(primitives, ground, inp: str, out: str, *,
     if not explicit:
         return RemovalReport(budget_db=budget_db)
 
-    system = build_mna(primitives, ground, inp, alias)
+    system = build_mna(primitives, ground, loop_probe or inp, alias)
+    tian = None
+    if loop_probe is not None:
+        from .loopgain import NumericTian
+
+        tian = NumericTian(system, loop_probe)
     subs = {system.symbols[n]: sp.Float(v)
             for n, v in system.values.items() if n in system.symbols}
     A = system.A.xreplace(subs)
     if set(A.free_symbols) - {S}:
         raise MnaError("removal scan needs numeric values")
-    if out not in system.node_index:
+    if tian is None and out not in system.node_index:
         raise MnaError(f"output node {out!r} not found (or it is ground)")
     if freqs is None:
         freqs = np.geomspace(1.0, 1e10, 41)
@@ -124,7 +135,7 @@ def scan_removals(primitives, ground, inp: str, out: str, *,
 
     fn = sp.lambdify(S, A, "numpy")
     z = np.array(system.z.tolist(), dtype=complex).ravel()
-    k_out = system.node_index[out]
+    k_out = system.node_index[out] if tian is None else None
     gnd = set(ground) | {"0"}
 
     def bvec(nodes):
@@ -144,8 +155,12 @@ def scan_removals(primitives, ground, inp: str, out: str, *,
     for f in freqs:
         w = 2j * np.pi * f
         Z = np.linalg.inv(np.asarray(fn(w), dtype=complex))
-        v = Z @ z
-        v_out = v[k_out]
+        if tian is not None:
+            resp, xv, xi = tian.response(Z, z)
+        else:
+            v = Z @ z
+            resp = v[k_out]
+        v_out = resp
         vouts.append(v_out)
         row = np.zeros(n, dtype=complex)
         ratios.append(row)
@@ -161,9 +176,22 @@ def scan_removals(primitives, ground, inp: str, out: str, *,
             if den == 0:
                 worst[i] = float("inf")
                 continue
-            dv_out = Y * Zb[k_out] * (b @ v) / den
-            r = dv_out / v_out
-            row[i] = r
+            if tian is not None:
+                # the SAME rank-one correction on both probe solves,
+                # read at the six Tian rows
+                rd = {}
+                for tag, x in (("v", xv), ("i", xi)):
+                    g = Y * (b @ x) / den
+                    for j in tian.rows:
+                        rd[tag, j] = x[j] + g * Zb[j]
+                Tp = tian.combine(rd["v", tian.ib], rd["v", tian.p],
+                                  rd["i", tian.ib], rd["i", tian.q])
+                r = Tp / v_out - 1.0
+                row[i] = r
+            else:
+                dv_out = Y * Zb[k_out] * (b @ v) / den
+                r = dv_out / v_out
+                row[i] = r
             db = abs(20 * np.log10(abs(1 + r))) if 1 + r != 0 else np.inf
             if db > worst[i]:
                 worst[i] = db
@@ -205,7 +233,8 @@ def scan_removals(primitives, ground, inp: str, out: str, *,
             break
         trial = chosen + [c.inst]
         j, js = _joint_removal_metric(primitives, ground, inp, out, trial,
-                                      freqs, alias, criterion)
+                                      freqs, alias, criterion,
+                                      loop_probe=loop_probe)
         if criterion is not None:
             if js is not None and js <= 1.0:
                 chosen, joint, joint_score = trial, j, js
@@ -218,16 +247,25 @@ def scan_removals(primitives, ground, inp: str, out: str, *,
 
 
 def _joint_removal_metric(primitives, ground, inp, out, insts, freqs,
-                          alias, criterion=None):
+                          alias, criterion=None, loop_probe=None):
     """(worst_db, score) of deleting the SET, by re-solving the pruned
-    circuit -- the score priced by the contract when one is active."""
+    circuit -- the score priced by the contract when one is active.
+    With `loop_probe` the re-solved response is the Tian loop gain."""
     from . import tearing
 
     keep = [p for p in primitives
             if not (p.inst in insts and p.kind in ("c", "r", "g", "l")
                     and not p.param)]
-    a = tearing._numeric_response(primitives, ground, inp, out, freqs, alias)
-    b = tearing._numeric_response(keep, ground, inp, out, freqs, alias)
+    if loop_probe is not None:
+        from .loopgain import numeric_loop_response
+
+        a = numeric_loop_response(primitives, ground, loop_probe, freqs,
+                                  alias)
+        b = numeric_loop_response(keep, ground, loop_probe, freqs, alias)
+    else:
+        a = tearing._numeric_response(primitives, ground, inp, out, freqs,
+                                      alias)
+        b = tearing._numeric_response(keep, ground, inp, out, freqs, alias)
     with np.errstate(divide="ignore", invalid="ignore"):
         db = np.abs(20 * np.log10(np.abs(b / a)))
     db = db[np.isfinite(db)]

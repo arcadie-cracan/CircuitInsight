@@ -49,6 +49,8 @@
 (procedure (CInHInstances cv)
   (let ((lines nil))
     (foreach inst (getq cv instances)
+      ;; deactivated instances stay IN the hints: the CIN marks them
+      ;; and the schematic draws them X-ed, exactly like Virtuoso
       (unless (rexMatchp "<" (getq inst name))   ; iterated: CIN skips too
         (errset
           (setq lines
@@ -92,11 +94,17 @@
     (foreach sh (getq cv shapes)
       (setq ot (CInStr (getq sh objType)))
       (when (equal ot "label")
+        ;; justification and orientation matter: a right-justified or
+        ;; mirrored label flows the OTHER way from its origin, and
+        ;; dropping them put re-drawn labels on the wrong side
         (errset
           (setq lines
-            (cons (sprintf nil "{\"text\": %s, \"xy\": %s}"
+            (cons (sprintf nil
+                    "{\"text\": %s, \"xy\": %s, \"just\": %s, \"orient\": %s}"
                            (CInJsonStr (CInStr (getq sh theLabel)))
-                           (CInHPt (getq sh xy)))
+                           (CInHPt (getq sh xy))
+                           (CInJsonStr (CInStr (getq sh justify)))
+                           (CInJsonStr (CInStr (getq sh orient))))
                   lines))
           t)))
     (reverse lines)))

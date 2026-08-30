@@ -5,6 +5,7 @@ fixture, combos populate, a synchronous solve updates the summary + canvas —
 without a display and without the worker thread.
 """
 import os
+import time
 import warnings
 from pathlib import Path
 
@@ -169,10 +170,12 @@ def test_backend_selector_autoselects_and_overrides(qapp, tmp_path):
                         lambda: "→" in win.backend_combo.itemText(0)),             "auto must name its resolved backend"
 
         win.backend_combo.setCurrentIndex(2)         # force bot
-        assert interp.PROBE_BACKEND == "bot"
+        # read THROUGH the session: in engine-process mode the global
+        # lives in the child, where a GUI-side module read is blind
+        assert win.controller.probe_backend() == "bot"
         assert _wait_bg(qapp, lambda: "bot" in win.estimate_lbl.text()),             "the async estimate must name the forced backend"
         win.backend_combo.setCurrentIndex(0)         # back to auto
-        assert interp.PROBE_BACKEND is None
+        assert win.controller.probe_backend() is None
     finally:
         interp.PROBE_BACKEND = None
         win.close()
@@ -183,7 +186,10 @@ def test_cancel_is_a_base_exception():
     backend fallbacks (except Exception: run the slower path) swallowed
     an Exception-cancel and silently RE-RAN the abandoned solve. The
     engine-side propagation half lives in test_zpbatch."""
-    from circuitinsight.gui.app import _Cancelled
+    # _Cancelled lives in gui.jobs; app.py merely re-exported it,
+    # and naming its real home keeps that re-export from being the
+    # only reason the import exists
+    from circuitinsight.gui.jobs import _Cancelled
 
     assert issubclass(_Cancelled, BaseException)
     assert not issubclass(_Cancelled, Exception)
@@ -445,17 +451,25 @@ def test_expression_tab_scrolls_on_wheel(qapp):
 def test_status_bar_names_the_backend_that_ran(qapp):
     """S-D telemetry surfaced: after a solve the status bar says which
     backend actually ran, so the auto-selector is visible."""
-    from circuitinsight.engine import interp
     from circuitinsight.gui.app import MainWindow
 
     win = MainWindow()
-    interp.LAST_SOLVE = {"backend": "bot", "wall_s": 12.5,
+
+    class _Session:                  # the note reads THROUGH the session
+        tl = None                    # (an engine process has its own
+                                     # interp module -- a GUI-side
+                                     # global write never lands there)
+        def last_solve(self):
+            return self.tl
+
+    win.controller = _Session()
+    win.controller.tl = {"backend": "bot", "wall_s": 12.5,
                          "fell_back": False}
     note = win._backend_note()
     assert "bot" in note and "12.5" in note
-    interp.LAST_SOLVE = {"backend": "qq", "wall_s": 1.0, "fell_back": True}
+    win.controller.tl = {"backend": "qq", "wall_s": 1.0, "fell_back": True}
     assert "fell back" in win._backend_note()
-    interp.LAST_SOLVE = None
+    win.controller.tl = None
     assert win._backend_note() == ""
 
 
@@ -1191,9 +1205,12 @@ def test_instance_and_net_trees(qapp, tmp_path):
         assert it.parent().text(0) == "I0"
         assert win.devices.device_name(it) == "I0.MN0"
 
-        # the OP glance arrives on first hover, cached on the item
+        # the OP glance arrives on first hover, cached on the item --
+        # bias and small-signal values only, no connectivity lines
+        # (field report: the terminal→net rows were noise)
         win.devices._hover(it, 0)
-        assert "gm" in it.toolTip(0) and "→" in it.toolTip(0)
+        assert "gm" in it.toolTip(0) and "vds" in it.toolTip(0)
+        assert "→" not in it.toolTip(0)
 
         # nets: vout exists, has connections, and wears the out arrow;
         # the input source's net wears the in arrow; ground is grayed
@@ -1396,11 +1413,11 @@ def test_log_tab_records_the_run(qapp, tmp_path):
         win._est_s = 4.0
         win._run_est = 4.0          # what _launch records
         win._t0 = _t.monotonic() - 8.0
-        win._set_phase("preparing")                      # silent: first phase
-        win._set_phase("evaluating", 5, 10)              # a TRANSITION logs
-        win._log_finish("DONE")
-        txt = win.logview.toPlainText()
-        assert "phase: preparing" not in txt
+        win._set_phase("preparing")      # the FIRST phase logs too
+        win._set_phase("evaluating", 5, 10)              # (field request:
+        win._log_finish("DONE")          # preparing only appeared post
+        txt = win.logview.toPlainText()  # mortem in the took-suffix)
+        assert "phase: preparing" in txt
         assert "phase: evaluating" in txt
         assert "DONE after 8" in txt and "2.0x" in txt   # vs the estimate
         assert txt.count("[") >= 2                       # timestamped lines
@@ -1509,7 +1526,6 @@ def test_strategy_dropdown_gates_the_reduction(qapp, tmp_path):
     own promise (plain: both budgets over the band; stability: phase
     around the crossover only; rejection: magnitude only), and the
     stability solve reports margins in the strip."""
-    import numpy as np
 
     from circuitinsight.gui.app import MainWindow
 
@@ -1551,7 +1567,6 @@ def test_strategy_dropdown_gates_the_reduction(qapp, tmp_path):
         fills = [a for a in win._tol_bands if hasattr(a, "get_paths")]
         if fills:                                # crossover in band
             verts = fills[0].get_paths()[0].vertices
-            f = np.asarray(win.result.freqs, dtype=float)
             span = verts[:, 0].max() / max(verts[:, 0].min(), 1e-30)
             assert span < 10.0, "stability tube hugs the crossover"
 
@@ -2022,6 +2037,80 @@ def test_declare_return_ratio_offers_the_current_transfer(qapp, monkeypatch):
         win.close()
 
 
+def test_op_point_selector_binds_the_session(qapp, tmp_path):
+    """A maestro corner tree opens as ONE session over its points: the
+    OP combo appears with the corner labels, switching rebinds the
+    controller, and the circuit key carries the point so a shown
+    result goes stale honestly. A single-psf run shows no combo."""
+    import shutil
+
+    from circuitinsight.gui.app import MainWindow
+
+    spectre = FIX.parent
+    root = tmp_path / "ExplorerRun.0"
+    for i, corner in ((1, "tt 27"), (2, "ss -40")):
+        psf = root / str(i) / "work_tb" / "psf"
+        shutil.copytree(spectre / "miller" / "psf_stb", psf)
+        (psf / "runObjFile").write_text(
+            f'HEADER\n"#maeCorner" "{corner}"\n'
+            f' "#maeDesignPoint" {i}\n')
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win.open_session(
+                str(spectre / "miller" / "tb_ota2s_stb.cin.json"),
+                str(root))
+        assert win._op_act.isVisible()
+        assert [win.op_combo.itemText(i)
+                for i in range(win.op_combo.count())] == ["tt 27",
+                                                          "ss -40"]
+        k1 = win._circuit_key()["op"]
+        win.op_combo.setCurrentIndex(1)
+        assert win.controller.session_snapshot()["op_index"] == 1
+        assert win._circuit_key()["op"] != k1
+        assert "ss -40" in win.strip_lbl.text() \
+            if hasattr(win, "strip_lbl") else True
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win.open_session(str(FIX / "tb_ota5t.cin.json"),
+                             str(FIX / "psf"))
+        assert not win._op_act.isVisible()
+    finally:
+        win.close()
+
+
+def test_reduce_prices_against_the_chosen_response(qapp, tmp_path):
+    """The Reduce bench's contract response is a choice: Transfer for
+    an ac bench, the Tian loop gain at the stb probe for a stability
+    bench. The selector threads the probe through the one contract
+    (_contract_kw), clears the other contract's prices on switch, and
+    refuses the loop choice when the run has no probe."""
+    from circuitinsight.gui.app import MainWindow
+
+    spectre = FIX.parent
+    MainWindow.settings_path = str(tmp_path / "s.ini")
+    win = MainWindow()
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win.open_session(
+                str(spectre / "miller" / "tb_ota2s_stb.cin.json"),
+                str(spectre / "miller" / "psf_stb"))
+        win.mode_combo.setCurrentText("Reduce circuit")
+        assert "loop_probe" not in win._contract_kw()   # default: transfer
+        win.acg_tbl.setRowCount(3)                      # stale prices
+        win.reduce_against.setCurrentIndex(1)
+        assert win._contract_kw()["loop_probe"] == "IPRB0"
+        assert win.acg_tbl.rowCount() == 0              # cleared on switch
+        win.reduce_against.setCurrentIndex(0)
+        assert "loop_probe" not in win._contract_kw()
+    finally:
+        win.close()
+
+
 def test_log_holds_the_stage_and_results_return(qapp, tmp_path):
     """A launch brings the Log tab forward (the narration lives
     there); a finished computation surfaces the tool's result tab --
@@ -2143,7 +2232,9 @@ def test_schematic_pane_draws_pages_and_cross_probes(qapp, tmp_path):
         win.open_session(str(FC / "tb_fc.cin.json"), str(FC / "psf"))
     st = win._sch_status.text()
     assert st.startswith("tb_ota_folded_cascode:"), st
-    assert "1 block(s)" in st
+    # the counts blurb is gone by request -- the label keeps only the
+    # analysis-state summary
+    assert "instances" not in st and "block(s)" not in st
     assert win.sch_view.bounds_of("I0") is not None
     # descend into the block
     win._schematic_activated("I0", "block")
@@ -2181,7 +2272,6 @@ def test_schematic_pane_draws_the_analysis_state(qapp, tmp_path,
     devices whose symbols are in the formula are emphasized; after an
     AC-ground reduction the grounded net is gray-dashed with an earth
     and a dead source fades; the toggle returns the plain drawing."""
-    from circuitinsight.gui import app as appmod
     from circuitinsight.gui.app import MainWindow
     from circuitinsight.gui.benches import schematic as schmod
 
@@ -2296,7 +2386,9 @@ def test_block_symbol_dialog_round_trip(qapp, tmp_path):
     side = json.loads((work / "tb_fc.symbols.json").read_text())
     assert side["cells"]["ota_folded_cascode"]["confirmed"] is True
     assert "ota_folded_cascode" in win._sch_blocks
-    assert "block(s)" in win._sch_status.text()
+    # the counts blurb is gone by request; the confirmed block shows by
+    # drawing (bounds exist), not by a header count
+    assert win.sch_view.bounds_of("I0") is not None
 
     class _Boxing(_Accepting):
         def __init__(self, *a, **k):
@@ -2438,7 +2530,7 @@ def test_schematic_tints_matched_devices_like_the_tree(qapp, tmp_path):
     in the Instances tree: a plate behind each member's symbol and a
     link badge after its name."""
     from circuitinsight.gui.app import MainWindow
-    from circuitinsight.gui.devtree import GROUP_TINTS
+    from circuitinsight.gui.theme import GROUP_TINTS
 
     FC = Path(__file__).resolve().parent / "fixtures" / "spectre" / "fc"
     MainWindow.settings_path = str(tmp_path / "s.ini")
@@ -2453,6 +2545,47 @@ def test_schematic_tints_matched_devices_like_the_tree(qapp, tmp_path):
     tints = win._schematic_tints()
     assert tints == {"PM12": (GROUP_TINTS[0], "🔗1"),
                      "PM13": (GROUP_TINTS[0], "🔗1")}
+    # the sensitivity map's wire gradients SURVIVE a scene rebuild:
+    # they are overlay items, and the matches toggle re-composes the
+    # page (field report: turning the tints off vanished them)
+    win._ml_light({"I0.PM12": 1.0, "I0.PM13": 0.4})
+    assert win.sch_view._hl_wires        # two contributors share a net
+    win._sch_match_chk.setChecked(False)
+    win._schematic_render()
+    assert win.sch_view._hl_wires        # re-applied after the rebuild
+    # ...and NAVIGATION is a rebuild too (field report: descending
+    # into the OTA lost them): up to the testbench the contributors
+    # collapse into the one block (no joining wires there), and the
+    # descent brings the gradients back
+    win._sch_path = win._sch_path[:1]
+    win._schematic_render()
+    assert not win.sch_view._hl_wires
+    win._schematic_activated("I0", "block")
+    assert win.sch_view._hl_wires
+    win._ml_light({})
+    assert not win.sch_view._hl_wires
+    # the gradient covers only the JOINING run: a T-shaped net whose
+    # branch leads to a bystander keeps that branch unlit
+    from circuitinsight.gui.benches.schematic import SchematicView
+    polys = [[(0.0, 0.0), (5.0, 0.0), (10.0, 0.0)],
+             [(5.0, 0.0), (5.0, 5.0)]]
+    segs = SchematicView._net_join_segments(
+        polys, [(0.0, 0.1), (10.0, 0.1)])
+    flat_pts = {pt for seg in segs for pt in seg}
+    assert (5.0, 5.0) not in flat_pts        # the branch tip stays out
+    assert (0.0, 0.0) in flat_pts and (10.0, 0.0) in flat_pts
+    # a branch attaching MID-SEGMENT (the junction-dot case) must not
+    # disconnect the graph: the through-segment splits at the
+    # junction, and the joining run is CONTINUOUS through it (field
+    # report: gaps between top-level contributors)
+    polys2 = [[(0.0, 0.0), (10.0, 0.0)],       # one long bar
+              [(5.0, 0.0), (5.0, 5.0)]]        # branch taps its middle
+    segs2 = SchematicView._net_join_segments(
+        polys2, [(0.0, 0.1), (5.0, 4.9)])
+    pts2 = {pt for seg in segs2 for pt in seg}
+    assert (0.0, 0.0) in pts2 and (5.0, 5.0) in pts2
+    assert (5.0, 0.0) in pts2                  # split at the junction
+    assert (10.0, 0.0) not in pts2             # the far bar stays out
     win.close()
 
 
@@ -2758,11 +2891,12 @@ def test_removal_scan_fills_a_tick_table_and_apply_deletes(qapp):
         win.close()
 
 
-def test_impedance_port_from_trees_says_user_selected(qapp):
-    """A tree-picked impedance spec -- one net, two nets, or 'seen by'
-    a two-terminal instance -- switches to the Impedance tool, solves,
-    and the port dropdown reads 'user selected' instead of claiming a
-    marker port it is not using; picking a real marker clears it."""
+def test_impedance_target_label_and_solve_on_demand(qapp):
+    """The Impedance tool has NO port dropdown: a tree- or wire-picked
+    target -- one net, two nets, or 'seen by' a two-terminal
+    instance -- switches to the tool, the toolbar LABEL says what
+    Solve will compute, the ranking re-ranks immediately, and the
+    impedance itself is computed only when Solve is pressed."""
     from circuitinsight.gui.app import MainWindow
 
     win = MainWindow()
@@ -2773,31 +2907,51 @@ def test_impedance_port_from_trees_says_user_selected(qapp):
         win.in_combo.setCurrentText("VIND")
         win.out_combo.setCurrentText("vout")
     try:
-        # the keep ranking follows the response: entering the tool
-        # with a target re-ranks for Z (the transfer ranking comes
-        # back on the way out)
+        # the keep ranking follows the response: choosing a target
+        # re-ranks for Z (the transfer ranking comes back on the way
+        # out); choosing NEVER solves
         assert _wait_bg(qapp, lambda: win.keep_tbl.rowCount() > 0,
                         timeout=60)
-        tr_top = win.keep_tbl.item(0, 0).text()
+        launched = []
+        real_launch = win._launch
+        win._launch = lambda fn, *a, **k: launched.append(a)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             win._impedance_at_nets("vout", "")
         assert win.mode_combo.currentText() == "Impedance"
-        assert win.probe_combo.currentText() == "user selected"
         assert win._imp_spec == {"node": "vout"}
+        # the label is the target's surface; the probe combo is
+        # loop-gain vocabulary and stays hidden here
+        assert win.imp_target_lbl.text() == "from node vout to gnd"
+        assert win._imp_target_act.isVisible()
+        assert not win._probe_act.isVisible()
+        assert launched == []                  # a selection is not a command
+        assert "Solve to compute" in win.statusBar().currentMessage()
         assert _wait_bg(qapp, lambda: win.keep_tbl.rowCount() > 0,
                         timeout=60)
         z_top = win.keep_tbl.item(0, 0).text()
+        # the GUI ranks over the band the plot shows (the slider),
+        # so the reference ranking carries the same bound
+        lo, hi = win.band_slider.values()
         assert z_top == [n for n, _, _ in
                          win.controller.rank_symbols_z(
-                             {"node": "vout"})][0]
+                             {"node": "vout"}, fmin=lo, fmax=hi)][0]
+        # Solve computes THE TARGET
+        win._launch = real_launch
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win.solve()
         assert _wait_bg(qapp, lambda: win.result is not None
                         and win.result.out == "Z(vout)", timeout=60)
-        # seen-by, via the Instances-tree signal
+        # seen-by, via the Instances-tree signal: target only, then
+        # Solve
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             win._impedance_seen_by("CL")
-        assert win.probe_combo.currentText() == "user selected"
+        assert win.imp_target_lbl.text() == "seen by CL"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win.solve()
         assert _wait_bg(qapp, lambda: win.result is not None
                         and win.result.out == "Z seen by CL", timeout=60)
         # the Instances tree offers the verb only on two-terminal
@@ -2806,20 +2960,47 @@ def test_impedance_port_from_trees_says_user_selected(qapp):
         assert it is not None
         assert len(dict.fromkeys(
             (win.devices.info(it).get("terminals") or {}).values())) == 2
-        # picking a real marker port clears the user spec and the
-        # sentinel entry
-        win.probe_combo.setCurrentText("VIND")
-        assert win._imp_spec is None
-        assert win.probe_combo.findText("user selected") < 0
         # merely SELECTING a net in the tool chooses the target and
         # re-ranks -- with NO solve until Solve (field request)
         launched = []
         win._launch = lambda fn, *a, **k: launched.append(a)
         win.nets_tree.setCurrentItem(win.nets_tree.item_for("vin_p"))
         assert win._imp_spec == {"node": "vin_p"}
-        assert win.probe_combo.currentText() == "user selected"
+        assert win.imp_target_lbl.text() == "from node vin_p to gnd"
         assert launched == []                  # nothing solved
         assert "Solve to compute" in win.statusBar().currentMessage()
+        # the flow crumb carries the tool's own step, checked once a
+        # target is set; its link fronts the Nets tree
+        steps = win._crumb_steps()
+        assert [s[0] for s in steps] == ["Open", "Match", "Set target",
+                                         "Choose symbols", "Solve"]
+        assert steps[2][2]                     # target chosen: done
+        win._on_crumb_clicked("ztarget")
+        assert win.dev_tabs.currentWidget() is win.nets_tree
+        win._imp_spec = None
+        assert not win._crumb_steps()[2][2]
+        win.mode_combo.setCurrentText("Transfer")
+        assert [s[0] for s in win._crumb_steps()] == [
+            "Open", "Match", "Choose symbols", "Solve"]
+        # a target BETWEEN TWO INTERNAL NETS cannot rank as Z: the
+        # transfer fallback now says so (field case: it showed
+        # silently under the Impedance toolbar and was misread as
+        # Z's contributors, twice)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win._impedance_user_spec({"node": "I0.net1", "ref": "vout"},
+                                     solve=False)
+        assert _wait_bg(qapp, lambda: win.keep_tbl.rowCount() > 0,
+                        timeout=60)
+        assert "TRANSFER" in win.statusBar().currentMessage()
+        # the ranking follows the band: a settled band drag re-ranks
+        # (the slider parameterizes the scores), debounced through
+        # _rank_band_timer -> _rerank_on_band
+        win.keep_tbl.setRowCount(0)
+        win._rerank_on_band()
+        assert _wait_bg(qapp, lambda: win.keep_tbl.rowCount() > 0,
+                        timeout=60)
+        assert win._rank_band_timer.isSingleShot()
     finally:
         win.close()
 
@@ -2905,30 +3086,31 @@ def test_schematic_highlights_a_selected_net(qapp, tmp_path):
         labels = [l for l, _ in
                   win._schematic_net_actions("I0.net8", "net8")]
         assert labels == ["Set as output", "AC ground (measure cost)…",
-                          "Impedance at net8"]
+                          "Set as impedance target (net8 to gnd)"]
         assert win._schematic_net_actions("gnd!", "gnd!") == []
-        # the impedance verb routes to the user-selected spec flow
-        # (the launcher is stubbed: the wiring is the point, not a
-        # minute of Z(net8) on fc)
+        # the target verb sets the spec and the toolbar label -- it
+        # never solves (the launcher is stubbed to prove it)
         launched = []
         win._launch = lambda *a, **k: launched.append(a)
         dict(win._schematic_net_actions("I0.net8", "net8"))[
-            "Impedance at net8"]()
-        assert launched
+            "Set as impedance target (net8 to gnd)"]()
+        assert launched == []
         assert win._imp_spec == {"node": "I0.net8"}
-        assert win.probe_combo.currentText() == "user selected"
+        assert win.imp_target_lbl.text() == "from node I0.net8 to gnd"
         # a net selected beforehand adds the two-net verb: Z between
         # the pair (click one wire, right-click the other)
         acts = dict(win._schematic_net_actions("I0.net8", "net8",
                                                others=["vout"]))
-        assert "Impedance between net8 and vout" in acts
-        acts["Impedance between net8 and vout"]()
+        two = "Set as impedance target (between net8 and vout)"
+        assert two in acts
+        acts[two]()
         assert win._imp_spec == {"node": "I0.net8", "ref": "vout"}
+        assert win.imp_target_lbl.text() == \
+            "between nodes I0.net8 and vout"
         # ground never joins a pair
         labels = [l for l, _ in win._schematic_net_actions(
             "I0.net8", "net8", others=["gnd!"])]
-        assert not any(l.startswith("Impedance between")
-                       for l in labels)
+        assert not any("between" in l for l in labels)
         # the middle button pans; the left button never does (it is
         # selection only -- a left-drag pan stole moving clicks)
         from PySide6.QtCore import QPointF, Qt as _Qt
@@ -2955,6 +3137,22 @@ def test_schematic_highlights_a_selected_net(qapp, tmp_path):
         sv.mouseReleaseEvent(rel)
         assert hb.value() == v0 - 40
         assert sv._pan_from is None
+        # pan headroom: the scene rect carries a page on every side,
+        # so the scroll range never collapses -- the pan keeps working
+        # even when the WHOLE schematic fits in the viewport
+        sv.fit()
+        br = sv._item.boundingRect()
+        assert sv._scene.sceneRect().width() >= 2.5 * br.width()
+        assert hb.maximum() > hb.minimum()
+        # the "f" key snaps back to the fitted view
+        fitted = sv.transform().m11()
+        sv.scale(4, 4)
+        assert abs(sv.transform().m11() - fitted) > 1e-9
+        from PySide6.QtCore import QEvent
+        from PySide6.QtGui import QKeyEvent
+        sv.keyPressEvent(QKeyEvent(QEvent.KeyPress, _Qt.Key_F,
+                                   _Qt.NoModifier))
+        assert abs(sv.transform().m11() - fitted) < 1e-9
     finally:
         win.close()
 
@@ -3165,3 +3363,76 @@ def test_first_light_stays_off_screen_outside_transfer(qapp, tmp_path):
         assert win.result.out == "vout"
     finally:
         win.close()
+
+
+def test_engine_death_offers_restart_and_replays(qapp, monkeypatch):
+    """Plan E-H: an uninvited engine death -- noticed idle or via a
+    failed worker -- puts up ONE dialog; Yes runs the same respawn-and-
+    replay as the hard cancel, No leaves the results readable with a
+    warning strip."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from circuitinsight.gui.app import MainWindow
+
+    win = MainWindow()
+
+    class _Engine:
+        restarted = 0
+
+        def engine_alive(self):
+            return False
+
+        def engine_restart(self):
+            self.restarted += 1
+
+    win.controller = _Engine()
+    win._engine_log = "no-such-file.log"
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **k: QMessageBox.Yes))
+    win._tail_engine_log()
+    assert win.controller.restarted == 1
+    assert not win._engine_down_handled     # recovered: armed again
+
+    # declining leaves the strip warning and does NOT restart
+    monkeypatch.setattr(QMessageBox, "question",
+                        staticmethod(lambda *a, **k: QMessageBox.No))
+    win._tail_engine_log()
+    assert win.controller.restarted == 1
+    assert win._engine_down_handled         # handled: no dialog storm
+    win._tail_engine_log()                  # timer fires again: silent
+    assert win.controller.restarted == 1
+    win.close()
+
+
+def test_an_advisory_phase_does_not_quote_the_solve_estimate(qapp):
+    """The keep-set label prices the SOLVE the ticks describe. A margin
+    ledger, a suggestion, a what-if is a different computation, and
+    _launch leaves it deliberately unpriced -- the START line says so.
+    The phase lines must not then quote the solve's number on the very
+    next line, which is what a field reader caught: a ledger promising
+    the exact solve's 321 s."""
+    from circuitinsight.gui.app import MainWindow
+
+    w = MainWindow()
+    type(w).settings_path = None
+    try:
+        w._est_s = 321.0                # the ticked keep-set estimate
+        w._run_est = None               # this pass is unpriced
+        w._live_est = None
+        w._t0 = time.monotonic()
+        w._phase, w._phase_t0 = None, None
+        w._phase_totals, w._phase_runs = {}, {}
+        w.logview.clear()
+        w._set_phase("preparing")
+        line = w.logview.toPlainText()
+        assert "preparing" in line
+        assert "321" not in line, line
+        assert "est ~" not in line, line
+        # a pass that IS priced still says so
+        w._phase = None
+        w._run_est = 12.0
+        w.logview.clear()
+        w._set_phase("preparing")
+        assert "est ~12s" in w.logview.toPlainText()
+    finally:
+        w.close()

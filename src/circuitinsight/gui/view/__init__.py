@@ -49,17 +49,20 @@ from .simplify import (  # noqa: F401
 )
 from .figures import (  # noqa: F401
     _OVERLAY_COLORS,
+    FIGPAL,
     _annotate_margins,
     _fig_b64,
     _legend_anchor_y,
     _pole_zero_ticks,
     bode_figure,
+    set_fig_theme,
     error_figure,
     expr_figure,
     fidelity,
     figure_legend,
     reference_figure,
     refresh_legend,
+    relayout,
     whatif_fn,
 )
 from .report import (  # noqa: F401

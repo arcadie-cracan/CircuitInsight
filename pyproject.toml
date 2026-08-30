@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "circuitinsight"
-version = "0.3.0"
+version = "0.5.0"
 description = "Symbolic small-signal circuit analyzer driven by simulator operating-point data"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -35,8 +35,6 @@ dependencies = ["sympy>=1.12", "numpy>=1.26", "gmpy2>=2.1",
 dev = ["pytest", "jsonschema"]
 gui = ["PySide6>=6.6", "matplotlib>=3.7"]
 notebook = ["ipywidgets>=8", "matplotlib>=3.7"]
-# optional Virtuoso coupling (M10 cross-probe); the base app needs no Cadence
-virtuoso = ["skillbridge>=1.4"]
 
 [project.scripts]
 circuitinsight-gui = "circuitinsight.gui.launch:main"
@@ -56,3 +54,23 @@ exclude = ["src/circuitinsight/symbols/.git*",
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 79
+extend-exclude = ["src/circuitinsight/symbols"]   # a separate repo
+
+[tool.ruff.lint]
+# The gate is REAL errors only -- undefined names, unused imports and
+# locals, syntax. Style is not policed here: this codebase carries
+# deliberate long comment blocks, and a formatter war would bury the
+# findings that matter.
+select = ["F", "E9"]
+
+[tool.ruff.lint.per-file-ignores]
+# theme.py injects its palette names with globals().update(pal), so
+# every colour reads as undefined to a static pass. The pattern is
+# deliberate and predates this gate.
+"src/circuitinsight/gui/theme.py" = ["F821"]
+# a string return annotation under `from __future__ import
+# annotations`: never evaluated, and numpy is imported in the body
+"src/circuitinsight/analyzer.py" = ["F821"]

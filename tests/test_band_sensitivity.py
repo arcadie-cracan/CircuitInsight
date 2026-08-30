@@ -37,6 +37,53 @@ def test_pole_detected_and_ranking_symmetric():
     assert scores["R"] == pytest.approx(scores["C"], rel=0.05)
 
 
+# the diode_bias field case, in passives: block A (the port's own
+# RC at `smpl`) and block B (an RLC tank at `b`) share only the
+# supply rail vdd! -- held by the ideal VSUP, so AC ground -- and
+# actual ground. Block B's resonance is a FEATURE of the whole-matrix
+# pencil, but its parameters cannot move Z(smpl) at all.
+TWOBLOCK = {
+    "cin_version": "0.1",
+    "design": {"name": "twoblock", "source": {"kind": "hand"}},
+    "top": "m", "ground": ["0"], "globals": ["vdd!"],
+    "definitions": {"m": {"ports": [], "instances": [
+        {"name": "VSUP", "device_type": "vsource",
+         "terminals": {"p": "vdd!", "n": "0"}},
+        {"name": "I0", "device_type": "isource",
+         "terminals": {"p": "vdd!", "n": "smpl"}},
+        {"name": "Ra", "device_type": "resistor",
+         "terminals": {"p": "smpl", "n": "0"}, "params": {"r": "50k"}},
+        {"name": "Ca", "device_type": "capacitor",
+         "terminals": {"p": "smpl", "n": "0"}, "params": {"c": "5f"}},
+        {"name": "Rb", "device_type": "resistor",
+         "terminals": {"p": "vdd!", "n": "b"}, "params": {"r": "10k"}},
+        {"name": "Lb", "device_type": "inductor",
+         "terminals": {"p": "b", "n": "bl"}, "params": {"l": "10u"}},
+        {"name": "Cb", "device_type": "capacitor",
+         "terminals": {"p": "bl", "n": "0"}, "params": {"c": "8p"}}],
+    }},
+}
+
+
+def test_decoupled_block_scores_zero_and_the_band_is_sampled():
+    """The diode_bias field case: with the port's branch and an RLC
+    block sharing only AC-ground rails, the block's parameters score
+    EXACTLY zero on Z at the port -- and with the band given, the
+    low-frequency plateau is sampled, so the port's own R tops the
+    ranking with its |Z|*S ~ Z0 score (unbanded, the sampler spanned
+    only the clustered features and the plateau was invisible)."""
+    an = Analyzer.from_cin(TWOBLOCK)
+    # the rail-hung parallel port resolves ground-referenced now
+    assert an._port_nets("I0") == ("smpl", None, False)
+    bs = an.band_sensitivities("I0", "smpl", fmin=1e3, fmax=1e9)
+    scores = dict(bs.ranking)
+    assert scores["Rb"] == 0 and scores["Lb"] == 0 and scores["Cb"] == 0
+    assert bs.ranking[0][0] == "Ra"
+    # the plateau is in the sample set: Ra's score is |Z0|-scale
+    assert scores["Ra"] == pytest.approx(50e3, rel=0.1)
+    assert bs.freqs.min() <= 1.1e3
+
+
 def test_metric_option_validated_and_selectable():
     an = Analyzer.from_cin(RC)
     with pytest.raises(ValueError, match="metric"):

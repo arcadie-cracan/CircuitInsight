@@ -2,9 +2,6 @@
 memoized expression lines, KaTeX and clipboard LaTeX. Depends on
 format only."""
 from __future__ import annotations
-import warnings
-from ...keep import is_all
-import numpy as np
 from ...units import eng  # noqa: E402,F401  (re-exported: view.eng)
 from .format import SIG, _wrapped_product, latex_eng, op_unit
 
@@ -253,6 +250,29 @@ def prepare_display(result, base: bool = True, wrap: bool = False,
     except Exception:
         pass
 
+# head symbol, transfer label, SI unit and dB unit per quantity class
+# (Result.qty): the common IEEE/textbook vocabulary -- A_V voltage
+# gain, A_I current gain, transimpedance Z [ohm], transadmittance
+# Y [S], loop gain T
+_QTY_FORM = {
+    "AV": (r"A_{V0}", "H(s) = ", "", "dB"),
+    "AI": (r"A_{I0}", "H(s) = ", "", "dB"),
+    "Z": ("Z_0", "Z(s) = ", "Ω", r"dB\Omega"),
+    "Y": ("Y_0", "Y(s) = ", "S", "dBS"),
+    "T": ("T_0", "T(s) = ", "", "dB"),
+}
+
+
+def _result_qty(result) -> str:
+    """The Result's quantity class, with the pre-qty fallback (an old
+    pickled result): an impedance out is 'Z', anything else 'AV'."""
+    q = getattr(result, "qty", None)
+    if q in _QTY_FORM:
+        return q
+    return ("Z" if str(getattr(result, "out", "") or "").startswith("Z")
+            else "AV")
+
+
 def _expr_lines(result, base: bool = True, wrap: bool = False,
                 aliases: dict | None = None):
     """(label, latex) pairs — the readable form, not the raw expression.
@@ -267,7 +287,6 @@ def _expr_lines(result, base: bool = True, wrap: bool = False,
     flags, same lines) and expensive, and the worker pre-warms it so
     the GUI-thread call after a solve is a dictionary lookup.
     """
-    import sympy as sp
 
     key = (base, wrap, tuple(sorted((aliases or {}).items())))
     cache = getattr(result, "_expr_lines_cache", None)
@@ -286,25 +305,24 @@ def _expr_lines(result, base: bool = True, wrap: bool = False,
         return lines
 
     a0 = result.dc_gain.real if hasattr(result.dc_gain, "real") else result.dc_gain
-    # an impedance result (out = "Z(...)"/"Z seen by ...") is DIMENSIONED:
-    # its DC value is Z_0 in ohms with an SI multiple, not a gain A_0
-    # (field report: 'A_0 = 6.281e+04 (95.96 dB)' for Z at a bias net)
-    is_z = str(getattr(result, "out", "") or "").startswith("Z")
-    if is_z:
-        from ...units import eng as _eng
+    # the ratio's QUANTITY picks the symbol and unit (field report:
+    # 'A_0 = 5.008e+04 (93.99 dB)' for a current-driven output voltage
+    # -- that is a transimpedance, Z_0 in ohms): v/v A_{V0}, i/i
+    # A_{I0}, v/i Z_0 [ohm], i/v Y_0 [S], loop gain T_0; and the DC
+    # value prints in engineering notation like every other numeral
+    head, hs, unit, dbu = _QTY_FORM.get(_result_qty(result),
+                                        _QTY_FORM["AV"])
+    from ...units import eng as _eng
 
-        raw = _eng(abs(float(a0)), "Ω", sig=4)
-        num_s, _, unit_s = raw.rpartition("\u2009")
-        if not num_s:
-            num_s, unit_s = raw, ""
-        unit_l = (r"\,\mathrm{" + unit_s.replace("Ω", r"\Omega") + "}"
-                  if unit_s else "")
-        sign = "-" if float(a0) < 0 else ""
-        numeric_a0 = (rf"{sign}{num_s}{unit_l}\quad"
-                      rf"({result.dc_gain_db:.2f}\,\mathrm{{dB\Omega}})")
-    else:
-        numeric_a0 = (rf"{float(a0):.4g}\quad({result.dc_gain_db:.2f}\,"
-                      rf"\mathrm{{dB}})")
+    raw = _eng(abs(float(a0)), unit, sig=4)
+    num_s, _, unit_s = raw.rpartition("\u2009")
+    if not num_s:
+        num_s, unit_s = raw, ""
+    unit_l = (r"\,\mathrm{" + unit_s.replace("Ω", r"\Omega") + "}"
+              if unit_s else "")
+    sign = "-" if float(a0) < 0 else ""
+    numeric_a0 = (rf"{sign}{num_s}{unit_l}\quad"
+                  rf"({result.dc_gain_db:.2f}\,\mathrm{{{dbu}}})")
     if wrap:
         numeric_a0 = rf"\htmlData{{num=A0}}{{{numeric_a0}}}"
 
@@ -321,7 +339,6 @@ def _expr_lines(result, base: bool = True, wrap: bool = False,
     except Exception:
         a0_sym = None
 
-    head = "Z_0" if is_z else "A_0"
     if a0_sym:
         lines.append((f"{head} = ", a0_sym))
         lines.append(("", rf"= {numeric_a0}"))
@@ -335,7 +352,6 @@ def _expr_lines(result, base: bool = True, wrap: bool = False,
     # numeric-root factored corners instead.
     raw = _raw_tf_lines(result, base=base, wrap=wrap, aliases=aliases)
     poles, zeros = list(result.poles_hz), list(result.zeros_hz)
-    hs = "Z(s) = " if is_z else "H(s) = "
     if raw:
         lines.append((hs, r"\dfrac{N(s)}{D(s)}"))
         lines += raw
@@ -348,12 +364,17 @@ def _expr_lines(result, base: bool = True, wrap: bool = False,
     # root of a first-order edge is -a0/a1, so p1,z1 = -edge: an LHP pole comes out
     # negative and an RHP zero positive, matching the factored corners and
     # _fmt_root. Left in rad/s -- angular frequency is the natural home of an
-    # s-plane root and drops the 1/2pi clutter. Shown on ANY solve, not only after
-    # Simplify -- that is where a kept capacitance finally reads as a letter.
+    # s-plane root and drops the 1/2pi clutter. SIMPLIFIED forms only
+    # (user decision 2026-08-29): there a0/a1 is the compact textbook
+    # formula where a kept capacitance reads as a letter; on the EXACT
+    # solve the same ratio is a wall of coefficient terms -- symbolic-
+    # looking noise below an already-complete factored form.
     tf = result.tf
     shown_symbolic = False
-    for label, poly in ((r"p_1 = ", _num_den(tf)[1]),
-                        (r"z_1 = ", _num_den(tf)[0])):
+    edge_pairs = (((r"p_1 = ", _num_den(tf)[1]),
+                   (r"z_1 = ", _num_den(tf)[0]))
+                  if getattr(result, "simplified", False) else ())
+    for label, poly in edge_pairs:
         edge = _edge_ratio(poly)
         if edge is None:
             continue

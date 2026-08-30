@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, QTimer, Signal
 
 from . import exprweb, view
 
@@ -47,17 +47,22 @@ class _Worker(QThread):
     progress = Signal(int, int)          # (done, total) grid points
     note = Signal(str)                   # worker-side narration -> Log
 
-    def __init__(self, fn):
+    def __init__(self, fn, raise_on_cancel: bool = True):
         super().__init__()
         self._fn = fn
         self._cancel = False
+        #: engine-process mode clears this: raising out of the progress
+        #: callback would abandon the lane mid-call and orphan the
+        #: engine's remaining frames -- there the ENGINE cancels and
+        #: closes the call with its own error frame instead
+        self._raise_on_cancel = raise_on_cancel
 
     def cancel(self):
         self._cancel = True
 
     def run(self):
         def cb(done, total):
-            if self._cancel:
+            if self._cancel and self._raise_on_cancel:
                 raise _Cancelled
             self.progress.emit(done, total)
 
@@ -66,7 +71,22 @@ class _Worker(QThread):
         except _Cancelled:
             self.cancelled.emit()
         except Exception as exc:
-            self.failed.emit(f"{type(exc).__name__}: {exc}")
+            if self._is_remote_cancel(exc):
+                self.cancelled.emit()
+            else:
+                self.failed.emit(f"{type(exc).__name__}: {exc}")
+
+    def _is_remote_cancel(self, exc) -> bool:
+        """An engine-side cancellation, or the engine dying while a
+        cancel was pending (the hard path terminates it)."""
+        try:
+            from ..engine.proxy import EngineDied, EngineError
+        except Exception:                        # pragma: no cover
+            return False
+        if isinstance(exc, EngineDied):
+            return self._cancel
+        return (isinstance(exc, EngineError)
+                and getattr(exc, "remote_type", "") == "EngineCancelled")
 
 
 class JobRunnerMixin:
@@ -74,13 +94,50 @@ class JobRunnerMixin:
     _KEEP_EST = object()
 
     def _cancel_solve(self):
-        if self._thread is not None:
+        if self._thread is None:
+            return
+        remote = hasattr(self.controller, "engine_cancel")
+        if not remote:
             self._thread.cancel()
             self.cancel_btn.setEnabled(False)
             self.progress.setFormat("cancelling…")
+            return
+        if getattr(self, "_cancel_pending", False):
+            self._hard_cancel()               # second press forces it
+            return
+        # soft first: the engine abandons the call at its next progress
+        # checkpoint; a direct-determinant solve has none, so escalate
+        self._cancel_pending = True
+        self._thread.cancel()
+        try:
+            self.controller.engine_cancel("solve")
+        except Exception:                        # noqa: BLE001
+            pass
+        self.progress.setFormat("cancelling… (press again to force)")
+        QTimer.singleShot(8000, self._cancel_escalate)
+
+    def _cancel_escalate(self):
+        if (getattr(self, "_cancel_pending", False)
+                and self._thread is not None and self._thread.isRunning()):
+            self._hard_cancel()
+
+    def _hard_cancel(self):
+        """Terminate the engine and bring up a fresh one with the
+        session state replayed -- the ONLY way to stop a solver that
+        holds no checkpoint (a direct-determinant pass). The blocked
+        worker wakes with EngineDied and lands on the cancelled path."""
+        self._cancel_pending = False
+        self.cancel_btn.setEnabled(False)
+        self.log("cancel: restarting the engine (the running solver "
+                 "holds no checkpoint)")
+        try:
+            self.controller.engine_restart()
+            self.log("engine restarted; session state replayed")
+        except Exception as exc:                 # noqa: BLE001
+            self.log(f"engine restart failed: {exc}")
 
     def _launch(self, fn, label, on_done=None, est_s=_KEEP_EST,
-                growth_reason=None):
+                growth_reason=None, verdict="DONE"):
         for b in (self.solve_btn,
                   self.a_solve, self.a_simplify, self.a_reduce):
             b.setEnabled(False)
@@ -89,6 +146,15 @@ class JobRunnerMixin:
         self._live_est = None             # fresh launch, fresh refinement
         self._growth_reason = growth_reason
         self._t0 = time.monotonic()
+        # the solve telemetry as of the launch: the closing line names
+        # a backend only when THIS job actually solved something --
+        # a ledger's line wore the previous first light's [qq-s] badge
+        try:
+            self._launch_last_solve = (
+                self.controller.last_solve()
+                if self.controller is not None else None)
+        except Exception:                        # noqa: BLE001
+            self._launch_last_solve = None
         # an advisory pass is NOT priced by the keep-set estimator; it
         # used to inherit the solve's number and log a promise that
         # belonged to a different analysis entirely
@@ -113,6 +179,11 @@ class JobRunnerMixin:
         base = not self.fullnames_chk.isChecked()
         wrap = bool(getattr(exprweb, "WEBENGINE", False))
         aliases = dict(getattr(self.controller, "sym_aliases", {}) or {})
+        # engine-process mode: the engine warms these caches BEFORE the
+        # Result pickles (plan E-D) -- tell it the current flags; the
+        # local prepare below then finds the cache warm and no-ops
+        if hasattr(self.controller, "set_display_prefs"):
+            self.controller.set_display_prefs(base=base, wrap=wrap)
 
         def _prepped(cb, _fn=fn):
             res = _fn(cb)
@@ -120,10 +191,23 @@ class JobRunnerMixin:
                                  aliases=aliases)
             return res
 
-        self._thread = _Worker(_prepped)
+        self._cancel_pending = False
+        self._thread = _Worker(
+            _prepped,
+            raise_on_cancel=not hasattr(self.controller, "engine_cancel"))
         self._track(self._thread)
         self._thread.progress.connect(self._on_progress)
-        self._thread.done.connect(on_done or self._on_done)
+
+        # EVERY successful job gets its closing Log line (duration,
+        # estimate accuracy, backend) here, centrally -- the bench
+        # handlers each cleared the clock without logging, so a margin
+        # ledger or eigenloci run started loudly and ended in silence
+        def _done_logged(payload, _cb=(on_done or self._on_done)):
+            if self._t0 is not None:
+                self._log_finish(verdict)
+            _cb(payload)
+
+        self._thread.done.connect(_done_logged)
         self._thread.failed.connect(self._on_failed)
         self._thread.cancelled.connect(self._on_cancelled)
         # worker-side narration (pursuit rounds and the like) lands in
@@ -258,12 +342,20 @@ class JobRunnerMixin:
             self._phase = phase
             self._phase_units = (done, total)
             el = (time.monotonic() - self._t0) if self._t0 else 0.0
-            est = self._live_est or self._est_s
+            # _run_est, NOT _est_s: the keep-set label prices the SOLVE
+            # the ticks describe, and an advisory pass -- a margin
+            # ledger, a suggestion, a what-if -- is a different
+            # computation that _launch deliberately left unpriced. The
+            # START line already said so; quoting the solve's number on
+            # the very next line contradicted it (field question: the
+            # ledger's "preparing" promised the exact solve's 321 s)
+            est = self._live_est or self._run_est
             tail = f", est ~{est:.0f}s" if est else ""
             took = f" [{prev} took {dur:.1f}s]" if prev and dur else ""
-            # the first phase of a run starts at 0 s by definition; only
-            # transitions carry information
-            if prev:
+            # the FIRST phase logs too (field question: "why no
+            # preparing line?" -- it only appeared post mortem in the
+            # first transition's [took] suffix)
+            if phase:
                 self.log(f"  phase: {phase} (at {el:.0f}s{tail}){took}")
             if phase == "reconstructing" and prev == "evaluating" and dur:
                 # reconstruction is the DOMINANT phase (measured 90% of a
@@ -292,8 +384,10 @@ class JobRunnerMixin:
         if not tot:
             return ""
         parts = []
-        for name, secs in sorted(self._phase_totals.items(),
-                                 key=lambda kv: -kv[1]):
+        # CHRONOLOGICAL (dict insertion = first occurrence): sorted
+        # by size, 'reconstructing' led the line and read as if a
+        # phase ran after DONE (field question)
+        for name, secs in self._phase_totals.items():
             runs = self._phase_runs.get(name, 1)
             again = f", x{runs}" if runs > 1 else ""
             parts.append(f"{name} {secs:.1f}s ({secs / tot:.0%}{again})")
@@ -386,12 +480,19 @@ class JobRunnerMixin:
         if est:
             acc = f" (estimate ~{est:.0f}s, {el / est:.1f}x)"
         self._close_phase()                      # bank the final phase
-        self.log(f"{verdict} after {el:.1f}s{acc}"
-                 f"{self._backend_note()}")
+        note = self._backend_note()
+        try:
+            tl_now = (self.controller.last_solve()
+                      if self.controller is not None else None)
+        except Exception:                        # noqa: BLE001
+            tl_now = None
+        if tl_now == getattr(self, "_launch_last_solve", None):
+            note = ""            # this job solved nothing: the badge
+                                 # would describe an EARLIER solve
+        self.log(f"{verdict} after {el:.1f}s{acc}{note}")
         bd = self._phase_breakdown()
-        # a breakdown of one phase says nothing the line above did not;
-        # a quick run needs no breakdown at all
-        if bd and (len(self._phase_totals) > 1 or el > 2.0):
+        # a breakdown of one phase says nothing the line above did not
+        if bd and len(self._phase_totals) > 1:
             self.log(f"  phases: {bd}")
 
     # ----------------------------------------------- solve-time learning
@@ -446,8 +547,8 @@ class JobRunnerMixin:
 
     def _solve_key(self) -> str:
         try:
-            from ..engine import interp
-            tl = getattr(interp, "LAST_SOLVE", None) or {}
+            tl = (self.controller.last_solve()
+                  if self.controller is not None else None) or {}
         except Exception:                        # pragma: no cover
             return "parallel"
         if tl.get("backend") == "bot":
@@ -479,21 +580,21 @@ class JobRunnerMixin:
             return
         actual = time.monotonic() - self._t0
         try:
-            from ..analysis import estimate as _est
-            from ..engine import interp
-
-            tl = getattr(interp, "LAST_SOLVE", None) or {}
+            if self.controller is None:
+                return
+            tl = self.controller.last_solve() or {}
             bk = tl.get("backend")
             # learn on the key that PRICED this solve: the sparse path
             # has its own cost model, so mixing its samples into the
-            # dense correction taught both the wrong thing
+            # dense correction taught both the wrong thing. The lesson
+            # lands in the SESSION -- the same residence that prices
+            # the estimates, whichever process that is.
             key = "bot" if bk == "bot" else (
                 "parallel" if tl.get("n_dense_dets", 0) else "serial")
-            _est.observe(self._run_est, actual, parallel=(key != "serial"),
-                         key=key)
             ev = self._phase_totals.get("evaluating", 0.0)
             rc = self._phase_totals.get("reconstructing", 0.0)
-            if ev > 0 and rc > 0:
-                _est.observe_phases(ev, rc, key=key)
+            self.controller.observe_solve(self._run_est, actual, key,
+                                          eval_s=ev or None,
+                                          recon_s=rc or None)
         except Exception:
             pass                                # never break a finished solve

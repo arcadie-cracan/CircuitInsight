@@ -283,12 +283,34 @@
       (setq CInDefsBody (cons (list defName lines) CInDefsBody)))
     defName))
 
+(procedure (CInDeactivatedP inst)
+  "A Virtuoso-deactivated instance (the red X; Edit > Deactivate sets
+the built-in nlAction=ignore -- confirmed live on IC25, props stay
+empty). The netlister skips it, so the simulation has no OP for it;
+the export MARKS it instead of dropping it, the adapter excludes it
+from the model, and the schematic draws it X-ed like Virtuoso does."
+  (or (equal (car (errset (getq inst nlAction))) "ignore")
+      (equal (car (errset (getq inst ignore))) t)))
+
+(procedure (CInMarkDeactivated frag)
+  "Splice \"deactivated\": true right after the object's opening
+brace, WHEREVER the fragment's indentation puts it (the first cut
+assumed the brace at position 1 and chopped a leading space instead
+-- the export emitted invalid JSON)."
+  (let ((ix (and frag (nindex frag "{"))))
+    (if ix
+        (strcat (substring frag 1 ix)
+                " \"deactivated\": true,"
+                (substring frag (plus ix 1)))
+        frag)))
+
 (procedure (CInEmitInstances cv defName)
   (let ((lines nil))
     (foreach inst (getq cv instances)
       (let ((master (getq inst cellName)) (mlib (getq inst libName))
-            (iname (getq inst name)) cls where frag)
+            (iname (getq inst name)) cls where frag deact)
         (setq where (sprintf nil "%s/%s" defName iname))
+        (setq deact (CInDeactivatedP inst))
         (cond
           ((rexMatchp "<" iname)
            (setq CInUnsupported
@@ -300,10 +322,12 @@
              ((equal (car cls) "device")
               (setq frag (CInEmitDevice inst (cadr cls) (caddr cls)
                                         (cadddr cls) where))
+              (when deact (setq frag (CInMarkDeactivated frag)))
               (when frag (setq lines (cons frag lines))))
              ((equal (car cls) "subckt")
               (let ((childDef (CInEnsureDef mlib master)))
                 (setq frag (CInEmitSubcktInst inst childDef where))
+                (when deact (setq frag (CInMarkDeactivated frag)))
                 (when frag (setq lines (cons frag lines)))))
              (t
               (when (getq inst instTerms)   ; pins/labels have no instTerms

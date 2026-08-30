@@ -33,11 +33,6 @@
   ;; ------------------------------------------------------------------ the code
   (load (strcat dir "/cin_export.il"))
   (load (strcat dir "/cin_launch.il"))
-  ;; cross-probe too: the GUI tests `CInHighlight` is defined before offering
-  ;; the feature, so leaving this out means a connected session that reports
-  ;; "cross-probe unavailable". Loading it only defines procedures -- nothing
-  ;; here touches a window or the skillbridge server.
-  (load (strcat dir "/cin_xprobe.il"))
   ;; layout hints: harvests the schematic geometry (instances, wires,
   ;; labels) into a .hints.json sidecar so CircuitInsight can re-draw
   ;; the schematic with its own symbol library. Procedures only.

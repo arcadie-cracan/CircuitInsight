@@ -101,3 +101,36 @@ def test_session_exposes_both_advisories():
         atts = s.pole_attribution("VIND", n_poles=2)
     assert atts and atts[0].owners[0].symbol == "CL"
     assert atts is s.pole_attribution("VIND", n_poles=2)              # cached
+
+
+def test_loop_contract_removal_matches_a_direct_resolve():
+    """loop_probe: removals priced against the Tian loop gain. The
+    load capacitor is EXPENSIVE on the loop (it sets the crossing)
+    even though it barely moves some transfers, and the priced worst
+    equals a brute-force pruned re-solve."""
+    import warnings
+
+    import numpy as np
+
+    from circuitinsight.analysis.loopgain import numeric_loop_response
+    from circuitinsight.analysis.removal import scan_removals
+    from circuitinsight.session import SessionController
+
+    fix = FIX / "miller"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(fix / "tb_ota2s_stb.cin.json",
+                                   fix / "psf_stb", cap_model="matrix")
+    an = c._analyzer_ready()
+    freqs = np.geomspace(1.0, 1e9, 21)
+    rep = scan_removals(an.primitives, an.flat.ground, "", "",
+                        alias=an._alias, loop_probe="IPRB0", freqs=freqs)
+    by = {cd.inst: cd for cd in rep.candidates}
+    assert "CL" in by and by["CL"].worst_db > 5.0
+    pruned = [p for p in an.primitives if p.inst != "CL"]
+    a = numeric_loop_response(an.primitives, an.flat.ground, "IPRB0",
+                              freqs, an._alias)
+    b = numeric_loop_response(pruned, an.flat.ground, "IPRB0", freqs,
+                              an._alias)
+    direct = float(np.max(np.abs(20 * np.log10(np.abs(b / a)))))
+    assert abs(direct - by["CL"].worst_db) < 1e-6

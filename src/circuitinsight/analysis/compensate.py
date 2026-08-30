@@ -225,7 +225,11 @@ def servo_bandwidth(T, n: int) -> float:
     (structured-design bandwidth budget; homogeneous, so evaluated in Hz).
     `T` is the loop-gain TransferFunction in the stb convention (T(0)
     negative real under negative feedback)."""
-    l0 = complex(T.numeric([1e-3])[0])
+    # the exact-coefficient read: a near-DC value is usually the largest
+    # the loop gain takes, but float64 on a big assembled rational can
+    # still cancel or overflow term-wise; poles() below pays for the
+    # exact machinery anyway, so the Horner point is free
+    l0 = complex(T.numeric_hp([1e-3])[0])
     poles = T.poles()[:n]
     if len(poles) < n:
         raise MnaError(f"loop gain has only {len(poles)} poles, need {n}")
@@ -322,6 +326,7 @@ class LoopGainUpdater:
         if probe not in system.branch_index:
             raise MnaError(f"probe {probe!r} is not a branch")
         self.system = system
+        self.probe = probe
         self.freqs = np.atleast_1d(np.asarray(freqs, dtype=float))
         self.ib = system.branch_index[probe]
         n_nodes = len(system.node_index)
@@ -344,6 +349,18 @@ class LoopGainUpdater:
             self.Minv.append(M)
             self.xv.append(M @ zv)
             self.xi.append(M @ zi)
+
+    def __getstate__(self):
+        """Pickle by RECIPE, not by state: the lambdified matrix
+        function cannot cross a process boundary, and the cached
+        inverses are 300 dense matrices nobody wants on a pipe. The
+        engine process ships (system, probe, freqs); the GUI side
+        rebuilds -- the same one-time cost the bench paid in-process."""
+        return {"system": self.system, "probe": self.probe,
+                "freqs": self.freqs}
+
+    def __setstate__(self, state):
+        self.__init__(state["system"], state["probe"], state["freqs"])
 
     @staticmethod
     def _tian(xv, xi, ip, ib):
@@ -730,6 +747,7 @@ class Suggestion:
     f_unity_hz: float | None = None
     spec_dev: float | None = None    # peak sensitivity Ms (goal="spec")
     flat_db: float | None = None     # measured servo peaking (goal="mfm")
+    twin: tuple | None = None        # mirrored partner nets (na, nb), if any
 
     def describe(self) -> str:
         net = (f"{self.C * 1e12:.3g} pF"
@@ -784,6 +802,7 @@ def suggest_compensation(system: MnaSystem, probe: str, *,
                          c_grid=None, r_grid=None, mirror=None,
                          ms_target: float = 1.3, top: int = 5,
                          flat_tol_db: float = 1.0,
+                         corner_systems=(),
                          torn=None, cache: dict | None = None,
                          progress=None) -> list[Suggestion]:
     """Size every candidate against the goal and rank by AREA among the
@@ -814,6 +833,18 @@ def suggest_compensation(system: MnaSystem, probe: str, *,
 
     `system` must be the CLOSED-loop bench built with input_name=probe
     (strip any existing compensation branch from the primitives first).
+
+    `corner_systems` (worst-corner sizing): further MnaSystems of the SAME
+    topology at OTHER operating points (process corners, sweep points).
+    Every goal then holds at the WORST point of the whole set -- the
+    (C, R) chosen is the least-area value that keeps the criterion
+    everywhere, not just at the sizing point. The candidate screen, the
+    pole locus (RHP gate) and the reported metrics stay on `system`
+    (the bound point); the corners only judge. Cost discipline: the
+    bound point is evaluated first and a grid point that fails there
+    never touches a corner (worst >= bound, since the bound point is in
+    the set), and the corner sweep aborts at the first point over
+    budget.
 
     `mirror` (fully-differential circuits): a node map {p-side: n-side,
     ...}. Each candidate is installed as the SYMMETRIC PAIR (itself +
@@ -910,18 +941,26 @@ def suggest_compensation(system: MnaSystem, probe: str, *,
     if r_grid is None:
         r_grid = np.concatenate(([0.0], np.geomspace(200.0, 20e3, 12)))
 
-    upd = LoopGainUpdater(system, probe, np.geomspace(1e4, 1e9, 240))
-    zeta_star = 1 / np.sqrt(2)
+    freqs = np.geomspace(1e4, 1e9, 240)
+    upd = LoopGainUpdater(system, probe, freqs)
+    upds = [upd]
+    if corner_systems:
+        _say(f"building {len(corner_systems)} corner loop-gain "
+             "updater(s) -- every goal holds at the WORST point…")
+        upds += [LoopGainUpdater(s, probe, freqs) for s in corner_systems]
 
     def _y(C, R):
         return lambda s: s * C / (1 + s * R * C)
 
-    def _T_of(pair, C, R, twin):
+    def _T_at(u, pair, C, R, twin):
         Y = _y(C, R)
         if twin is None:
-            return upd.with_branch(pair[0], pair[1], Y)
-        return upd.with_branches([(pair[0], pair[1], Y),
-                                  (twin[0], twin[1], Y)])
+            return u.with_branch(pair[0], pair[1], Y)
+        return u.with_branches([(pair[0], pair[1], Y),
+                                (twin[0], twin[1], Y)])
+
+    def _T_of(pair, C, R, twin):
+        return _T_at(upd, pair, C, R, twin)
 
     def pm_at(pair, C, R, twin=None):
         return _margins_of(upd.freqs, _T_of(pair, C, R, twin))
@@ -966,22 +1005,43 @@ def suggest_compensation(system: MnaSystem, probe: str, *,
                     if goal == "mfm":
                         # MEASURED flatness, not the dominant-pair
                         # zeta proxy: hidden dynamics (the fc doublet)
-                        # peak while the pair sits on the circle
-                        dev = _flatness_db(_T_of(pair, C, R, twin))
-                        ok = dev <= flat_tol_db
+                        # peak while the pair sits on the circle. Worst
+                        # point of the set; bound point first (it
+                        # prunes), abort at the first over budget
+                        dev, ok = -np.inf, True
+                        for u in upds:
+                            d = _flatness_db(_T_at(u, pair, C, R, twin))
+                            dev = max(dev, d)
+                            if d > flat_tol_db:
+                                ok = False
+                                break
                     elif goal == "pm":
-                        pm, fu, gm = pm_at(pair, C, R, twin)
-                        ok = pm is not None and pm >= pm_target
-                        dev = (pm_target - pm) if pm is not None else 1e9
+                        dev, ok = -np.inf, True   # pm_target - worst pm
+                        for u in upds:
+                            pm, fu, gm = _margins_of(
+                                u.freqs, _T_at(u, pair, C, R, twin))
+                            d = (pm_target - pm) if pm is not None else 1e9
+                            dev = max(dev, d)
+                            if d > 0:
+                                ok = False
+                                break
                     elif goal == "spec":
-                        T = _T_of(pair, C, R, twin)
-                        sdev = _peak_sensitivity(upd.freqs, T)
-                        pm, fu, gm = _margins_of(upd.freqs, T)
-                        # a stable loop only: a non-crossing |T|<1 gives a
-                        # trivially small Ms but is not a working amp
-                        stable = fu is not None and (pm is None or pm > 0)
-                        ok = stable and sdev <= ms_target
-                        dev = sdev if stable else 1e9
+                        dev, ok = -np.inf, True
+                        for u in upds:
+                            T = _T_at(u, pair, C, R, twin)
+                            s_k = _peak_sensitivity(u.freqs, T)
+                            pm, fu, gm = _margins_of(u.freqs, T)
+                            # a stable loop only: a non-crossing |T|<1
+                            # gives a trivially small Ms but is not a
+                            # working amp
+                            stable = fu is not None and (pm is None
+                                                         or pm > 0)
+                            dev = max(dev, s_k if stable else 1e9)
+                            if u is upd:
+                                sdev = s_k    # the bound point's Ms
+                            if (not stable) or s_k > ms_target:
+                                ok = False
+                                break
                     else:
                         raise ValueError(f"unknown goal {goal!r}")
                     key = (not ok, area if ok else dev)
@@ -1006,13 +1066,46 @@ def suggest_compensation(system: MnaSystem, probe: str, *,
                 area=float(mult * (C / 1e-12 + kappa * R / 1e3)),
                 budget_hz=budget, pm_deg=pm, gm_db=gm, f_unity_hz=fu,
                 spec_dev=(float(sdev) if sdev is not None else None),
-                flat_db=flat))
+                flat_db=flat, twin=twin))
 
     out.sort(key=lambda s: (not s.achieved, s.area))
     n_ok = sum(1 for s in out if s.achieved)
     _say(f"screen done: {n_ok} goal achiever(s) of {len(out)} sized "
          f"branches; keeping the {min(top, len(out))} best by area")
     return out[:top]
+
+
+def evaluate_suggestions(system: MnaSystem, probe: str, sugs,
+                         freqs=None) -> list:
+    """Measured metrics of ALREADY-SIZED suggestions on THIS system's
+    operating point -- the corner-robustness primitive. The values were
+    chosen at one operating point; here they are re-measured, unchanged,
+    on another (a process corner, a sweep point, a transient snapshot).
+    One LoopGainUpdater serves the whole list: the per-frequency
+    inversions are the cost, each suggestion is a rank-one update.
+
+    Returns one dict per suggestion: flat_db (closed-loop servo
+    peaking), pm_deg / gm_db / f_unity_hz (worst-crossing margins),
+    ms (peak sensitivity) -- every goal's criterion, so the caller
+    gates on whichever it optimized."""
+    if freqs is None:
+        freqs = np.geomspace(1e4, 1e9, 240)
+    upd = LoopGainUpdater(system, probe, freqs)
+    out = []
+    for sug in sugs:
+        def Y(s, C=sug.C, R=sug.R):
+            return s * C / (1 + s * R * C)
+        a, b = sug.candidate.node_a, sug.candidate.node_b
+        if sug.twin is None:
+            T = upd.with_branch(a, b, Y)
+        else:
+            T = upd.with_branches([(a, b, Y),
+                                   (sug.twin[0], sug.twin[1], Y)])
+        pm, fu, gm = _margins_of(freqs, T)
+        out.append({"flat_db": float(_flatness_db(T)), "pm_deg": pm,
+                    "gm_db": gm, "f_unity_hz": fu,
+                    "ms": float(_peak_sensitivity(freqs, T))})
+    return out
 
 
 # ============================ N-E: multi-branch (NMC) synthesis ===========
@@ -1146,7 +1239,6 @@ def suggest_multi_compensation(system: MnaSystem, probe: str, *,
     else:
         T0 = loop_gain(system, probe, [])
     budget = servo_bandwidth(T0, n_budget)
-    zeta_star = 1 / np.sqrt(2)
 
     if candidates is None:
         if cache is not None and fp is not None:

@@ -1,12 +1,11 @@
 """Text, Markdown, HTML and CSV report generation."""
 from __future__ import annotations
-import warnings
 from ...keep import is_all
 import numpy as np
 from ...units import eng  # noqa: E402,F401  (re-exported: view.eng)
 from .figures import _fig_b64, bode_figure, error_figure, expr_figure, fidelity
 from .format import _fmt_root
-from .simplify import _expr_lines, tf_latex
+from .simplify import _expr_lines, _result_qty, tf_latex
 
 
 def summary_text(result) -> str:
@@ -29,15 +28,18 @@ def summary_text(result) -> str:
     tpl = getattr(result, "template_text", None)
     if tpl:
         lines += [tpl, ""]
-    if str(getattr(result, "out", "") or "").startswith("Z"):
-        # a dimensioned result: ohms with an SI multiple, dB-ohm beside
-        lines.append(
-            f"Z0      : {eng(abs(result.dc_gain), 'Ω', sig=4)} "
-            f" ({result.dc_gain_db:.2f} dBΩ)")
-    else:
-        lines.append(
-            f"DC gain : {eng(abs(result.dc_gain), sig=4)} "
-            f" ({result.dc_gain_db:.2f} dB)")
+    # the DC row wears the ratio's quantity: Z0 [ohm] for a
+    # transimpedance or impedance, Y0 [S] for a transadmittance,
+    # T0 for a loop gain, the dimensionless gain otherwise
+    q = _result_qty(result)
+    label, unit, dbu = {
+        "Z": ("Z0      ", "Ω", "dBΩ"),
+        "Y": ("Y0      ", "S", "dBS"),
+        "T": ("T0      ", "", "dB"),
+    }.get(q, ("DC gain ", "", "dB"))
+    lines.append(
+        f"{label}: {eng(abs(result.dc_gain), unit, sig=4)} "
+        f" ({result.dc_gain_db:.2f} {dbu})")
     poles = list(result.poles_hz)
     zeros = list(result.zeros_hz)
     if poles:
@@ -65,8 +67,8 @@ def summary_text(result) -> str:
     # parameters stay as letters, and cannot trade accuracy, because the rest
     # become the EXACT rationals of their OP values.
     if not is_all(result.keep) and result.keep:
-        lines.append(f"note    : keep chooses which symbols survive — every keep "
-                     f"set is exact. Simplify (budget) is the accuracy knob.")
+        lines.append("note    : keep chooses which symbols survive — every keep "
+                     "set is exact. Simplify (budget) is the accuracy knob.")
     if getattr(result, "circuit_state", "as imported") != "as imported":
         lines.append("circuit : REDUCED — AC-grounded bias nodes; the "
                      "grounding cost was measured at apply time (Reduce "

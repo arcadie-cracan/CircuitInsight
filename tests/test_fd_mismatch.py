@@ -9,7 +9,6 @@ Spectre's own verdicts on the same deck.
 import warnings
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from circuitinsight.adapters.spectre import SpectreRun

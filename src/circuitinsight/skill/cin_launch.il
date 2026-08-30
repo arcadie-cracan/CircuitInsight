@@ -123,17 +123,59 @@ rather than trust a global."
          (printf "CInLaunch: %s carries no OP data (dcOpInfo)\n" psf)
          nil)
         (t
-         (printf "CInLaunch: psf from ADE -> %s\n" psf)
-         psf)))))
+         ;; a maestro corner/parametric leaf: prefer the run root two
+         ;; levels up when it holds the whole numbered point set -- the
+         ;; GUI then offers the operating-point selector instead of
+         ;; silently binding one corner
+         (let ((root (CInMaestroRootOf d)))
+           (cond
+             (root
+              (printf "CInLaunch: results from ADE -> %s (operating-point set)\n"
+                      root)
+              root)
+             (t
+              (printf "CInLaunch: psf from ADE -> %s\n" psf)
+              psf))))))))
+
+(procedure (CInAllNumberedUnder base hits)
+  "t when every psf hit sits in a numbered design-point directory directly
+under base -- the maestro ExplorerRun corner/parametric layout the GUI opens
+as one operating-point set."
+  (let ((ok t) rest)
+    (foreach h hits
+      (setq rest (if (and (stringp h) (greaterp (strlen h) (strlen base)))
+                     (substring h (plus (strlen base) 2) (strlen h))
+                   ""))
+      ;; basic REs: + is literal, so digits are [0-9][0-9]*
+      (unless (rexMatchp "^[0-9][0-9]*/" rest) (setq ok nil)))
+    ok))
+
+(procedure (CInMaestroRootOf d)
+  "The run root two levels above a numbered design-point results dir, when
+d is one (.../root/<n>/<test> -> root) AND that root holds more than one
+numbered point with OP data -- the maestro corner/parametric layout. nil
+for anything else."
+  (let (root hits)
+    (when (and (stringp d)
+               (rexCompile "\\(.*\\)/[0-9][0-9]*/[^/]*$")
+               (rexExecute d))
+      (setq root (rexSubstitute "\\1"))
+      (setq hits (CInFindPsf root))
+      (when (and (greaterp (length hits) 1)
+                 (CInAllNumberedUnder root hits))
+        root))))
 
 (procedure (CInAdePsfDirByPath @optional (sess nil))
   "Fallback: rebuild the psf path from the session + simulation directory, and
 walk it for a psf dir carrying OP data. Used when asiGetCalcResultsDir gives us
 nothing usable (no run selected in the calculator, or a foreign design).
 
-Returns nil (-> caller errors) when the run has several result sets, e.g.
-multiple corners: silently joining OP data from one corner into another run's
-topology would be a correctness bug, not a convenience."
+A run with several result sets in the numbered maestro layout (corners, a
+parametric sweep) returns the run ROOT: the session discovers and labels the
+whole operating-point set from it, and the GUI offers the point selector.
+Any other multi-set layout still returns nil (-> caller errors) -- silently
+joining OP data from one set into another run's topology would be a
+correctness bug, not a convenience."
   (let (lib cell view hist sim base hits)
     (setq sess (or sess (car (errset (axlGetWindowSession (hiGetCurrentWindow))))))
     (when sess
@@ -155,19 +197,63 @@ topology would be a correctness bug, not a convenience."
           ((equal (length hits) 1)
            (printf "CInLaunch: psf from ADE run %s -> %s\n" hist (car hits))
            (car hits))
+          ((CInAllNumberedUnder base hits)
+           (printf "CInLaunch: %d operating points under %s -- opening the whole set (pick the point in the GUI)\n"
+                   (length hits) base)
+           base)
           (t
-           (printf "CInLaunch: %d result sets under %s (corners?) -- please pick one\n"
+           (printf "CInLaunch: %d result sets under %s -- please pick one\n"
                    (length hits) base)
            (foreach h hits (printf "    %s\n" h))
            nil))))))
 
+(procedure (CInAdePointManifest @optional (sess nil))
+  "The operating-point MANIFEST for the current ADE history, written from
+the run's own results database (axlReadHistoryResDB) -- the OFFICIAL corner
+names, which the on-disk runObjFile does not always carry faithfully (a
+corner run recorded \"nom\" for every 125C skew point while the rdb says
+\"ff 125\"). One JSON entry per completed test run; the GUI takes the
+manifest as its --psf argument and the session loads it as the point set.
+Returns the manifest path, or nil when no results database is available --
+the caller then falls back to walking the results tree."
+  (let (hist rdb tests done out port sep)
+    (setq sess (or sess (car (errset (axlGetWindowSession (hiGetCurrentWindow))))))
+    (setq hist (and sess (car (errset (axlGetHistoryName
+                                       (axlGetCurrentHistory sess))))))
+    (setq rdb (and hist (stringp hist)
+                   (car (errset (axlReadHistoryResDB hist)))))
+    (when rdb
+      (setq tests (car (errset rdb->tests())))
+      (setq done (setof tt tests (and (equal tt->status 'done)
+                                      (stringp tt->resultsDir))))
+      (when done
+        (setq out (sprintf nil "%s/%s.points.json" CInTmpDir hist))
+        (setq port (outfile out))
+        (when port
+          (fprintf port "{\"cin_points_version\": \"0.1\",\n")
+          (fprintf port " \"history\": \"%s\",\n \"points\": [\n" hist)
+          (setq sep "")
+          (foreach tt done
+            (fprintf port "%s  {\"corner\": \"%s\", \"psf\": \"%s/psf\"}"
+                     sep tt->cornerName tt->resultsDir)
+            (setq sep ",\n"))
+          (fprintf port "\n]}\n")
+          (close port)
+          (printf "CInLaunch: point manifest (%d points) from the results DB -> %s\n"
+                  (length done) out)))
+      (errset rdb->close())
+      (and done port out))))
+
 (procedure (CInAdePsfDir @optional (sess nil))
-  "psf dir of the current ADE run, or nil. Asks ADE first (asiGetCalcResultsDir),
-then falls back to rebuilding the path from the session + simulation directory."
+  "The GUI's results argument for the current ADE run, or nil. The run's
+own results database comes first (the official point manifest); then ADE's
+calculator results dir; then rebuilding the path from the session +
+simulation directory."
   (let (cell)
     (setq sess (or sess (car (errset (axlGetWindowSession (hiGetCurrentWindow))))))
     (setq cell (car (errset (axlGetSessionCellName sess))))
-    (or (CInAdeCalcPsf cell)
+    (or (CInAdePointManifest sess)
+        (CInAdeCalcPsf cell)
         (CInAdePsfDirByPath sess))))
 
 ;; --------------------------------------------------------------- launch

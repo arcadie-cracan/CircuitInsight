@@ -99,7 +99,6 @@ def test_anchored_criterion_reads_the_band_edges():
     smaller band-edge |H|. On ota5t a band ending just past crossover
     keeps a small set at 10%; the achieved error is within eps; and the
     anchor equals the edge level, not a floor knob."""
-    import numpy as np
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)

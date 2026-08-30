@@ -81,24 +81,33 @@ class GftQuartet:
     error_ref: str
     probe: str
 
+    # Curves read through the exact-coefficient Horner (numeric_hp):
+    # float64 on the assembled rationals cancels catastrophically
+    # wherever the member is small against its own terms (fc field
+    # case, up to 25 dB / 179 deg past crossover) -- exactly the region
+    # these quantities are read in (|T| near/below unity, H0 vs the
+    # loop part). Horner and not the factored form: H0 is an expanded
+    # triple product whose rooting would dwarf a per-point read.
+
     def discrepancy(self, freqs) -> np.ndarray:
         """D = T/(1+T) evaluated on freqs."""
-        t = self.T.numeric(freqs)
+        t = self.T.numeric_hp(freqs)
         return t / (1 + t)
 
     def spec_deviation(self, freqs) -> np.ndarray:
         """|H/Hinf - 1| -- the deviation from the ideal gain, Middlebrook's
         spec-level quantity (the D-peaking requirement lives here)."""
-        return np.abs(self.H.numeric(freqs) / self.Hinf.numeric(freqs) - 1)
+        return np.abs(self.H.numeric_hp(freqs)
+                      / self.Hinf.numeric_hp(freqs) - 1)
 
     def feedthrough_crossover(self, freqs) -> float | None:
         """The frequency beyond which |H0/(1+T)| exceeds |Hinf*T/(1+T)| --
         past it the closed-loop response is direct-transmission dominated
         and loop-gain shaping cannot change H. None if never in band."""
         f = np.asarray(freqs, dtype=float)
-        t = self.T.numeric(f)
-        a = np.abs(self.Hinf.numeric(f) * t / (1 + t))
-        b = np.abs(self.H0.numeric(f) / (1 + t))
+        t = self.T.numeric_hp(f)
+        a = np.abs(self.Hinf.numeric_hp(f) * t / (1 + t))
+        b = np.abs(self.H0.numeric_hp(f) / (1 + t))
         k = np.where(b > a)[0]
         return float(f[k[0]]) if k.size else None
 

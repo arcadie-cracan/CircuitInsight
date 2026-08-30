@@ -47,7 +47,11 @@ def render(text: str, size_mm: float) -> tuple:
     from matplotlib.font_manager import FontProperties
     from matplotlib.textpath import TextPath
 
-    prop = FontProperties(family="STIXGeneral", math_fontfamily="stix",
+    # sans throughout (field request): DejaVu Sans for plain text and
+    # the dejavusans mathtext set for the math -- the schematic reads
+    # like an editor's canvas, not a book page
+    prop = FontProperties(family="DejaVu Sans",
+                          math_fontfamily="dejavusans",
                           size=size_mm * PT_PER_MM)
     try:
         tp = TextPath((0, 0), text, prop=prop, usetex=False)
@@ -95,10 +99,14 @@ def render(text: str, size_mm: float) -> tuple:
 
 def svg_label(x: float, y: float, text: str, size_mm: float,
               anchor: str = "start", baseline: str = "alphabetic",
-              fill: str = "#000000", extra: str = "") -> str:
+              fill: str = "#000000", extra: str = "",
+              rotate: float = 0.0) -> str:
     """An SVG <path> element for `text` placed like a <text> at (x, y)
     with the given text-anchor and dominant-baseline (alphabetic,
-    hanging, central). `extra` is appended to the element's attributes."""
+    hanging, central). `rotate` turns the label about the anchor
+    point, the justification applied IN the rotated frame (Cadence
+    semantics -- an R90 net label reads along its vertical wire).
+    `extra` is appended to the element's attributes."""
     d, width, ascent, descent = render(text, size_mm)
     if not d:
         return ""
@@ -106,8 +114,13 @@ def svg_label(x: float, y: float, text: str, size_mm: float,
                                                                     0.0)
     dy = {"alphabetic": 0.0, "hanging": ascent,
           "central": (ascent - descent) / 2.0}.get(baseline, 0.0)
-    return (f'<path d="{d}" transform="translate({x + dx:.3f}, '
-            f'{y + dy:.3f})" fill="{fill}" stroke="none"{extra}/>')
+    if rotate:
+        tr = (f"translate({x:.3f}, {y:.3f}) rotate({rotate:.1f}) "
+              f"translate({dx:.3f}, {dy:.3f})")
+    else:
+        tr = f"translate({x + dx:.3f}, {y + dy:.3f})"
+    return (f'<path d="{d}" transform="{tr}" '
+            f'fill="{fill}" stroke="none"{extra}/>')
 
 
 def label_width(text: str, size_mm: float) -> float:

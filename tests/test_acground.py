@@ -152,3 +152,43 @@ def test_include_survives_the_report_cap(ota5t):
                           "vout", structural_only=False, max_report=1,
                           include=(worst,))
     assert any(c.node == worst for c in rep.candidates)
+
+
+def test_loop_contract_pricing_matches_a_direct_resolve():
+    """loop_probe: the scan prices grounding against the Tian loop
+    gain -- same one-inverse-per-frequency machinery, both probe
+    solves corrected by the same rank-one column. The top candidate's
+    price must equal a brute-force re-solve of the grounded circuit,
+    and the probe's own terminals are never candidates."""
+    import dataclasses
+    import warnings
+
+    import numpy as np
+
+    from circuitinsight.analysis.acground import scan_ac_grounds
+    from circuitinsight.analysis.loopgain import (numeric_loop_response)
+    from circuitinsight.session import SessionController
+
+    fix = FIX / "miller"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(fix / "tb_ota2s_stb.cin.json",
+                                   fix / "psf_stb", cap_model="matrix")
+    an = c._analyzer_ready()
+    freqs = np.geomspace(1.0, 1e9, 21)
+    rep = scan_ac_grounds(an.primitives, an.flat.ground, "", "",
+                          alias=an._alias, loop_probe="IPRB0",
+                          freqs=freqs)
+    assert rep.candidates, "loop-mode scan returned nothing"
+    names = {cd.node for cd in rep.candidates}
+    assert "vin_n" not in names and "vout" not in names  # probe sides
+    top = rep.candidates[0]
+    prims2 = [dataclasses.replace(
+        p, nodes=tuple("0" if n == top.node else n for n in p.nodes))
+        for p in an.primitives]
+    a = numeric_loop_response(an.primitives, an.flat.ground, "IPRB0",
+                              freqs, an._alias)
+    b = numeric_loop_response(prims2, an.flat.ground, "IPRB0", freqs,
+                              an._alias)
+    direct = float(np.max(np.abs(20 * np.log10(np.abs(b / a)))))
+    assert abs(direct - top.worst_db) < 1e-6

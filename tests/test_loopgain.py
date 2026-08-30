@@ -327,9 +327,10 @@ def test_loop_gain_forwards_progress_through_the_session(monkeypatch):
         seen = {}
         orig = Analyzer.loop_gain
 
-        def spy(self, probe, keep=(), progress=None):
+        def spy(self, probe, keep=(), progress=None, note=None):
             seen["progress"] = progress
-            return orig(self, probe, keep=keep, progress=progress)
+            return orig(self, probe, keep=keep, progress=progress,
+                        note=note)
 
         monkeypatch.setattr(Analyzer, "loop_gain", spy)
         cb = lambda d, t: None                       # noqa: E731

@@ -33,7 +33,8 @@ from pathlib import Path
 
 import sympy as sp
 
-from ..engine.interp import _MAX_WORKERS, _PARALLEL_MIN_DETS, resolve_backend, default_workers
+from ..engine.interp import (_PARALLEL_MIN_DETS, resolve_backend,
+                             default_workers)
 from ..engine.mna import S, MnaError, hybrid_split
 
 # lower bound on the spread-extrapolated alpha (best-case parallel amortization
@@ -123,6 +124,11 @@ class Calibration:
     n_rec_serial: int = 0
     n_rec_parallel: int = 0
     n_rec_bot: int = 0
+    # the previous observation's ratio, per path: a BOLD correction
+    # needs two consecutive misses in the same direction (see observe)
+    last_ratio_serial: float = 1.0
+    last_ratio_parallel: float = 1.0
+    last_ratio_bot: float = 1.0
 
     def predict(self, raw: float, spread: float, parallel: bool) -> float:
         if parallel:
@@ -190,7 +196,8 @@ _OBS_MIN_WEIGHT = 0.15
 
 
 def observe(predicted_s: float, actual_s: float, parallel: bool,
-            path=None, key: str | None = None) -> Calibration:
+            path=None, key: str | None = None,
+            preload: float = 0.0) -> Calibration:
     """Learn from a real solve: fold actual/predicted into this machine's
     persistent correction factor and save it.
 
@@ -208,13 +215,39 @@ def observe(predicted_s: float, actual_s: float, parallel: bool,
     n = getattr(cal, "n_obs_" + key)
     k = getattr(cal, "k_" + key)
     w = max(_OBS_MIN_WEIGHT, 1.0 / (n + 1))
+    # a 2x-or-worse miss takes a BOLD half-step -- but only when it
+    # looks structural rather than circumstantial: the machine was
+    # not already busy with someone else's work when the solve began
+    # (preload = pre-solve load average per core), and the PREVIOUS
+    # observation on this path missed 2x in the SAME direction. One
+    # loaded-server outlier therefore nudges gently; a repeated
+    # structural miss converges in a few runs instead of eight
+    # (measured: 5.4x over at the floored weight moved 29% per run)
+    prev = getattr(cal, "last_ratio_" + key)
+    same_direction = ((ratio >= 2.0 and prev >= 2.0)
+                      or (ratio <= 0.5 and prev <= 0.5))
+    if same_direction and preload < 0.3:
+        w = max(w, 0.5)
     k_new = math.exp((1 - w) * math.log(k) + w * math.log(k * ratio))
     k_new = min(max(k_new, 1.0 / _K_CLAMP), _K_CLAMP)
     setattr(cal, "k_" + key, k_new)
     setattr(cal, "n_obs_" + key, n + 1)
+    setattr(cal, "last_ratio_" + key, ratio)
     set_calibration(cal)
     save_calibration(cal, path)
     return cal
+
+
+def flush_calibration(path=None) -> None:
+    """Forget everything learned on this machine: delete the persistent
+    file and reset the in-process model to the built-in default. Each
+    process holding a copy must flush its own (the session exposes this
+    for the engine child)."""
+    try:
+        _cache_file(path).unlink(missing_ok=True)
+    except OSError:
+        pass
+    set_calibration(replace(_DEFAULT_CAL))
 
 
 def save_calibration(cal: Calibration, path=None) -> None:
@@ -383,7 +416,7 @@ def estimate_solve(analyzer, inp: str, out: str, keep,
         # Those samples land in the shared cache, so the solve that follows
         # gets its whole denominator for free: asking the question no longer
         # costs extra over answering it.
-        from ..engine.interp import (NUMERIC_S_HISTORY, _s_degree_bound,
+        from ..engine.interp import (_s_degree_bound,
                                      s_sweep_det)
 
         A_num = _numeric_A(system)

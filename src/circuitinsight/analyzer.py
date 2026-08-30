@@ -168,7 +168,8 @@ class Analyzer:
         return solve_tf(self.system(inp), out, keep, method=method,
                         progress=progress)
 
-    def loop_gain(self, probe: str, keep=(), progress=None) -> TransferFunction:
+    def loop_gain(self, probe: str, keep=(), progress=None,
+                  note=None) -> TransferFunction:
         """Loop gain T(s) at a designated probe (Tian double-injection on the
         MNA system; see analysis/loopgain.py). `probe` is a 0-V vsource
         branch inside the loop -- the CIN image of a schematic iprobe.
@@ -182,7 +183,8 @@ class Analyzer:
         from .analysis.loopgain import loop_gain as _loop_gain
 
         keep = norm_keep_list(keep)
-        return _loop_gain(self.system(probe), probe, keep, progress=progress)
+        return _loop_gain(self.system(probe), probe, keep,
+                          progress=progress, note=note)
 
     def gft(self, probe: str, inp: str, out: str, error_ref: str, keep=()):
         """Middlebrook's GFT quartet {H, Hinf, T, Tn, H0} at the designated
@@ -354,8 +356,15 @@ class Analyzer:
         a 0 V vsource in series with a branch is a *series* port (the
         marker is removed to open the branch and the port is the gap;
         natively a short, so the intact circuit carries its short-circuit
-        current). series=True means callers must disable the marker."""
-        gnd = set(self.flat.ground)
+        current). series=True means callers must disable the marker.
+
+        The reference test is AC ground, not DC ground: a marker
+        hanging from a supply rail held by ideal vsources (I0 from
+        vdd! into a bias node) is a ground-referenced port -- in the
+        zeroed small-signal system the rail IS ground (field report:
+        Z at such a port refused to rank and silently fell back to
+        the transfer ranking)."""
+        gnd = self._ac_ground_nets(exclude=port)
         for d in self.flat.devices:
             if d.name == port:
                 if d.device_type not in ("isource", "vsource"):
@@ -364,11 +373,38 @@ class Analyzer:
                         f"or vsource (series port), not {d.device_type!r}")
                 t = d.terminals
                 p, n = t["p"], t["n"]
+                if p in gnd and n in gnd:
+                    raise MnaError(
+                        f"port {port!r}: both terminals sit at AC ground")
                 if p in gnd:              # grounded terminal is the reference
                     p, n = n, p
                 return p, (None if n in gnd else n), \
                     d.device_type == "vsource"
         raise ValueError(f"unknown port instance {port!r}")
+
+    def _ac_ground_nets(self, exclude: str | None = None) -> set:
+        """Nets at AC ground: the DC grounds plus every net tied to
+        one through independent vsources (all zeroed to shorts in the
+        small-signal system, so a vdd! rail held by an ideal supply
+        is AC ground). `exclude` leaves one marker instance out of
+        the walk -- a series 0 V port marker must not earth the very
+        branch it cuts."""
+        gnd = set(self.flat.ground)
+        grew = True
+        while grew:
+            grew = False
+            for d in self.flat.devices:
+                if d.device_type != "vsource" or d.name == exclude:
+                    continue
+                t = d.terminals
+                p, n = t.get("p"), t.get("n")
+                if p in gnd and n is not None and n not in gnd:
+                    gnd.add(n)
+                    grew = True
+                elif n in gnd and p is not None and p not in gnd:
+                    gnd.add(p)
+                    grew = True
+        return gnd
 
     def impedance(self, node: str | None = None, ref: str | None = None,
                   keep=ALL, method: str = "auto",

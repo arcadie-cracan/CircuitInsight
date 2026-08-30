@@ -71,7 +71,6 @@ subckt ideal_balun d c p n
     K1 (d 0 c n) transformer n1=2
 ends ideal_balun
 """]
-    bal = {}
     for kind, name, nodes, val in E:
         if kind == "gm":
             L.append(f"{name} ({' '.join(nodes)}) vccs gm={val}")

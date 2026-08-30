@@ -112,3 +112,59 @@ def test_state_restores_selections_and_gated_solution(qapp, tmp_path):
         assert "stale" in win.msg_strip.text()
     finally:
         win.close()
+
+
+def test_reopen_restores_the_ticks_by_default(qapp, tmp_path):
+    """Policy (2026-08-29): the SELECTIONS come back on reopen without
+    a click -- the auto plan fills only a first-ever open -- while the
+    solution stays behind File -> Restore last state. A saved set that
+    matches nothing in the model (a mangled state) yields to the auto
+    plan."""
+    from PySide6.QtCore import Qt
+
+    from circuitinsight.gui import state as st
+    from circuitinsight.gui.app import MainWindow
+
+    cin, psf = _copy_fixture(tmp_path)
+    MainWindow.settings_path = str(tmp_path / "gui.ini")
+    try:
+        win = MainWindow()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win.open_session(str(cin), str(psf))
+        auto = set(win.checked_keep())     # the plan (may be empty here)
+        assert win.keep_tbl.rowCount() >= 2
+        # curate: keep exactly two symbols of our own choosing
+        mine = [win.keep_tbl.item(r, 0).text() for r in range(2)]
+        for row in range(win.keep_tbl.rowCount()):
+            it = win.keep_tbl.item(row, 0)
+            it.setCheckState(Qt.Checked if it.text() in mine
+                             else Qt.Unchecked)
+        win._autosave_state()
+        win.close()
+
+        win2 = MainWindow()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win2.open_session(str(cin), str(psf))
+        assert set(win2.checked_keep()) == set(mine), \
+            "the curated ticks return, not the auto plan"
+        win2.close()
+
+        # a mangled state (symbols from another model) yields to the plan
+        p = st.state_path(str(cin))
+        import json
+        import zipfile
+        with zipfile.ZipFile(p) as z:
+            manifest = json.loads(z.read("manifest.json"))
+        manifest["keep"] = ["gm_NOPE_1", "cgs_NOPE_2"]
+        st.save_state(p, manifest)
+        win3 = MainWindow()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            win3.open_session(str(cin), str(psf))
+        assert set(win3.checked_keep()) == auto, \
+            "a state matching nothing yields to the auto plan"
+        win3.close()
+    finally:
+        MainWindow.settings_path = None

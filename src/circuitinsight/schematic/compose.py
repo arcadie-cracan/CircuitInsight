@@ -36,6 +36,7 @@ WIRE_STROKE = 0.15               # mm
 WIRE_STYLE = (f'fill="none" stroke="#000000" stroke-width="{WIRE_STROKE}" '
               f'stroke-linecap="round" stroke-linejoin="miter"')
 DOT_R = 0.53                     # mm (~2 px)
+BODY_PAD = 0.6                   # mm of air around a measured body rect
 
 #: analysis-state styling on the SAME layout (the simplified view):
 #: instance tags and net tags the GUI derives from the session
@@ -329,9 +330,66 @@ def _orient_svg(m) -> str:
     return f"matrix({a}, {-c}, {-b}, {d}, 0, 0)"
 
 
-FONT_MM = 3.0                    # instance / net label size
-PORT_FONT_MM = 2.5               # port names: secondary to instances
+FONT_MM = 2.4                    # instance / net label size
+PORT_FONT_MM = 2.0               # port names: secondary to instances
 FONT_W = 0.56                    # mean glyph advance, em fraction
+
+
+#: Cadence label justification -> (text-anchor, dominant-baseline)
+_JUSTIFY = {
+    "upperLeft": ("start", "hanging"),
+    "centerLeft": ("start", "central"),
+    "lowerLeft": ("start", "alphabetic"),
+    "upperCenter": ("middle", "hanging"),
+    "centerCenter": ("middle", "central"),
+    "lowerCenter": ("middle", "alphabetic"),
+    "upperRight": ("end", "hanging"),
+    "centerRight": ("end", "central"),
+    "lowerRight": ("end", "alphabetic"),
+}
+
+
+def _label_rot(orient: str) -> float:
+    """SVG rotation (degrees about the anchor) for a label's Cadence
+    orientation: R90 reads bottom-to-top (CCW), R270 top-to-bottom.
+    The mirror-rotate composites approximate onto the same two."""
+    o = orient or "R0"
+    if o in ("R90", "MXR90"):
+        return -90.0
+    if o in ("R270", "MYR90"):
+        return 90.0
+    return 0.0
+
+
+def _rot_box(x, y, text, size, anchor, baseline, rot):
+    """The obstacle box of a ROTATED label: the horizontal text box
+    around the origin, corners turned by rot, moved to (x, y)."""
+    import math as _m
+
+    x0, y0, x1, y1 = _text_box(0.0, 0.0, text, size, anchor, baseline)
+    c = _m.cos(_m.radians(rot))
+    s = _m.sin(_m.radians(rot))
+    pts = [(px * c - py * s, px * s + py * c)
+           for px, py in ((x0, y0), (x1, y1), (x0, y1), (x1, y0))]
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    return (x + min(xs), y + min(ys), x + max(xs), y + max(ys))
+
+
+def _label_orient_flip(orient: str, anchor: str, baseline: str):
+    """A mirrored or half-turned label flows the OTHER way from its
+    origin: flip the anchor across the mirror. Rotated labels (R90/
+    R270) stay upright at their spot -- an approximation, but an
+    honest one."""
+    o = orient or "R0"
+    flip_h = o in ("MY", "R180")
+    flip_v = o in ("MX", "R180")
+    if flip_h:
+        anchor = {"start": "end", "end": "start"}.get(anchor, anchor)
+    if flip_v:
+        baseline = {"hanging": "alphabetic",
+                    "alphabetic": "hanging"}.get(baseline, baseline)
+    return anchor, baseline
 
 
 def _text_box(x, y, text, size, anchor="start", baseline="alphabetic"):
@@ -412,6 +470,26 @@ def _symbol_rect(cx, cy, sym, m):
     return (cx - ew / 2, cy - eh / 2, cx + ew / 2, cy + eh / 2)
 
 
+def _oriented_local_rect(cx, cy, sym, m, loc):
+    """A rect given in the symbol's LOCAL mm frame (0..w, 0..h),
+    placed: centered on the canvas, oriented by m, moved to (cx, cy).
+    The matrix is applied EXACTLY as _orient_svg hands it to the SVG
+    -- M_svg = F.M.F, the y-up world matrix conjugated with the
+    y-flip -- so the rect lands where the artwork is drawn (the raw
+    matrix put ROTATED bodies beside their symbol: mirrors have zero
+    off-diagonals and hid the sign error). Axis-aligned matrices, so
+    corner transforms and extents are exact."""
+    x0, y0, x1, y1 = loc
+    a, b = m[0]
+    c, d = m[1]
+    xs, ys = [], []
+    for lx, ly in ((x0, y0), (x1, y1), (x0, y1), (x1, y0)):
+        px, py = lx - sym.w / 2.0, ly - sym.h / 2.0
+        xs.append(a * px - b * py)
+        ys.append(-c * px + d * py)
+    return (cx + min(xs), cy + min(ys), cx + max(xs), cy + max(ys))
+
+
 #: mm per Virtuoso user unit when a page has no device symbol to
 #: calibrate against (a pure-hierarchy page of blocks): a 0.5 uu PDK
 #: transistor symbol vs the library's 13 mm one
@@ -445,6 +523,13 @@ def _xml_id(name: str) -> str:
     """inst:NAME as an XML id: dots and brackets survive; anything
     else becomes an underscore."""
     return "inst:" + re.sub(r"[^A-Za-z0-9_.:<>\[\]-]", "_", name)
+
+
+def _body_id(name: str) -> str:
+    """body:NAME -- the id of the instance's ARTWORK alone (symbol
+    drawing, block box), so the viewer's selection bounds hug the
+    body instead of spanning the labels (field request)."""
+    return "body:" + _xml_id(name)[5:]
 
 
 def _offset_fn(sym, m):
@@ -492,7 +577,10 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
             styles: dict | None = None, net_styles: dict | None = None,
             proposed_cells=frozenset(), tints: dict | None = None,
             tex_labels: bool = False, aliases: dict | None = None,
-            proposed=()) -> str:
+            proposed=(), contrib: dict | None = None,
+            contrib_base: str = "#000000",
+            port_base: str | None = None,
+            deactivated=frozenset(), body_measure=None) -> str:
     """SVG document string for one page (a definition, or the flat
     view).
 
@@ -533,13 +621,18 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
 
     def label(x, y, text, size=FONT_MM, anchor="start",
               baseline="alphabetic", fill="#000000", bold=False,
-              tex_text=None, extra=""):
+              tex_text=None, extra="", rotate=0.0):
         """One label: a <text> or, with tex_labels, the outlines.
-        tex_text: the mathtext to use instead of tex_name(text)."""
+        tex_text: the mathtext to use instead of tex_name(text).
+        rotate: degrees about the anchor point -- a Cadence R90 net
+        label reads along its vertical wire."""
         if tex_labels:
             from .mathtext import svg_label, tex_name
             return svg_label(x, y, tex_text or tex_name(text, bold), size,
-                             anchor, baseline, fill, extra)
+                             anchor, baseline, fill, extra,
+                             rotate=rotate)
+        if rotate:
+            extra += f' transform="rotate({rotate:.1f} {x:.2f} {y:.2f})"'
         attrs = (f' text-anchor="{anchor}" dominant-baseline="{baseline}"'
                  + (f' font-size="{size}"' if size != FONT_MM else "")
                  + (f' fill="{fill}"' if fill != "#000000" else "")
@@ -549,7 +642,7 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
     def tex_for(inst_name):
         """An instance label's mathtext: the device alias typeset as
         written when there is one, else the upright name."""
-        from .mathtext import tex_alias, tex_name
+        from .mathtext import tex_alias
         a = aliases.get(inst_name) or aliases.get(inst_name.split(".")[-1])
         return tex_alias(a) if a else None
 
@@ -640,7 +733,7 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
     parts = [f'<svg xmlns="http://www.w3.org/2000/svg" '
              f'width="{W:.2f}mm" height="{H:.2f}mm" '
              f'viewBox="0 0 {W:.3f} {H:.3f}" font-family="sans-serif" '
-             f'font-size="3.0">']
+             f'font-size="2.4">']
 
     # ---- confirmed block symbols become placed symbols. The harvested
     # orient placed the PDK symbol; the library symbol may order its
@@ -908,7 +1001,7 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
                     else [(px, py), (ex, ey)]
                 tx, ty, ta = (px + ex) / 2.0, py - 0.8, "middle"
             bridges.append(pts_)
-            parts.append(label(tx, ty, r, 2.2, ta, "central"))
+            parts.append(label(tx, ty, r, 1.8, ta, "central"))
     for pts in bridges:
         d = "M " + " L ".join(f"{x:.3f} {y:.3f}" for x, y in pts)
         parts.append(f'<path d="{d}" {WIRE_STYLE}/>')
@@ -936,6 +1029,24 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
                 earthed.add(w.net)
         else:
             parts.append(f'<path d="{d}" {WIRE_STYLE}/>')
+
+    # the pin-anchor bridges BELONG to their nets: without them the
+    # viewer's net runs stopped at the harvested wire ends, and both
+    # the net highlight and the sensitivity map's joining run left
+    # the last millimetres to every symbol unlit (field report: the
+    # cyan gap between the OTA's output pin and the vout junction).
+    # A bridge's pin end coincides with a wire end -- that names it.
+    endnet = {}
+    for net_, p_ in wire_ends:
+        endnet[(round(p_[0], 3), round(p_[1], 3))] = net_
+    for pts in bridges:
+        for probe_pt in (pts[-1], pts[0]):
+            net_ = endnet.get((round(probe_pt[0], 3),
+                               round(probe_pt[1], 3)))
+            if net_ is not None:
+                net_wires.setdefault(net_, []).append(
+                    [tuple(q) for q in pts])
+                break
 
     # junction dots (rule 6): >= 3 wire ends meeting, or a T -- one
     # wire end landing on the INTERIOR of another wire's segment of
@@ -986,16 +1097,51 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
     for lab in flat.labels:
         x, y = mm(lab["xy"])
         txt = lab["text"]
-        cands = [(x, y, "start", "alphabetic")]
-        cands += [(x, y + dy, "start", "alphabetic")
+        # the label's own JUSTIFICATION and orientation decide which
+        # way the text flows from its origin -- dropping them put
+        # every re-drawn label lower-left of its spot, visibly wrong
+        # on right-justified and mirrored labels (field report)
+        an0, bl0 = _JUSTIFY.get(lab.get("just") or "lowerLeft",
+                                ("start", "alphabetic"))
+        an0, bl0 = _label_orient_flip(lab.get("orient") or "R0",
+                                      an0, bl0)
+        rot = _label_rot(lab.get("orient"))
+        if rot:
+            # a rotated label reads ALONG its wire: keep the
+            # designer's spot verbatim, register the turned box
+            box = _rot_box(x, y, txt, FONT_MM, an0, bl0, rot)
+            net_label_pos.append((x, y, txt, an0, bl0, rot))
+            label_boxes.append(box)
+            obstacles.append(box)
+            continue
+        cands = [(x, y, an0, bl0)]
+        cands += [(x, y + dy, an0, bl0)
                   for dy in (-2.0, 2.0, -4.0, 4.0)]
         # the designer's spot is kept unless it sits on a symbol body
         # or an earlier label; wires alone do not move it
         px, py, an, bl, box = _place(txt, FONT_MM, cands,
                                      sym_rects + label_boxes)
-        net_label_pos.append((px, py, txt))
+        net_label_pos.append((px, py, txt, an, bl, 0.0))
         label_boxes.append(box)
         obstacles.append(box)
+
+    # the mapped blocks' FIXED captions (name + cell under the body)
+    # are drawn without planning -- register their boxes BEFORE any
+    # instance label places, in a pre-pass: doing it inside the
+    # placement loop was order-dependent, and VPRB placed before I0
+    # registered (field report: the name climbed onto the caption)
+    for inst, sym, spec in placed:
+        if (sym is None or inst.name not in anchor_world
+                or inst.cell not in block_symbols):
+            continue
+        cxb, cyb, _ = anchor_world[inst.name]
+        extb = max(sym.w, sym.h) / 2.0
+        obstacles.append(_text_box(cxb, cyb + extb + 1.5,
+                                   inst.name, FONT_MM,
+                                   "middle", "hanging"))
+        obstacles.append(_text_box(cxb, cyb + extb + 5.2,
+                                   f"({inst.cell})", 1.8,
+                                   "middle", "hanging"))
 
     inst_label_pos: dict = {}
     port_label_pos: dict = {}
@@ -1071,18 +1217,26 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
 
     # every instance sits in <g id="inst:NAME"> so a viewer can hit-test
     # and highlight it (QSvgRenderer.boundsOnElement); class says what
-    # a click may do: "block" descends, "device" cross-probes
+    # a click may do: "block" descends, "device" cross-probes.
+    # `bodies` carries each instance's ARTWORK rect in page mm -- the
+    # geometric truth the viewer prefers over boundsOnElement, whose
+    # stroke-padded union exceeded the drawn symbol (field report)
     instances: dict = {}
+    bodies: dict = {}
 
     # ---- subcircuit blocks: the harvested symbol box + pin stubs
     for inst in blocks:
         q0, q1 = _term_box(inst)
         instances[inst.name] = inst.cell
+        bodies[inst.name] = (q0[0], q0[1], q1[0], q1[1])
         parts.append(f'<g id="{_xml_id(inst.name)}" class="block">')
         parts.append(
-            f'<rect x="{q0[0]:.2f}" y="{q0[1]:.2f}" '
+            f'<rect id="{_body_id(inst.name)}" '
+            f'x="{q0[0]:.2f}" y="{q0[1]:.2f}" '
             f'width="{q1[0] - q0[0]:.2f}" height="{q1[1] - q0[1]:.2f}" '
             f'fill="white" stroke="#000000" stroke-width="{WIRE_STROKE}"/>')
+        if inst.name in deactivated:
+            parts.append(_deact_cross(q0[0], q0[1], q1[0], q1[1]))
         cxb = (q0[0] + q1[0]) / 2.0
         badge = (f'<tspan fill="{EMPH}" font-weight="bold"> ?</tspan>'
                  if inst.cell in proposed_cells else "")
@@ -1105,7 +1259,7 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
             # pin name just inside the box edge nearest the pin
             inside_x = px + (1.0 if px < cxb else -1.0)
             anchor = "start" if px < cxb else "end"
-            parts.append(label(inside_x, py + 1.0, pname, 2.2, anchor))
+            parts.append(label(inside_x, py + 1.0, pname, 1.8, anchor))
         parts.append("</g>")
 
     # ---- symbols
@@ -1129,8 +1283,10 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
         if sym is None:
             q0 = mm((inst.bbox[0], inst.bbox[3]))
             q1 = mm((inst.bbox[2], inst.bbox[1]))
+            bodies[inst.name] = (q0[0], q0[1], q1[0], q1[1])
             parts.append(
-                f'<rect x="{q0[0]:.2f}" y="{q0[1]:.2f}" '
+                f'<rect id="{_body_id(inst.name)}" '
+                f'x="{q0[0]:.2f}" y="{q0[1]:.2f}" '
                 f'width="{q1[0] - q0[0]:.2f}" '
                 f'height="{q1[1] - q0[1]:.2f}" fill="none" '
                 f'stroke="#a80000" stroke-dasharray="1,1" '
@@ -1156,19 +1312,53 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
         vb = [float(v) for v in sym.viewbox.split()]
         sx = sym.w / (vb[2] or 1.0)
         sy = sym.h / (vb[3] or 1.0)
+        inner = sym.inner
+        cw = contrib.get(inst.name) if contrib else None
+        if cw is not None:
+            # a contributor's BODY wears the accent, weight-fading
+            # toward the installed black -- the singularity story
+            # drawn in the strokes themselves, no box
+            col = _contrib_color(cw, contrib_base)
+            inner = inner.replace("#000000", col).replace("#000", col)
+        elif port_base is not None and inst.cell in PORT_CELLS:
+            # a dark display hands Virtuoso's pin red for the port
+            # glyphs (the canonical black-on-white export never does)
+            inner = (inner.replace("#000000", port_base)
+                     .replace("#000", port_base))
         parts.append(
-            f'<g transform="translate({cx:.3f}, {cy:.3f}) '
+            f'<g id="{_body_id(inst.name)}" '
+            f'transform="translate({cx:.3f}, {cy:.3f}) '
             f'{_orient_svg(inst.m)} '
             f'translate({-sym.w / 2.0:.3f}, {-sym.h / 2.0:.3f}) '
             f'scale({sx:.6f}, {sy:.6f}) '
             f'translate({-vb[0]:.3f}, {-vb[1]:.3f})">'
-            f'{sym.inner}</g>')
+            f'{inner}</g>')
+        # the body rect: the ARTWORK's measured extent when a
+        # measurer is handed in (rendered-alpha bbox, cached per
+        # symbol file -- the canvas frame carries empty margin on
+        # symbols like the isource circle), else the canvas frame.
+        # A measured rect gets BODY_PAD of air: a box on the strokes
+        # reads cramped, and the X inscribes the same padded square
+        loc = body_measure(sym, inner) if body_measure else None
+        if loc:
+            tight = _oriented_local_rect(cx, cy, sym, inst.m, loc)
+            rd = (tight[0] - BODY_PAD, tight[1] - BODY_PAD,
+                  tight[2] + BODY_PAD, tight[3] + BODY_PAD)
+        else:
+            tight = rd = _symbol_rect(cx, cy, sym, inst.m)
+        bodies[inst.name] = tuple(rd)
+        if inst.name in deactivated:
+            # the X marks the ARTWORK: it inscribes the tight rect,
+            # not the padded selection box (field request)
+            parts.append(_deact_cross(tight[0], tight[1],
+                                      tight[2], tight[3]))
         if inst.cell in PORT_CELLS:
             # a port shows its PIN NAME on its free end, never the
-            # Cadence instance name
+            # Cadence instance name; the name wears the port ink
             if inst.name in port_label_pos:
                 px, py, an, bl, txt = port_label_pos[inst.name]
-                parts.append(label(px, py, txt, PORT_FONT_MM, an, bl))
+                parts.append(label(px, py, txt, PORT_FONT_MM, an, bl,
+                                   fill=port_base or "#000000"))
         elif inst.cell in UNLABELLED_CELLS:
             pass                       # rails/no-connects: anonymous
         elif inst.cell in block_symbols:
@@ -1191,7 +1381,7 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
                              f'text-anchor="middle" '
                              f'dominant-baseline="hanging"{lab_attr}>'
                              f'{inst.name}{badge}</text>')
-            parts.append(label(cx, cy + ext + 5.2, f"({inst.cell})", 2.2,
+            parts.append(label(cx, cy + ext + 5.2, f"({inst.cell})", 1.8,
                                "middle", "hanging"))
         else:
             px, py, an, bl = inst_label_pos.get(
@@ -1217,9 +1407,11 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
                              f'{lab_attr}>{inst.name}{badge}</text>')
         parts.append("</g>")
     compose.last_instances = instances
+    compose.last_bodies = bodies
 
-    for x, y, txt in net_label_pos:
-        parts.append(label(x, y, txt, fill="#1a466b"))
+    for x, y, txt, an, bl, rot in net_label_pos:
+        parts.append(label(x, y, txt, anchor=an, baseline=bl,
+                           fill="#1a466b", rotate=rot))
 
     if overlay:
         parts.append(_overlay_svg(flat, blocks, placed, raw_wires, mm_raw))
@@ -1243,6 +1435,33 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
 #: the Bode preview's accent (Okabe-Ito vermilion): the proposed branch
 #: on the schematic and the preview curve on the plot are ONE object
 PROPOSED_COLOR = "#D55E00"
+
+
+def _deact_cross(x0: float, y0: float, x1: float, y1: float) -> str:
+    """Virtuoso's deactivation mark: a red X drawn as the diagonals
+    of the largest CENTERED SQUARE inside the body rect (a rect's own
+    diagonals splay on tall or wide bodies). Red in both themes (the
+    dark re-ink leaves non-black strokes alone)."""
+    half = min(x1 - x0, y1 - y0) / 2.0
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    x0, x1 = cx - half, cx + half
+    y0, y1 = cy - half, cy + half
+    return (f'<path d="M {x0:.2f} {y0:.2f} L {x1:.2f} {y1:.2f} '
+            f'M {x0:.2f} {y1:.2f} L {x1:.2f} {y0:.2f}" '
+            f'stroke="#d00000" stroke-width="0.5" fill="none" '
+            f'stroke-linecap="round"/>')
+
+
+def _contrib_color(w: float, base: str = "#000000") -> str:
+    """ink -> accent, weight-interpolated: the strongest contributor
+    wears the full accent, the weakest stays near the installed ink
+    (black on the light paper; the display hands its own ink for a
+    dark ground, where a near-black shade would vanish)."""
+    t = 0.3 + 0.7 * max(0.0, min(1.0, float(w)))
+    b = tuple(int(base[i:i + 2], 16) for i in (1, 3, 5))
+    acc = (0xD5, 0x5E, 0x00)
+    return "#%02X%02X%02X" % tuple(
+        int(bc + t * (ac - bc)) for bc, ac in zip(b, acc))
 
 
 def _proposed_body(sym, a1, a2, p1, theta) -> str:

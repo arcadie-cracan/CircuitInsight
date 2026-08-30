@@ -207,6 +207,17 @@ class TransferFunction:
         n, d = sp.fraction(sp.together(self.expr))
         return sp.Poly(sp.expand(n), self.s), sp.Poly(sp.expand(d), self.s)
 
+    def __getstate__(self):
+        # derived caches (expanded polynomials, exact coefficients,
+        # rooted spectra) can dwarf the expression itself -- the engine
+        # ships Results holding a tf across the process pipe, so strip
+        # what any receiver can recompute
+        d = dict(self.__dict__)
+        for k in ("num_den", "_exact_coeffs", "_minimal_pz",
+                  "_minimal_exact"):
+            d.pop(k, None)
+        return d
+
     def dc_gain(self) -> sp.Expr:
         n, d = self.num_den
         if d.eval(0) == 0:
@@ -262,13 +273,130 @@ class TransferFunction:
         subs = self._subs_map()
         return scaled_roots([c.xreplace(subs) for c in poly.all_coeffs()])
 
+    @cached_property
+    def _exact_coeffs(self):
+        """Exact-Rational coefficient lists (num, den) of the assembled
+        rational -- the float values substituted as their own binary
+        rationals, so hybrid and numeric routes see the SAME
+        polynomial. None when a symbol has no value or a coefficient
+        refuses exact conversion; every consumer then falls back to
+        the float path."""
+        try:
+            num, den = self.num_den
+            subs = {self.symbols[name]: sp.Rational(val)
+                    for name, val in self.values.items()
+                    if name in self.symbols}
+            cn = [sp.nsimplify(c.xreplace(subs), rational=True)
+                  for c in num.all_coeffs()]
+            cd = [sp.nsimplify(c.xreplace(subs), rational=True)
+                  for c in den.all_coeffs()]
+            if not all(isinstance(c, sp.Rational) for c in cn + cd):
+                return None
+            return cn, cd
+        except Exception:                         # noqa: BLE001
+            return None
+
+    @cached_property
+    def _minimal_pz(self) -> tuple[np.ndarray, np.ndarray]:
+        """(zeros, poles) of the MINIMAL form, in rad/s.
+
+        The assembled rational is not minimal: the Tian/Eq.30 loop
+        gain carries pole/zero pairs that cancel to 1e-57 relative --
+        assembly artifacts, not circuit singularities -- and they
+        surfaced as GHOST roots in the ledger and the sensitivity
+        maps, sending the designer to investigate nothing (field
+        case: a p/z/p triple at one frequency, '100% one node').
+        Both exact polynomials root at high precision, and any pair
+        closer than 1e-9 relative is cancelled. Falls back to the
+        float rooting uncancelled when the exact path cannot serve;
+        `_minimal_exact` records which route served."""
+        ec = self._exact_coeffs
+        if ec is not None:
+            try:
+                out = minimal_pz(*ec)
+                self._minimal_exact = True
+                return out
+            except Exception:                     # noqa: BLE001
+                pass
+        self._minimal_exact = False
+        num, den = self.num_den
+        return (self._roots_rad(num), self._roots_rad(den))
+
+    def numeric_hp(self, f, dps: int | None = None):
+        """High-precision direct read: exact-coefficient Horner on the
+        expanded rational, per point. Independent of the rooting, so
+        the margin ledger's certificate residual stays a REAL check
+        of roots + cancellation + bookkeeping. Falls back to
+        numeric() when the exact coefficients cannot serve. Meant for
+        a handful of points, not a plot grid."""
+        import mpmath as mp
+
+        ec = self._exact_coeffs
+        if ec is None:
+            return self.numeric(f)
+        cn, cd = ec
+        if dps is None:
+            dps = max(50, 2 * (len(cd) - 1))
+        out = []
+        with mp.workdps(dps):
+            for fhz in np.atleast_1d(np.asarray(f, dtype=float)):
+                sval = mp.mpc(0, 2 * mp.pi * fhz)
+                nv = mp.mpc(0)
+                for c in cn:
+                    nv = nv * sval + mp.mpf(c.p) / mp.mpf(c.q)
+                dv = mp.mpc(0)
+                for c in cd:
+                    dv = dv * sval + mp.mpf(c.p) / mp.mpf(c.q)
+                out.append(complex(nv / dv) if dv != 0
+                           else complex("nan"))
+        return np.asarray(out, dtype=complex)
+
+    def numeric_min(self, f):
+        """Evaluate from the minimal factored form, in log space --
+        well conditioned everywhere, where float64 evaluation of the
+        assembled expression cancels catastrophically once the
+        function value is small against its own terms (field case:
+        the folded-cascode loop gain read up to 25 dB and 179 deg
+        wrong wherever |T| < 0 dB, and the ledger anchor absorbed
+        the error into PM/GM). Reuses the cached exact roots, so
+        after poles()/zeros() this costs a numpy pass. Falls back to
+        numeric() when the exact route cannot serve."""
+        import mpmath as mp
+
+        zs, ps = self._minimal_pz
+        ec = self._exact_coeffs
+        if not getattr(self, "_minimal_exact", False) or ec is None:
+            return self.numeric(f)
+        cn, cd = ec
+        if cn[0] == 0 or cd[0] == 0:
+            return self.numeric(f)
+        k = cn[0] / cd[0]
+        lk10 = float(mp.log(mp.mpf(abs(k.p)) / mp.mpf(k.q), 10))
+        kang = 0.0 if k > 0 else 180.0
+        fvec = np.atleast_1d(np.asarray(f, dtype=float))
+        w = 2j * np.pi * fvec
+        lm = np.full(fvec.shape, lk10)
+        ang = np.full(fvec.shape, kang)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            for r in np.asarray(zs, dtype=complex):
+                d = w - r
+                lm += np.log10(np.abs(d))
+                ang += np.degrees(np.angle(d))
+            for r in np.asarray(ps, dtype=complex):
+                d = w - r
+                lm -= np.log10(np.abs(d))
+                ang -= np.degrees(np.angle(d))
+        lm = np.clip(lm, -300.0, 300.0)
+        return 10.0 ** lm * np.exp(1j * np.radians(ang))
+
     def poles(self) -> np.ndarray:
-        """Numeric poles in Hz (complex), sorted by magnitude."""
-        r = self._roots_rad(self.num_den[1]) / (2 * np.pi)
+        """Numeric poles in Hz (complex), sorted by magnitude — of the
+        MINIMAL form: assembly-artifact pole/zero pairs cancelled."""
+        r = self._minimal_pz[1] / (2 * np.pi)
         return r[np.argsort(np.abs(r))]
 
     def zeros(self) -> np.ndarray:
-        r = self._roots_rad(self.num_den[0]) / (2 * np.pi)
+        r = self._minimal_pz[0] / (2 * np.pi)
         return r[np.argsort(np.abs(r))]
 
     def simplify(self, **kwargs):
@@ -354,6 +482,71 @@ def scaled_roots(coeffs) -> np.ndarray:
     sigma = np.roots(np.asarray(vals, dtype=float))
     r = sigma * 10.0 ** log_w0
     return np.concatenate([r, np.zeros(n_origin, dtype=complex)])
+
+
+def _mp_scaled_polyroots(coeffs, dps: int = 50) -> np.ndarray:
+    """High-precision roots of an EXACT-rational-coefficient polynomial
+    (highest power first), frequency-scaled like scaled_roots so a
+    many-decade ladder conditions well. Verified against 60-digit
+    ground truth on the miller stb loop (float64 was ~7 digits there;
+    the point of this path is the CANCELLATION test in minimal_pz,
+    which float noise would blur)."""
+    import mpmath as mp
+
+    coeffs = [sp.nsimplify(c, rational=True) for c in coeffs]
+    while coeffs and coeffs[0] == 0:              # zero leading
+        coeffs.pop(0)
+    n_origin = 0
+    while coeffs and coeffs[-1] == 0:             # roots at s = 0
+        coeffs.pop()
+        n_origin += 1
+    deg = len(coeffs) - 1
+    if deg < 1:
+        return np.zeros(n_origin, dtype=complex)
+    if deg > 80:
+        raise ValueError(f"degree {deg} over the mp rooting cap")
+    with mp.workdps(dps):
+        vals = [mp.mpf(c.p) / mp.mpf(c.q) for c in
+                (sp.Rational(c) for c in coeffs)]
+        log_w0 = (mp.log(abs(vals[-1]), 10)
+                  - mp.log(abs(vals[0]), 10)) / deg
+        w0 = mp.mpf(10) ** log_w0
+        sig = [v * w0 ** (deg - i) for i, v in enumerate(vals)]
+        top = max(abs(v) for v in sig)
+        r = mp.polyroots([v / top for v in sig],
+                         maxsteps=200, extraprec=300)
+        out = np.array([complex(x * w0) for x in r], dtype=complex)
+    return np.concatenate([out, np.zeros(n_origin, dtype=complex)])
+
+
+def minimal_pz(num_coeffs, den_coeffs, *,
+               cancel_rtol: float = 1e-9) -> tuple[np.ndarray, np.ndarray]:
+    """(zeros, poles) in rad/s of the MINIMAL rational: both exact
+    polynomials rooted at high precision, then every zero/pole pair
+    closer than `cancel_rtol` RELATIVE removed as one -- an assembly
+    artifact, not a circuit singularity. The two populations are
+    decades apart: exact cancellations measure ~1e-57 relative,
+    genuine doublets ~5e-3, so the threshold cannot misfire."""
+    zs = list(_mp_scaled_polyroots(num_coeffs))
+    ps = list(_mp_scaled_polyroots(den_coeffs))
+    pairs = []
+    for i, z in enumerate(zs):
+        for j, p in enumerate(ps):
+            rel = abs(z - p) / max(abs(z), abs(p), 1.0)
+            if rel < cancel_rtol:
+                pairs.append((rel, i, j))
+    pairs.sort()
+    zi_used, pj_used = set(), set()
+    for _rel, i, j in pairs:                      # greedy nearest-first
+        if i in zi_used or j in pj_used:
+            continue
+        zi_used.add(i)
+        pj_used.add(j)
+    zeros = np.array([z for i, z in enumerate(zs) if i not in zi_used],
+                     dtype=complex)
+    poles = np.array([p for j, p in enumerate(ps) if j not in pj_used],
+                     dtype=complex)
+    return zeros, poles
 
 
 def numeric_eval(expr: sp.Expr, s: sp.Symbol, f) -> np.ndarray:

@@ -2,7 +2,7 @@
 
 Crisp vector math where every device symbol is a live DOM node: hover shows its
 operating-point value, a click round-trips to Python (``ExprBridge.symbolClicked``)
--- the same identity handle a future schematic cross-probe will use.
+-- the identity handle the keep table and the schematic share.
 
 Feature-detected: importing this module never fails. ``WEBENGINE`` tells the app
 whether the web view is available; when it is not (PySide6 without the
@@ -37,10 +37,20 @@ if WEBENGINE:
 
         symbolClicked = Signal(str)
         selectionChanged = Signal(list)
+        termClicked = Signal(str)      # a theta link in the PM sum
+        frootClicked = Signal(str)     # an f_p/f_z symbol
 
         @Slot(str)
         def on_symbol_click(self, name: str) -> None:
             self.symbolClicked.emit(name)
+
+        @Slot(str)
+        def on_term_click(self, name: str) -> None:
+            self.termClicked.emit(name)
+
+        @Slot(str)
+        def on_froot_click(self, name: str) -> None:
+            self.frootClicked.emit(name)
 
         @Slot(str)
         def on_selection_change(self, names: str) -> None:
@@ -68,14 +78,35 @@ if WEBENGINE:
             self.page().setWebChannel(self._channel)
             self._ready = False
             self._pending: dict | None = None
+            self._underlay()          # no white flash before the shell paints
             self.loadFinished.connect(self._loaded)
             self.load(QUrl.fromLocalFile(str(_SHELL)))
 
+        def _underlay(self) -> None:
+            """Chromium paints WHITE until the document does -- on dark the
+            pane flashes a white page on load and on theme switch. The
+            page's background color is the underlay beneath the document."""
+            from PySide6.QtGui import QColor
+            from . import theme as _theme
+            self.page().setBackgroundColor(QColor(_theme.BASE))
+
         def _loaded(self, ok: bool) -> None:
             self._ready = bool(ok)
+            if self._ready:
+                self.set_theme()               # the shell wakes themed
             if self._ready and self._pending is not None:
                 self._push(self._pending)
                 self._pending = None
+
+        def set_theme(self, name: str | None = None) -> None:
+            """Point the shell's CSS tokens at the active theme (or the
+            named one); called on load and on a live switch."""
+            from . import theme as _theme
+            name = name or _theme.current
+            self._underlay()
+            if self._ready:
+                self.page().runJavaScript(
+                    f"window.setTheme({json.dumps(name)})")
 
         def set_payload(self, payload: dict) -> None:
             """Render ``{"lines": [...], "values": {...}}`` (see expr_katex)."""

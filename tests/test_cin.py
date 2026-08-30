@@ -231,3 +231,20 @@ def test_examples_conform_to_json_schema():
     )
     for p in sorted(EXAMPLES.glob("*.cin.json")):
         jsonschema.validate(json.loads(p.read_text()), schema)
+
+
+def test_deactivated_instances_leave_the_model():
+    """A Virtuoso-deactivated instance (nlAction=ignore, exported with
+    "deactivated": true) stays in the raw document for the schematic
+    to draw X-ed, but never enters the parsed model -- the netlister
+    skipped it, so no OP exists for it."""
+    doc = minimal_doc()
+    doc["definitions"]["main"]["instances"].append(
+        {"name": "R2", "device_type": "resistor",
+         "terminals": {"p": "a", "n": "0"}, "params": {"r": "2k"},
+         "deactivated": True})
+    design = parse_cin(doc)
+    names = [i.name for i in design.definitions["main"].instances]
+    assert names == ["R1"]
+    flat = flatten(design)
+    assert [d.name for d in flat.devices] == ["R1"]

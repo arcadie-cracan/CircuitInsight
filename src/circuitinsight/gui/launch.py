@@ -36,6 +36,8 @@ def _version() -> str:
 
 
 def _splash():
+    from pathlib import Path
+
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
     from PySide6.QtWidgets import QSplashScreen
@@ -44,6 +46,14 @@ def _splash():
     pm.fill(QColor("#f7f7f7"))
     p = QPainter(pm)
     p.setRenderHint(QPainter.Antialiasing)
+    p.setRenderHint(QPainter.SmoothPixmapTransform)
+    # the app icon leads the wordmark; text starts to its right
+    x_text = 26
+    icon_png = (Path(__file__).resolve().parent / "assets" / "appicon"
+                / "circuitinsight-icon-128.png")
+    if icon_png.exists():
+        p.drawPixmap(24, 46, 88, 88, QPixmap(str(icon_png)))
+        x_text = 24 + 88 + 18
     # explicit BASELINES, not nested rects: the version must sit on the
     # wordmark's own baseline, and rect-relative alignment put it a line
     # lower. Which build is running is the first question a bug report
@@ -54,8 +64,8 @@ def _splash():
     p.setFont(f)
     p.setPen(QColor("#1d3a56"))
     base_y = 78
-    p.drawText(26, base_y, "CircuitInsight")
-    x_ver = 26 + p.fontMetrics().horizontalAdvance("CircuitInsight") + 10
+    p.drawText(x_text, base_y, "CircuitInsight")
+    x_ver = x_text + p.fontMetrics().horizontalAdvance("CircuitInsight") + 10
     fv = QFont()
     fv.setPointSize(11)
     p.setFont(fv)
@@ -65,7 +75,7 @@ def _splash():
     f2.setPointSize(9)
     p.setFont(f2)
     p.setPen(QColor("#555555"))
-    p.drawText(26, base_y + 30,
+    p.drawText(x_text, base_y + 30,
                "operating-point-driven symbolic circuit analysis")
     p.setPen(Qt.NoPen)
     p.setBrush(QColor("#a80000"))                # the Virtuoso red rule
@@ -101,12 +111,29 @@ def main(argv=None):
     ap.add_argument("--probe", help="preselect the loop-gain bench on this "
                                     "vsource (default: the run's own stb "
                                     "designation, when discoverable)")
-    ap.add_argument("--theme", choices=("cadence", "native"),
-                    default="cadence",
-                    help="'cadence' blends with Virtuoso's windows "
-                         "(default); 'native' leaves your desktop's own Qt "
-                         "style alone")
+    ap.add_argument("--theme", choices=("cadence", "light", "dark",
+                                        "native"),
+                    default=None,
+                    help="'light' (alias 'cadence') blends with Virtuoso's "
+                         "windows, 'dark' is its dark sibling, 'native' "
+                         "leaves your desktop's own Qt style alone. "
+                         "Default: the last theme chosen in the app "
+                         "(File menu), else light.")
+    ap.add_argument("--engine", choices=("proc", "inproc"), default=None,
+                    help="'proc' (the default) runs the analysis engine "
+                         "in its own process so a solve never starves "
+                         "the GUI thread; 'inproc' keeps the old "
+                         "single-interpreter path for debugging.")
     args, _ = ap.parse_known_args(raw)
+
+    import os as _os
+    if args.engine:
+        _os.environ["CIN_ENGINE"] = args.engine
+    else:
+        # the real app defaults to the engine process; tests and
+        # headless scripts (which never come through launch.py) keep
+        # the in-process default of open_engine
+        _os.environ.setdefault("CIN_ENGINE", "proc")
 
     # ONE BLAS thread in the GUI process. OpenBLAS/MKL start a spinning
     # thread per core at import; on a 32-core shared server those 32
@@ -139,6 +166,8 @@ def main(argv=None):
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
+    from . import theme as _theme
+    app.setWindowIcon(_theme.app_icon())   # window + taskbar identity
     _mark("Qt")
     splash = _splash()
     splash.show()
@@ -168,7 +197,19 @@ def main(argv=None):
                      name="ci-preload").start()
 
     from . import theme                          # Qt-only, cheap
-    if args.theme == "cadence":
+    chosen = args.theme
+    if chosen is None:
+        # no flag: the remembered File-menu choice wins, then light
+        from PySide6.QtCore import QSettings
+        s = QSettings("CircuitInsight", "desktop")
+        chosen = str(s.value("ui/theme", "light"))
+        if chosen not in ("light", "dark"):
+            chosen = "light"
+    if chosen != "native":
+        from .view import set_fig_theme
+        name = "light" if chosen == "cadence" else chosen
+        theme.set_theme(name)
+        set_fig_theme(name)
         theme.apply(app)
     while not heavy_done.wait(0.03):             # splash keeps painting
         app.processEvents()
@@ -192,8 +233,26 @@ def main(argv=None):
         # (0.3 s of CPU in a 1.6 s stall). The chain starts after the
         # first paint instead.
         win._auto_deferred = []
-        win.open_session(args.cin, args.psf, probe=args.probe,
-                         async_open=True)
+        try:
+            win.open_session(args.cin, args.psf, probe=args.probe,
+                             async_open=True)
+        except Exception as exc:                  # noqa: BLE001
+            # a failed preload must NOT kill the app after the splash
+            # (field case: an edited schematic Analyzed against the
+            # pre-edit simulation -- the OP join rightly refuses, and
+            # the only symptom was the splash closing). The window
+            # opens EMPTY with the reason in front of the user.
+            import traceback
+
+            traceback.print_exc()
+            msg = win._open_error_text(exc)
+            from PySide6.QtCore import QTimer
+            from PySide6.QtWidgets import QMessageBox
+
+            def _say(m=msg, w=win):
+                QMessageBox.critical(w, "Open failed", m)
+
+            QTimer.singleShot(0, _say)
         _mark("open")
     win.show()
     splash.finish(win)

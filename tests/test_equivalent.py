@@ -99,6 +99,25 @@ def test_port_resolution_and_errors():
     an = Analyzer.from_cin(PORTED)
     assert an._port_nets("IPORT") == ("out", None, False)
     assert an._port_nets("VPORT") == ("out", "nl", True)
+    # the reference test is AC ground: a marker hanging from a rail
+    # held by an ideal vsource is a ground-referenced port (the
+    # diode_bias field case -- I0 from vdd! into the bias node)
+    railed = {**PORTED, "definitions": {"main": {"ports": [], "instances": [
+        *PORTED["definitions"]["main"]["instances"],
+        {"name": "VSUP", "device_type": "vsource",
+         "terminals": {"p": "vdd!", "n": "0"}},
+        {"name": "IB", "device_type": "isource",
+         "terminals": {"p": "vdd!", "n": "bias"}},
+        {"name": "RB", "device_type": "resistor",
+         "terminals": {"p": "bias", "n": "0"}, "params": {"r": "1k"}},
+        {"name": "IDEAD", "device_type": "isource",
+         "terminals": {"p": "vdd!", "n": "0"}},
+    ]}}}
+    an2 = Analyzer.from_cin(railed)
+    assert an2._port_nets("IB") == ("bias", None, False)
+    from circuitinsight.engine.mna import MnaError
+    with pytest.raises(MnaError, match="AC ground"):
+        an2._port_nets("IDEAD")           # both terminals earthed
     with pytest.raises(ValueError, match="unknown port"):
         an._port_nets("NOPE")
     with pytest.raises(ValueError, match="isource .*or vsource"):

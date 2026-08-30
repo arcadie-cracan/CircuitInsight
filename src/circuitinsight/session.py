@@ -15,6 +15,7 @@ ngspice/LTspice/offline paths stay first-class.
 from __future__ import annotations
 
 import math
+import os
 import types
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -66,6 +67,10 @@ class Result:
     h: np.ndarray                   # complex TF over freqs
     h_ref: np.ndarray | None        # reference AC (sim), if available
     ref_label: str | None
+    # what the ratio IS, from the port quantities: 'AV' v/v, 'AI' i/i,
+    # 'Z' v/i (transimpedance, ohms), 'Y' i/v (transadmittance,
+    # siemens), 'T' loop gain -- picks the display symbol and unit
+    qty: str = "AV"
     # advisories (pole separation, RHP zeros, missing reference, ...)
     warnings: list[str] = field(default_factory=list)
     # the underlying TransferFunction, opaque to UIs (simplification, export)
@@ -174,6 +179,10 @@ class SessionController:
         self.ac_loop_gain: str | None = None
         self.cin_path: Path | None = None
         self.op_path: Path | None = None
+        #: discovered operating-point set ([] = single OP) + active index
+        self.op_points: list = []
+        self._op_index: int = 0
+        self._adapter_kw: dict = {}
         self.simulator: str | None = None
         self.cap_model: str = "lumped"   # see open(cap_model=...)
         self.mos_model: str = "separate"  # see open(mos_model=...)
@@ -215,17 +224,90 @@ class SessionController:
         dropped as inert; see models.small_signal._lump_gmb).
         """
         self = cls()
+        # the solve-time calibration loads WHEREVER the session lives:
+        # in engine-process mode the child prices every estimate, and
+        # it used to price with the factory default while the GUI
+        # process faithfully learned into a file the child never read
+        # (field case: three overruns and the estimate went DOWN)
+        try:
+            from .analysis import estimate as _e
+            cached = _e.load_calibration()
+            if cached is not None:
+                _e.set_calibration(cached)
+        except Exception:                         # noqa: BLE001
+            pass
         self.simulator = simulator
         self.cap_model = cap_model
         self.mos_model = mos_model
-        if simulator == "spectre":
-            from .adapters.spectre import SpectreRun
-            self._run = SpectreRun(cin_path, op_path, **adapter_kw)
-        else:
-            raise ValueError(f"unknown simulator adapter {simulator!r}")
+        # one topology, possibly MANY operating points: a multi-point
+        # run (corners, a parametric sweep) opens on its first point
+        # with the whole set discoverable (op_points) and switchable
+        # (set_op_point) -- values change, connectivity never does.
+        # How points are laid out on disk is the ADAPTER's convention.
+        self._adapter_kw = dict(adapter_kw)
         self.cin_path = Path(cin_path)
+        pts = self._adapter_discover(op_path)
+        if not pts and Path(op_path).suffix == ".json":
+            raise ValueError(f"points manifest {op_path} lists no "
+                             "operating point with OP data")
+        self.op_points = pts if len(pts) > 1 else []
+        self._op_index = 0
+        if pts:
+            op_path = pts[0].psf
+        self._run = self._make_run(op_path)
         self.op_path = Path(op_path)
         return self
+
+    def _adapter_discover(self, op_path) -> list:
+        """The operating-point set at op_path. A POINTS MANIFEST (a
+        .json file a launcher wrote from the simulator's own results
+        database -- the official point names) is simulator-neutral and
+        wins; otherwise the active adapter discovers the set from the
+        on-disk layout, which is its business."""
+        p = Path(op_path)
+        if p.is_file() and p.suffix == ".json":
+            from .adapters.points import load_points_manifest
+
+            return load_points_manifest(p)
+        if self.simulator == "spectre":
+            from .adapters.spectre.points import discover_op_points
+
+            return discover_op_points(op_path)
+        return []
+
+    def _make_run(self, op_path):
+        """Construct the active adapter's run for one results location
+        -- the ONE place the simulator choice is dispatched, shared by
+        open() and set_op_point()."""
+        if self.simulator == "spectre":
+            from .adapters.spectre import SpectreRun
+
+            return SpectreRun(self.cin_path, op_path, **self._adapter_kw)
+        raise ValueError(f"unknown simulator adapter {self.simulator!r}")
+
+    @property
+    def op_point_labels(self) -> list[str]:
+        """Labels of the discovered operating points ([] = single-OP)."""
+        return [p.label for p in self.op_points]
+
+    def set_op_point(self, i: int) -> None:
+        """Bind the session to operating point `i` of the discovered
+        set. The topology, matches (structural), applied reduction and
+        the return-ratio declaration all survive -- they are session
+        state, re-derived on the rebuilt analyzer; every cached result
+        described the OTHER operating point and goes."""
+        if not self.op_points:
+            raise ValueError("this session has a single operating point")
+        if i == self._op_index:
+            return
+        pt = self.op_points[i]
+        self._run = self._make_run(pt.psf)
+        self._op_index = i
+        self.op_path = Path(pt.psf)
+        self._analyzer = None
+        self._cache.clear()
+        self._op_values = None
+        self._has_stb = None
 
     # -------------------------------------------------------- introspection
     @property
@@ -723,30 +805,39 @@ class SessionController:
         best = max(group, key=score)
         return best if score(best) > 0 else group[0]
 
+    def _build_analyzer(self, run):
+        """The session's whole analyzer pipeline over ANY run of the
+        same topology -- matches, matched-value policy, the applied
+        reduction. Shared by _analyzer_ready (the bound run) and the
+        per-operating-point rebuilds of suggestion_robustness. Returns
+        (analyzer, pre-policy values) and mutates no session state."""
+        an = run.analyzer(cap_model=self.cap_model,
+                          mos_model=self.mos_model)
+        for group in self._matches:
+            # the name bearer first: analyzer.match names the
+            # shared symbols after its first argument
+            lead = self.name_bearer(group)
+            an.match(lead, *[m for m in group if m != lead])
+        # capture pre-policy values FIRST: conflict reports must compare
+        # against reality, not against what the policy already wrote
+        orig: dict = {}
+        for p_ in an.primitives:
+            if p_.param and p_.value is not None:
+                orig.setdefault(p_.inst, {})[p_.param] = p_.value
+        an.primitives = self._apply_match_values(an)
+        if self._reduction is not None:
+            # the reduction is session state, not analyzer state: any
+            # rebuild (e.g. matches changed) re-applies it from its
+            # recorded node set, so it cannot silently evaporate
+            an.primitives = self._reduced_primitives(
+                an, self._reduction["nodes"],
+                self._reduction.get("removals", ()))
+        return an, orig
+
     def _analyzer_ready(self):
         if self._analyzer is None:
-            an = self._run.analyzer(cap_model=self.cap_model,
-                                    mos_model=self.mos_model)
-            for group in self._matches:
-                # the name bearer first: analyzer.match names the
-                # shared symbols after its first argument
-                lead = self.name_bearer(group)
-                an.match(lead, *[m for m in group if m != lead])
-            # capture pre-policy values FIRST: conflict reports must compare
-            # against reality, not against what the policy already wrote
-            self._match_orig = {}
-            for p_ in an.primitives:
-                if p_.param and p_.value is not None:
-                    self._match_orig.setdefault(p_.inst, {})[p_.param] = p_.value
-            an.primitives = self._apply_match_values(an)
-            if self._reduction is not None:
-                # the reduction is session state, not analyzer state: any
-                # rebuild (e.g. matches changed) re-applies it from its
-                # recorded node set, so it cannot silently evaporate
-                an.primitives = self._reduced_primitives(
-                    an, self._reduction["nodes"],
-                    self._reduction.get("removals", ()))
-            self._analyzer = an
+            self._analyzer, self._match_orig = \
+                self._build_analyzer(self._run)
         return self._analyzer
 
     # --------------------------------------------------------------- planning
@@ -847,11 +938,296 @@ class SessionController:
         except Exception:
             return None, None
 
+    # ------------------------------------------------------------------
+    # The frozen GUI surface (engine-process plan E-A): everything the
+    # GUI needs is a NAMED method here -- no reaching for the analyzer,
+    # the run, or private helpers. These four promote what the benches
+    # used to take raw; each stays a thin delegation so the behavior is
+    # bit-identical to the poke it replaces.
+    def ac_reference(self, inp: str, out: str):
+        """The run's AC transfer for overlay: (freqs, (h, label)) or
+        (None, None) when the run has no usable AC."""
+        return self._reference(inp, out)
+
+    def stb_curves(self):
+        """The run's stb result (freq + loop_gain arrays) for overlay;
+        raises like the underlying reader when the run has none."""
+        return self._run.stb()
+
+    def mode_loop(self, probe_a: str, probe_b: str):
+        """The Modes bench's eigenloci report for two tagged probes."""
+        return self._analyzer_ready().mode_loop(probe_a, probe_b)
+
+    def probe_node_index(self, probe: str) -> dict:
+        """Node-name -> index map of the probe's system (the Compensate
+        bench derives the p/n mirror map from the names)."""
+        return dict(self._analyzer_ready().system(probe).node_index)
+
+    def loop_updater(self, probe: str, exclude=(), n_freqs: int = 300):
+        """A LoopGainUpdater for instant previews, built on the SAME
+        system the suggestion search ran on: `exclude` strips the
+        instances the search was told to ignore, so a preview never
+        stacks a suggestion on top of branches the search removed."""
+        import numpy as np
+
+        from .analysis.compensate import LoopGainUpdater
+        from .engine.mna import build_mna
+
+        an = self._analyzer_ready()
+        drop = set(exclude)
+        if drop:
+            system = build_mna(
+                [p for p in an.primitives if p.inst not in drop],
+                an.flat.ground, probe, an._alias)
+        else:
+            system = an.system(probe)
+        return LoopGainUpdater(system, probe,
+                               np.geomspace(1.0, 1e10, n_freqs))
+
+    def gft_quartet(self, probe: str, inp: str, out: str, ref: str,
+                    c: int, reduce_kw=None) -> dict:
+        """The GFT bench's quartet payload (H, Hinf, loop, feedthrough
+        over frequency, the exact-identity residual, and the reduced-
+        model headline when reduce_kw asks for one). Moved here from
+        the bench: it is analysis, and it touched the analyzer raw."""
+        import dataclasses
+
+        import numpy as np
+        import sympy as sp
+
+        from .analysis import nested_gft
+        from .analysis.gft import _probe_indices
+        from .engine.mna import S
+
+        an = self._analyzer_ready()
+        sys_in = an.system(inp)
+        sys_pr = an.system(probe)
+        headline = None
+        if reduce_kw is not None:
+            from .analysis.criteria import make_criterion
+            from .analysis.sensitivity import _reactive_symbols
+
+            strat = reduce_kw.get("strategy")
+            opts = dict(reduce_kw.get("strategy_opts") or {})
+            lo = float(reduce_kw.get("fmin", 1e3))
+            hi = float(reduce_kw.get("fmax", 1e7))
+            tol_db = float(reduce_kw.get("tol_db", 0.5))
+            red = an.dominant_reactances(inp, out, tol_db, lo, hi,
+                                         strategy=strat,
+                                         strategy_opts=opts)
+            dropped = set(_reactive_symbols(an)) - set(red.selected)
+
+            def _zero(sysm):
+                vals = dict(sysm.values)
+                for n in dropped:
+                    if n in vals:
+                        vals[n] = 0.0
+                return dataclasses.replace(sysm, values=vals)
+
+            sys_in = _zero(sys_in)
+            sys_pr = _zero(sys_pr)
+            crit = make_criterion(strategy=strat, strategy_opts=opts,
+                                  eps=None, tol_db=tol_db)
+            band_err = (float(red.errors_db[-1]) if red.errors_db
+                        else float(red.baseline_db))
+            headline = ("quartet of the REDUCED model: "
+                        + (crit.headline(red, band_err, lo, hi)
+                           if crit.name
+                           else crit.headline(red, band_err, lo, hi,
+                                              tol_db=tol_db)))
+        A = nested_gft._exact_A(sys_pr)
+        pr = _probe_indices(sys_pr, probe)
+        err = (nested_gft._node(sys_pr, ref), int(c))
+        io = nested_gft._node(sys_pr, out)
+        fn_A = sp.lambdify(S, A, "numpy")
+        z_in = np.asarray(sys_in.z, dtype=complex).ravel()
+        z_pr = np.asarray(sys_pr.z, dtype=complex).ravel()
+        freqs = np.geomspace(1.0, 1e10, 240)
+        qs = [nested_gft._num_quartet(
+                  np.asarray(fn_A(2j * np.pi * f), complex),
+                  z_in, z_pr, io, pr, err) for f in freqs]
+        pack = {k: np.array([q[k] for q in qs]) for k in qs[0]}
+        worst = 0.0
+        for sv in (2, 3):
+            A0 = A.xreplace({S: sp.Rational(sv)})
+            q = nested_gft._point_quartet(A0, sys_in.z, sys_pr.z,
+                                          io, pr, err)
+            r = nested_gft._residual_of(q)
+            if r != 0:
+                worst = max(worst, abs(float((r / q["H"]).evalf())))
+        return {"freqs": freqs, "q": pack, "residual": worst,
+                "probe": probe, "ref": ref, "c": c, "inp": inp,
+                "out": out, "headline": headline}
+
+    def set_alias(self, name: str, tex: str) -> None:
+        """Set (or, with an empty string, remove) one LaTeX alias.
+        The GUI used to poke the dict; a named mutation is required
+        for the engine-process boundary (plan E-A)."""
+        if tex:
+            self.sym_aliases[name] = tex
+        else:
+            self.sym_aliases.pop(name, None)
+
+    def set_aliases(self, mapping: dict, *, merge: bool = False) -> None:
+        """Replace (or with merge=True, update) the whole alias store --
+        the restore paths' bulk form of set_alias."""
+        if merge:
+            self.sym_aliases.update(mapping)
+        else:
+            self.sym_aliases = dict(mapping)
+
+    @property
+    def op_index(self) -> int:
+        """The bound operating point's index (see set_op_point)."""
+        return self._op_index
+
+    def can_rank_z(self, spec) -> bool:
+        """Whether the impedance target resolves to a ground-referenced
+        port the Z ranking can serve -- the GUI's pre-resolve check
+        before it falls back to the transfer ranking (and says so)."""
+        try:
+            self._z_probe_analyzer(spec)
+            return True
+        except Exception:                         # noqa: BLE001
+            return False
+
+    def observe_solve(self, predicted_s: float, actual_s: float,
+                      key: str, eval_s: float | None = None,
+                      recon_s: float | None = None) -> None:
+        """Feed a finished solve into the persistent solve-time
+        calibration -- HERE, where the estimates are priced (the GUI
+        used to learn into its own process's copy, which an engine
+        child never read)."""
+        from .analysis import estimate as _e
+        _e.observe(predicted_s, actual_s,
+                   parallel=(key != "serial"), key=key,
+                   preload=getattr(self, "_last_preload", 0.0))
+        if eval_s and recon_s:
+            _e.observe_phases(eval_s, recon_s, key=key)
+
+    def flush_calibration(self) -> None:
+        """Forget the learned solve-time model IN THIS PROCESS (and the
+        shared file). The GUI flushes its own copy separately; over the
+        engine process this call is what reaches the child, where the
+        estimates are priced."""
+        from .analysis import estimate as _e
+        _e.flush_calibration()
+
+    def probe_backend(self) -> str | None:
+        """The forced solve backend, None for auto (set_probe_backend)."""
+        from .engine import interp
+        return interp.PROBE_BACKEND
+
+    def set_probe_backend(self, name: str | None) -> None:
+        """Force (or with None, auto-select) the solve backend. The
+        GUI used to write the engine module global directly -- which a
+        separate engine process never sees; the session is the one
+        place both residences share."""
+        from .engine import interp
+        interp.PROBE_BACKEND = name
+
+    def last_solve(self) -> dict | None:
+        """The S-D telemetry of the most recent solve (backend, wall
+        time, fallback note) -- read HERE, not off the module global,
+        for the same reason as set_probe_backend."""
+        from .engine import interp
+        return getattr(interp, "LAST_SOLVE", None)
+
+    def call_prepared(self, method: str, args: tuple, kw: dict,
+                      prep: dict | None = None, progress=None, note=None):
+        """Run a Result-producing method and warm its display caches
+        HERE -- in the engine process, before the pickle -- so the GUI
+        process never pays the round_expr bill (plan E-D; measured 3 s
+        at 1040 terms, tens of seconds on big hybrids). Non-Result
+        returns pass through untouched; aliases come from THIS session,
+        the authoritative store. The display module is matplotlib-fed
+        but Qt-free, imported lazily so a child that never solves never
+        loads it."""
+        kw = dict(kw)
+        if progress is not None:
+            kw["progress"] = progress
+        if note is not None:
+            kw["note"] = note
+        # the machine's load BEFORE our own pool saturates it: others'
+        # work inflates the wall clock, and observe_solve must know a
+        # miss was circumstantial (0.0 where unmeasurable -- Windows)
+        try:
+            self._last_preload = os.getloadavg()[0] / (os.cpu_count() or 1)
+        except (AttributeError, OSError):
+            self._last_preload = 0.0
+        out = getattr(self, method)(*args, **kw)
+        try:
+            from .gui.view.simplify import prepare_display
+            prep = dict(prep or {})
+            prep["aliases"] = dict(self.sym_aliases)
+            prepare_display(out, **prep)
+        except Exception:                         # noqa: BLE001
+            pass                                  # display prep is a bonus
+        return out
+
+    def session_snapshot(self) -> dict:
+        """The read-only mirror the GUI's chatty paths will be served
+        from once the engine lives in its own process (plan E-C): one
+        plain-data dict, picklable, no sympy and no analyzer objects.
+        Until then it is the frozen inventory of those paths."""
+        devs = [dict(name=d.name, device_type=d.device_type,
+                     terminals=dict(d.terminals))
+                for d in self.devices]
+        return {
+            "cin_path": str(self.cin_path),
+            "devices": devs,
+            "ground": list(self.ground),
+            "nets": list(self.nets),
+            "sources": list(self.sources()),
+            "input_ports": list(self.input_ports()),
+            "output_nets": list(self.output_nets()),
+            "probes": list(self.probes),
+            "tagged_probes": list(self.tagged_probes),
+            "ports": list(self.ports),
+            "analyses": list(self.analyses()),
+            "matches": [tuple(g) for g in self.matches],
+            "match_value_policy": self.match_value_policy,
+            "sym_aliases": dict(self.sym_aliases),
+            "op_point_labels": list(self.op_point_labels),
+            "op_points_n": len(self.op_points),
+            "op_index": self._op_index,
+            "cap_model": self.cap_model,
+            "mos_model": self.mos_model,
+            "ac_loop_gain": self.ac_loop_gain,
+            "stb_probe": self.stb_probe(),
+            "has_stb": bool(self.has_stb),
+            "circuit_state": self.circuit_state,
+            "reductions": list(self.reductions),
+            "reduction_summary": self.reduction_summary(),
+            "lumped_gmb": dict(self.lumped_gmb()),
+        }
+
+    def _tf_quantity(self, inp: str, out: str) -> str:
+        """The transfer's quantity class from its port kinds: a current
+        input makes the ratio dimensioned (v/i = transimpedance 'Z'),
+        a current output the dual ('Y'); an impedance result is 'Z'
+        outright. The display symbol and unit follow from this."""
+        o = str(out or "")
+        if o.startswith("Z"):
+            return "Z"
+        dt = next((d.device_type for d in self.devices if d.name == inp),
+                  None)
+        in_i = dt == "isource"
+        out_i = o.startswith("I(")
+        if in_i:
+            return "AI" if out_i else "Z"
+        return "Y" if out_i else "AV"
+
     def _assemble(self, tf, inp, out, keep, *, reference, fmin, fmax,
                   points) -> Result:
         """Package any TF-like (exact or simplified) into a Result."""
         freqs = np.logspace(math.log10(fmin), math.log10(fmax), points)
-        h = np.asarray(tf.numeric(freqs))
+        # the factored read: float64 evaluation of a big assembled
+        # rational cancels catastrophically where |H| is small against
+        # its own terms; the minimal-root form is well conditioned
+        # everywhere, and poles()/zeros() below pay for the roots anyway
+        _ev = getattr(tf, "numeric_min", tf.numeric)
+        h = np.asarray(_ev(freqs))
         dc = _numeric_dc(tf)
         dc_db = db(dc)
         poles = tf.poles()
@@ -872,7 +1248,7 @@ class SessionController:
             if packed is not None:
                 # resample onto the sim grid so overlay/error are point-aligned
                 freqs = np.asarray(fr, dtype=float)
-                h = np.asarray(tf.numeric(freqs))
+                h = np.asarray(_ev(freqs))
                 h_ref = np.asarray(packed[0])
                 ref_label = packed[1]
             else:
@@ -884,6 +1260,7 @@ class SessionController:
             # solve produced it, and the summary mislabelled every symbolic one.
             inp=inp, out=out,
             keep=norm_keep_list(keep),
+            qty=self._tf_quantity(inp, out),
             dc_gain=dc, dc_gain_db=dc_db,
             poles_hz=poles, zeros_hz=zeros, n_terms=_n_terms(tf),
             tf_latex=sp.latex(tf.expr),
@@ -1085,7 +1462,8 @@ class SessionController:
             # reference curve IS the exact solution, on this grid
             try:
                 full = self.impedance_result(dict(spec), keep=())
-                r.h_ref = np.asarray(full.tf.numeric(r.freqs))
+                r.h_ref = np.asarray(getattr(full.tf, "numeric_min",
+                                             full.tf.numeric)(r.freqs))
                 r.ref_label = "exact Z"
             except Exception:                     # noqa: BLE001
                 pass
@@ -1099,7 +1477,8 @@ class SessionController:
                     xf = self._run.xf()
                 if port in xf.transfers:
                     r.freqs = np.asarray(xf.freq, dtype=float)
-                    r.h = np.asarray(tf.numeric(r.freqs))
+                    r.h = np.asarray(getattr(tf, "numeric_min",
+                                             tf.numeric)(r.freqs))
                     r.h_ref = np.asarray(xf.tf(port))
                     r.ref_label = f"xf sim  Z via {port}"
             except Exception:
@@ -1116,7 +1495,20 @@ class SessionController:
 
         if isinstance(spec, str):
             spec = {"port": spec}
-        gnd = set(self.ground) | {"0"}
+        # AC ground, not DC ground: in the zeroed small-signal system
+        # every net held to ground through ideal vsources (the vdd!
+        # rail) IS ground, so an element or ref on the rail makes a
+        # ground-referenced port (field case: 'Z seen by I0', an
+        # isource from vdd! into a bias node, refused to rank and the
+        # keep table silently showed a transfer ranking instead). A
+        # seen_by vsource is excluded from the walk -- removing it is
+        # the point, it must not earth its own nets.
+        try:
+            gnd = self._analyzer_ready()._ac_ground_nets(
+                exclude=spec.get("seen_by"))
+        except Exception:                        # noqa: BLE001
+            gnd = set(self.ground)
+        gnd |= {"0"}
         terms_of = {d.name: dict(d.terminals)
                     for d in self._run.flat.devices}
         disable: tuple = ()
@@ -1206,12 +1598,9 @@ class SessionController:
         coefficient collapse, the snap and the order certificate run
         exactly as for the Transfer tool. Ground-referenced ports
         only: the pursuit reads one output node."""
-        import copy
 
         from .analysis.criteria import make_criterion
         from .analysis.simplify import snap_unity
-        from .engine.mna import MnaError
-        from .engine.primitives import Primitive
 
         an2, probe, node = self._z_probe_analyzer(spec, an)
 
@@ -1236,7 +1625,8 @@ class SessionController:
         # the reference curve IS the exact solution, on this grid --
         # the reduced model is read against the truth it approximates
         try:
-            r.h_ref = np.asarray(full.tf.numeric(r.freqs))
+            r.h_ref = np.asarray(getattr(full.tf, "numeric_min",
+                                         full.tf.numeric)(r.freqs))
             r.ref_label = "exact Z"
         except Exception:                         # noqa: BLE001
             pass
@@ -1420,7 +1810,8 @@ class SessionController:
                            fmin=lo, fmax=hi)
         else:
             T = self._analyzer_ready().loop_gain(probe, keep=keep,
-                                                 progress=progress)
+                                                 progress=progress,
+                                                 note=note)
             if form == "simplified":
                 H0 = T
                 n_terms_full = _n_terms(H0)
@@ -1434,7 +1825,12 @@ class SessionController:
             if fr is not None:
                 freqs = fr                     # point-aligned overlay
                 h_ref = lg
-        h = np.asarray(T.numeric(freqs))
+        # factored read: the loop gain is exactly where float64
+        # evaluation dies -- |T| crosses 0 dB by design, and beyond
+        # the crossing the assembled expression cancels to noise
+        # (folded cascode: up to 25 dB / 179 deg of error)
+        _ev = getattr(T, "numeric_min", T.numeric)
+        h = np.asarray(_ev(freqs))
 
         # margins from the model on a dense grid of its own -- the display /
         # overlay grid (e.g. a 20-per-decade stb sweep) is too coarse to place
@@ -1442,7 +1838,7 @@ class SessionController:
         fd = np.logspace(math.log10(fmin), math.log10(fmax), 4001)
         from .analysis.sensitivity import loop_margins
 
-        pm, fpm, gm, fgm = loop_margins(fd, np.asarray(T.numeric(fd)))
+        pm, fpm, gm, fgm = loop_margins(fd, np.asarray(_ev(fd)))
         warns: list[str] = []
         if pm is None:
             warns.append("no unity-gain crossing of |T| in the band: "
@@ -1465,6 +1861,7 @@ class SessionController:
         r = Result(
             inp=probe, out=f"T@{probe}",
             keep=norm_keep_list(keep),
+            qty="T",
             dc_gain=dc, dc_gain_db=dc_db,
             poles_hz=T.poles(), zeros_hz=T.zeros(), n_terms=_n_terms(T),
             tf_latex=sp.latex(T.expr), dc_gain_latex=sp.latex(T.dc_gain()),
@@ -1550,7 +1947,8 @@ class SessionController:
 
     def scan_ac_grounds(self, inp: str, out: str, *,
                         budget_db: float = 0.1, strategy=None,
-                        strategy_opts=None, fmin=None, fmax=None, **kw):
+                        strategy_opts=None, fmin=None, fmax=None,
+                        loop_probe: str | None = None, **kw):
         """Rank the circuit's mirror/bias nodes by the EXACT error that
         declaring them AC grounds would introduce, and recommend the
         largest jointly-safe set (analysis/acground.py). With a
@@ -1561,7 +1959,8 @@ class SessionController:
         opts = dict(strategy_opts or {})
         include = tuple(kw.pop("include", ()) or ())
         key = self._key("acground", inp, out, budget_db, strategy,
-                        tuple(sorted(opts.items())), fmin, fmax, include)
+                        tuple(sorted(opts.items())), fmin, fmax, include,
+                        loop_probe)
         if not kw and key in self._cache:
             return self._cache[key]
         crit, freqs = self._band_criterion(strategy, opts, fmin, fmax)
@@ -1569,7 +1968,7 @@ class SessionController:
             kw.setdefault("freqs", freqs)
         rep = self._analyzer_ready().scan_ac_grounds(
             inp, out, budget_db=budget_db, criterion=crit,
-            include=include, **kw)
+            include=include, loop_probe=loop_probe, **kw)
         if set(kw) <= {"freqs"}:
             self._cache[key] = rep
         return rep
@@ -1656,20 +2055,40 @@ class SessionController:
                              nodes, alias=an._alias, freqs=freqs,
                              criterion=crit)
 
+    @staticmethod
+    def _contract_response(prims, gnd, inp, out, freqs, alias,
+                           loop_probe=None):
+        """The numeric response the reduction contract is priced on:
+        tf(inp -> out), or -- for an stb bench -- the Tian loop gain
+        at `loop_probe` (the quantity a reduction must preserve
+        there)."""
+        if loop_probe is not None:
+            from .analysis.loopgain import numeric_loop_response
+
+            return numeric_loop_response(prims, gnd, loop_probe, freqs,
+                                         alias)
+        from .analysis import tearing
+
+        return tearing._numeric_response(prims, gnd, inp, out, freqs,
+                                         alias)
+
     def reduction_joint(self, inp: str, out: str, nodes, removals=(), *,
                         strategy=None, strategy_opts=None,
-                        fmin=None, fmax=None) -> dict:
+                        fmin=None, fmax=None,
+                        loop_probe: str | None = None) -> dict:
         """Price the ticked rewrite -- groundings AND deletions --
         TOGETHER, by re-solving the rewritten circuit (no rank-one
         shortcut composes across both rewrites). Returns {"worst_db",
         "worst_deg", "score"}; the score is x-budget under the given
-        contract, None without one."""
+        contract, None without one. With `loop_probe` the priced
+        response is the Tian loop gain (the stb contract)."""
         crit, bandf = self._band_criterion(strategy, strategy_opts,
                                            fmin, fmax)
         f = (np.asarray(bandf, dtype=float) if bandf is not None
              else np.geomspace(1.0, 1e10, 41))
         hb, hr = self.reduction_responses(nodes, inp, out, f,
-                                          removals=removals)
+                                          removals=removals,
+                                          loop_probe=loop_probe)
         hb = np.asarray(hb, dtype=complex)
         hr = np.asarray(hr, dtype=complex)
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -1780,7 +2199,7 @@ class SessionController:
         }
 
     def reduction_responses(self, nodes, inp: str, out: str, freqs,
-                            removals=()):
+                            removals=(), loop_probe: str | None = None):
         """(H_as_imported, H_reduced) over `freqs`: the numeric in->out
         response of the as-imported circuit (matches applied, no
         reduction) and of the circuit with `nodes` AC-grounded, dead
@@ -1799,8 +2218,8 @@ class SessionController:
             base.match(lead, *[m for m in group if m != lead])
         gnd = base.flat.ground
         f = np.asarray(freqs, dtype=float)
-        h_base = tearing._numeric_response(base.primitives, gnd, inp, out,
-                                           f, base._alias)
+        h_base = self._contract_response(base.primitives, gnd, inp, out,
+                                         f, base._alias, loop_probe)
         nodes = list(nodes)
         removals = list(removals)
         if not nodes and not removals:
@@ -1813,20 +2232,20 @@ class SessionController:
         if removals:
             rm = set(removals)
             prims = [p for p in prims if p.inst not in rm]
-        h_red = tearing._numeric_response(prims, gnd, inp, out, f,
-                                          base._alias)
+        h_red = self._contract_response(prims, gnd, inp, out, f,
+                                        base._alias, loop_probe)
         return h_base, h_red
 
     def apply_reduction(self, nodes, *, inp: str, out: str,
                         removals=(), strategy=None, strategy_opts=None,
-                        fmin=None, fmax=None) -> dict:
+                        fmin=None, fmax=None,
+                        loop_probe: str | None = None) -> dict:
         """Make the reduced circuit THE working circuit for every analysis
         that follows, and measure what the rewrite cost end to end — full
         vs reduced numeric response over a wide grid, not the scans'
         estimates. `nodes` are AC-grounded, `removals` (instance names
         from the removal scan, lumped equivalents included) are deleted
         outright. Returns the summary the GUI banners."""
-        from .analysis import tearing
 
         nodes = list(nodes)
         removals = list(removals)
@@ -1846,10 +2265,10 @@ class SessionController:
         an = self._analyzer_ready()          # builds the reduced circuit
 
         f = np.geomspace(1.0, 1e10, 41)
-        a = tearing._numeric_response(base.primitives, gnd, inp, out, f,
-                                      base._alias)
-        b = tearing._numeric_response(an.primitives, gnd, inp, out, f,
-                                      an._alias)
+        a = self._contract_response(base.primitives, gnd, inp, out, f,
+                                    base._alias, loop_probe)
+        b = self._contract_response(an.primitives, gnd, inp, out, f,
+                                    an._alias, loop_probe)
         with np.errstate(divide="ignore", invalid="ignore"):
             ratio = b / a
             db = 20 * np.log10(np.abs(ratio))
@@ -1863,12 +2282,13 @@ class SessionController:
         crit, bandf = self._band_criterion(strategy, strategy_opts,
                                            fmin, fmax)
         summary["score"] = None
+        summary["loop_probe"] = loop_probe
         if crit is not None:
             fb = bandf if bandf is not None else f
-            ab = tearing._numeric_response(base.primitives, gnd, inp, out,
-                                           fb, base._alias)
-            bb = tearing._numeric_response(an.primitives, gnd, inp, out,
-                                           fb, an._alias)
+            ab = self._contract_response(base.primitives, gnd, inp, out,
+                                         fb, base._alias, loop_probe)
+            bb = self._contract_response(an.primitives, gnd, inp, out,
+                                         fb, an._alias, loop_probe)
             summary["score"] = float(crit.score(fb, ab, bb))
             summary["criterion"] = crit.name or "dB band"
         self._reduction.update(summary)
@@ -1924,7 +2344,6 @@ class SessionController:
         read in the original device symbols. The member values join
         the value map (hover). Cached on the result; the result itself
         is returned when there is nothing to expand."""
-        import sympy as sp
         from dataclasses import replace as _replace
 
         defs = self.equivalent_definitions()
@@ -2064,16 +2483,19 @@ class SessionController:
 
     def scan_removals(self, inp: str, out: str, *,
                       budget_db: float = 0.1, strategy=None,
-                      strategy_opts=None, fmin=None, fmax=None, **kw):
+                      strategy_opts=None, fmin=None, fmax=None,
+                      loop_probe: str | None = None, **kw):
         """Which explicit elements can simply be DELETED: every netlist
         passive priced by the exact response shift its removal would cause
         (analysis/removal.py, the Lei & Wu setting-zero idea as a measured
         scan). With a `strategy`, pricing and gating run under the SAME
         BandCriterion as the order reduction, over the user's band.
-        Cached."""
+        With `loop_probe`, priced against the Tian loop gain instead of
+        the transfer -- the stb bench's contract. Cached."""
         opts = dict(strategy_opts or {})
         key = self._key("removal", inp, out, budget_db, strategy,
-                        tuple(sorted(opts.items())), fmin, fmax)
+                        tuple(sorted(opts.items())), fmin, fmax,
+                        loop_probe)
         if not kw and key in self._cache:
             return self._cache[key]
         an = self._analyzer_ready()
@@ -2084,7 +2506,7 @@ class SessionController:
             kw.setdefault("freqs", freqs)
         rep_ = _scan(an.primitives, an.flat.ground, inp, out,
                      budget_db=budget_db, alias=an._alias,
-                     criterion=crit, **kw)
+                     criterion=crit, loop_probe=loop_probe, **kw)
         if set(kw) <= {"freqs"}:
             self._cache[key] = rep_
         return rep_
@@ -2247,6 +2669,271 @@ class SessionController:
                        cache=self._tear_cache, progress=progress, **kw)
         if key is not None:
             self._cache[key] = out
+        return out
+
+    def margin_ledger(self, probe: str, *,
+                      complexity: int = 1) -> dict:
+        """The margin ledger at the loop probe: exact per-singularity
+        attribution of PM and GM (analysis.marginledger.margin_ledger,
+        modes named via participation) plus the per-element
+        sensitivity rows (margin_sensitivities). Numeric at the bound
+        operating point; cached on the circuit key, so switching the
+        OP point re-derives. The loop-gain prelude T0 is shared with
+        the compensation suggester through the tearing latency cache
+        -- whichever bench runs first pays it once."""
+        from .analysis.marginledger import margin_sensitivities
+        from .analysis.tearing import _fingerprint
+        from .engine.mna import build_mna
+
+        key = self._key("margin_ledger", probe, complexity)
+        if key in self._cache:
+            return self._cache[key]
+        an = self._analyzer_ready()
+        system = build_mna(an.primitives, an.flat.ground, probe,
+                           an._alias)
+        fp = _fingerprint(an.primitives, an.flat.ground)
+        led = self._ledger_of(system, fp, probe, an, complexity)
+        out = {"ledger": led,
+               "sensitivities": margin_sensitivities(
+                   system, an.primitives, probe, led, alias=an._alias)}
+        self._cache[key] = out
+        return out
+
+    def _ledger_of(self, system, fp, probe, an,
+                   complexity: int = 1):
+        """One point's attributed ledger -- modal owners AND the L-G
+        root sensitivities -- through the content-addressed tearing cache:
+        the fingerprint IS the identity of the circuit at that
+        operating point, so this survives OP switches and is shared
+        between margin_ledger and margin_ledger_set."""
+        from .analysis.loopgain import loop_gain
+        from .analysis.marginledger import attach_root_sensitivities
+        from .analysis.marginledger import margin_ledger as _ledger
+
+        lkey = ("margin_ledger", fp, probe, complexity)
+        led = self._tear_cache.get(lkey)
+        if led is None:
+            tkey = ("suggest_T0", fp, probe)
+            T = self._tear_cache.get(tkey)
+            if T is None:
+                T = loop_gain(system, probe, [])
+                self._tear_cache[tkey] = T
+            led = _ledger(T, system=system)
+            attach_root_sensitivities(led, system, an.primitives, probe,
+                          alias=an._alias, complexity=complexity)
+            self._tear_cache[lkey] = led
+        return led
+
+    def port_expression(self, probe: str, f0_hz: float, *,
+                        max_keep: int = 5) -> dict:
+        """The algebra behind a root's G_eff, asked of the circuit.
+
+        Where a pole's capacitance side reads but its conductance side
+        does not, the reconstruction names the remainder G_eff. That
+        quantity is the driving-point conductance at the capacitor's
+        own port, so rather than inferring it from couplings this
+        computes it: at s = 0 the matrix is purely conductive, and two
+        determinants give it symbolically in the root's own
+        sensitivity-list conductances.
+
+        On demand, like assess_root: the determinants cost seconds
+        where the ledger must stay interactive. The returned dict says
+        whether the port conductance MATCHES the value the identity
+        fixed -- it does exactly when the pole is that node's time
+        constant, and where it does not the aggregate stands
+        unchanged."""
+        from .analysis.marginledger import _collect_stamps, _tian_context
+        from .analysis.portg import conductance_for_aggregate
+        from .analysis.secondorder import loop_pole_jet
+        from .engine.mna import build_mna
+
+        an = self._analyzer_ready()
+        system = build_mna(an.primitives, an.flat.ground, probe,
+                           an._alias)
+        led = self.margin_ledger(probe)["ledger"]
+        cands = [e for e in led.entries
+                 if e.kind in ("pole", "zero") and e.roots
+                 and getattr(e, "reconstruction", None) is not None
+                 and e.reconstruction.aggregate]
+        if not cands:
+            raise ValueError("no root here names an aggregate")
+        e = min(cands, key=lambda x: abs(x.f0_hz - f0_hz))
+        x = max(e.roots, key=lambda r: r.imag)
+        fn, Q, ib, ip = _tian_context(system, probe)
+        stamps, vals, _m = _collect_stamps(system, an.primitives,
+                                           an._alias)
+        g, _H = loop_pole_jet(fn, Q, ib, ip, stamps, vals,
+                              2 * np.pi * complex(x))
+        out = conductance_for_aggregate(system, e.reconstruction,
+                                        stamps, g, max_keep=max_keep)
+        if out is None:
+            raise ValueError("this root's aggregate has no readable "
+                             "capacitor port")
+        out["f0_hz"] = e.f0_hz
+        out["aggregate"] = e.reconstruction.aggregate
+        return out
+
+    def assess_root(self, probe: str, f0_hz: float):
+        """Why a root reads as SHARED, and what would change it.
+
+        Aggregates the root's attribution onto circuit nodes and then
+        walks each strong element along a ray, following the root by
+        Newton, to see whether its ownership GATHERS anywhere. Three
+        answers: already localized (so a missing formula is a gap in
+        the reader), collapsible along a named ray (which is where
+        compensation belongs), or distributed with no ray that
+        gathers it (which calls for topology, not resizing).
+
+        Deliberately on demand: a ray sweep costs seconds, where the
+        ledger itself must stay interactive. See analysis.rays."""
+        from .analysis import rays
+        from .analysis.marginledger import _collect_stamps, _tian_context
+        from .analysis.secondorder import loop_pole_jet
+        from .engine.mna import build_mna
+
+        an = self._analyzer_ready()
+        system = build_mna(an.primitives, an.flat.ground, probe,
+                           an._alias)
+        led = self.margin_ledger(probe)["ledger"]
+        cands = [e for e in led.entries
+                 if e.kind in ("pole", "zero") and e.roots]
+        if not cands:
+            raise ValueError("this loop gain has no attributable roots")
+        e = min(cands, key=lambda x: abs(x.f0_hz - f0_hz))
+        x = max(e.roots, key=lambda r: r.imag)
+        s0 = 2 * np.pi * complex(x)
+        fn, Q, ib, ip = _tian_context(system, probe)
+        stamps, vals, _m = _collect_stamps(system, an.primitives,
+                                           an._alias)
+        g, _H = loop_pole_jet(fn, Q, ib, ip, stamps, vals, s0)
+        return rays.assess(system, probe, an.primitives, an._alias,
+                           g, stamps, s0)
+
+    def margin_ledger_set(self, probe: str, progress=None) -> dict:
+        """The margin ledger at EVERY operating point of the discovered
+        set -- the raw material of the per-corner comparison view
+        (analysis.marginledger.compare_ledgers). The session stays
+        bound where it is; each point's bench is built through the
+        shared pipeline and its ledger served from the
+        content-addressed tearing cache, so a re-run -- or an OP
+        switch and back -- pays only for points not yet done."""
+        from .analysis.tearing import _fingerprint
+        from .engine.mna import build_mna
+
+        if not self.op_points:
+            raise ValueError("this session has a single operating point")
+        labels = self.op_point_labels
+        leds = []
+        for k, pt in enumerate(self.op_points):
+            if progress is not None:
+                progress(f"margin ledger at {labels[k]} "
+                         f"({k + 1}/{len(labels)})…", k, len(labels))
+            if k == self._op_index:
+                an = self._analyzer_ready()
+            else:
+                an, _ = self._build_analyzer(self._make_run(pt.psf))
+            system = build_mna(an.primitives, an.flat.ground, probe,
+                               an._alias)
+            fp = _fingerprint(an.primitives, an.flat.ground)
+            leds.append(self._ledger_of(system, fp, probe, an))
+        return {"labels": labels, "ledgers": leds,
+                "ref_index": self._op_index}
+
+    def suggest_robust_compensation(self, probe: str, *, goal: str = "mfm",
+                                    exclude=(), candidates=None,
+                                    top: int = 5, progress=None, **kw):
+        """suggest_compensation sized against the WORST operating point
+        of the discovered set: each candidate's (C, R) is the least-area
+        value that holds the goal at EVERY point (corners, sweep
+        points), not just the bound one -- a nominal-sized branch can
+        overshoot its flatness budget at a cold corner while a corner
+        that peaks harder wants more capacitance. The candidate screen,
+        the RHP locus gate and the reported metrics stay on the bound
+        point; `achieved` is the worst-corner verdict. Not cached (the
+        symbolic prelude still serves from the tearing cache)."""
+        from .analysis.compensate import suggest_compensation as _suggest
+        from .engine.mna import build_mna
+
+        if not self.op_points:
+            raise ValueError("this session has a single operating point")
+        an = self._analyzer_ready()
+        drop = set(exclude)
+        prims = [p for p in an.primitives if p.inst not in drop]
+        system = build_mna(prims, an.flat.ground, probe, an._alias)
+        labels = self.op_point_labels
+        corner = []
+        for k, pt in enumerate(self.op_points):
+            if k == self._op_index:
+                continue
+            if progress is not None:
+                progress(f"building the {labels[k]} bench "
+                         f"({k + 1}/{len(labels)})…")
+            a2, _ = self._build_analyzer(self._make_run(pt.psf))
+            p2 = [p for p in a2.primitives if p.inst not in drop]
+            corner.append(build_mna(p2, a2.flat.ground, probe, a2._alias))
+        return _suggest(system, probe, goal=goal, candidates=candidates,
+                        top=top, corner_systems=corner,
+                        torn=(prims, an.flat.ground, None),
+                        cache=self._tear_cache, progress=progress, **kw)
+
+    def suggestion_robustness(self, probe: str, suggestions, *,
+                              exclude=(), progress=None) -> list[dict]:
+        """Re-measure ALREADY-SIZED suggestions on EVERY operating point
+        of the discovered set -- the values stay fixed at what the bound
+        point chose, only the operating point moves. This is the corner
+        question a single-point mfm certificate cannot answer: a
+        pole-zero doublet that sits benign at nominal can peak hard at a
+        skewed process corner with the same branch installed.
+
+        Each point rebuilds the full session pipeline (matches, value
+        policy, the applied reduction) from ITS op data, then measures
+        every goal's criterion through the rank-one loop-gain updater.
+
+        Returns one dict per suggestion, aligned with the input:
+        `labels`, per-point `points` (flat_db / pm_deg / gm_db / ms),
+        and the worst-case entries `worst_flat_db` / `worst_pm_deg` /
+        `worst_ms` each with the label of the corner that set it."""
+        from .analysis.compensate import evaluate_suggestions
+        from .engine.mna import build_mna
+
+        if not self.op_points:
+            raise ValueError("this session has a single operating point")
+        suggestions = list(suggestions)
+        labels = self.op_point_labels
+        drop = set(exclude)
+        per_point = []
+        for k, pt in enumerate(self.op_points):
+            if progress is not None:
+                progress(f"measuring on {labels[k]} "
+                         f"({k + 1}/{len(labels)})…", k, len(labels))
+            if k == self._op_index:
+                an = self._analyzer_ready()
+            else:
+                an, _ = self._build_analyzer(self._make_run(pt.psf))
+            prims = [p for p in an.primitives if p.inst not in drop]
+            system = build_mna(prims, an.flat.ground, probe, an._alias)
+            per_point.append(evaluate_suggestions(system, probe,
+                                                  suggestions))
+        out = []
+        for j in range(len(suggestions)):
+            rows = [per_point[k][j] for k in range(len(labels))]
+            flats = [r["flat_db"] for r in rows]
+            mss = [r["ms"] for r in rows]
+            pms = [r["pm_deg"] for r in rows]
+            kf = max(range(len(rows)), key=lambda k: flats[k])
+            km = max(range(len(rows)), key=lambda k: mss[k])
+            if any(p is None for p in pms):
+                # a corner with no unity crossing is not a working amp
+                kp = next(k for k, p in enumerate(pms) if p is None)
+                worst_pm = None
+            else:
+                kp = min(range(len(rows)), key=lambda k: pms[k])
+                worst_pm = pms[kp]
+            out.append({
+                "labels": labels, "points": rows,
+                "worst_flat_db": flats[kf], "worst_flat_label": labels[kf],
+                "worst_pm_deg": worst_pm, "worst_pm_label": labels[kp],
+                "worst_ms": mss[km], "worst_ms_label": labels[km]})
         return out
 
     def suggest_multi_compensation(self, probe: str, *, goal: str = "pm",

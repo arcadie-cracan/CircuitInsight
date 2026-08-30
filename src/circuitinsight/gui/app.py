@@ -6,17 +6,19 @@ Requires `circuitinsight[gui]` (PySide6).
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QSettings, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
-    QFileDialog, QGroupBox, QHBoxLayout, QLabel, QMenu, QLineEdit, QMainWindow,
+    QFileDialog, QFrame, QGroupBox, QHBoxLayout, QLabel, QMenu, QLineEdit,
+    QMainWindow,
     QMessageBox,
-    QPushButton, QProgressBar, QScrollArea, QSizePolicy, QSpinBox,
+    QPushButton, QProgressBar, QScrollArea, QSizePolicy,
     QSplitter, QSplitterHandle, QTableWidget,
     QTableWidgetItem, QTabWidget, QTextEdit, QToolBar, QVBoxLayout, QWidget,
 )
@@ -27,9 +29,9 @@ from matplotlib.figure import Figure
 from ..session import SessionController
 from . import devtree, exprweb, summaryweb, theme, view
 from .benches import (CompensateBenchMixin, GFTBenchMixin,
-                      ModesBenchMixin, ReduceBenchMixin,
-                      SchematicMixin, WhatIfMixin)
-from .jobs import JobRunnerMixin, _Cancelled, _Worker
+                      MarginsBenchMixin, ModesBenchMixin,
+                      ReduceBenchMixin, SchematicMixin, WhatIfMixin)
+from .jobs import JobRunnerMixin, _Worker
 from .persistence import PersistenceMixin
 from .report import ReportMixin
 from .rangeslider import RangeSlider
@@ -86,12 +88,12 @@ class RestoringSplitter(QSplitter):
 class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                  WhatIfMixin, ReduceBenchMixin,
                  CompensateBenchMixin, ModesBenchMixin,
-                 GFTBenchMixin, SchematicMixin, QMainWindow):
+                 MarginsBenchMixin, GFTBenchMixin, SchematicMixin,
+                 QMainWindow):
     #: tests point this at a temp .ini so they never touch the registry
     settings_path: str | None = None
 
     def __init__(self):
-        self._xprobe = None          # Virtuoso cross-probe, off until asked
         super().__init__()
         self.setWindowTitle("CircuitInsight")
         self.controller: SessionController | None = None
@@ -199,6 +201,21 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                                         Qt.ToolTipRole)
         self.tool_combo.currentTextChanged.connect(self._on_tool_selected)
         tb.addWidget(self.tool_combo)
+        # the operating-point selector: a maestro corner/parametric run
+        # opens as ONE session over many OPs (same topology); this picks
+        # the active one, and every analysis re-derives on it
+        self.op_lbl = QLabel(" OP: ")
+        self.op_combo = QComboBox()
+        self.op_combo.setMinimumWidth(110)
+        self.op_combo.setToolTip(
+            "The active operating point of a corner / parametric run "
+            "(#maeCorner labels). Matches, reductions and ticks are "
+            "structural and survive the switch; results re-derive.")
+        self.op_combo.currentIndexChanged.connect(self._on_op_point)
+        self._op_lbl_act = tb.addWidget(self.op_lbl)
+        self._op_act = tb.addWidget(self.op_combo)
+        self._op_lbl_act.setVisible(False)
+        self._op_act.setVisible(False)
         self._in_lbl_act = tb.addWidget(QLabel(" in: "))
         self._in_act = tb.addWidget(self.in_combo)
         self._out_lbl_act = tb.addWidget(QLabel(" out: "))
@@ -214,6 +231,17 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self._probe_lbl_act.setVisible(False)
         self._probe_act.setVisible(False)
         self._probe2_act.setVisible(False)
+        # the Impedance tool's TARGET: no dropdown -- a label saying
+        # what Solve will compute (seen by I0 / from node smpl to gnd
+        # / between nodes reg and fdbk), set from the trees or a wire
+        # click; the ranking follows the choice immediately, the
+        # impedance itself waits for Solve (a port dropdown here twice
+        # showed a ranking that was not the port's)
+        self.imp_target_lbl = QLabel("")
+        self._imp_tpre_act = tb.addWidget(QLabel(" target: "))
+        self._imp_target_act = tb.addWidget(self.imp_target_lbl)
+        self._imp_tpre_act.setVisible(False)
+        self._imp_target_act.setVisible(False)
         tb.addSeparator()
         self._solve_act = tb.addWidget(self.solve_btn)
         self._form_act = tb.addWidget(self.form_combo)
@@ -322,16 +350,14 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         # WebEngine addon); same setPlainText/toPlainText API either way
         self.summary = summaryweb.make()
         # Expression surface: the KaTeX web view when QtWebEngine is present --
-        # crisp vector math, hover = OP value, click = symbolClicked (the future
-        # cross-probe handle). Falls back to the matplotlib mathtext canvas on a
-        # PySide6 install without the WebEngine addon.
+        # crisp vector math, hover = OP value, click = symbolClicked. Falls
+        # back to the matplotlib mathtext canvas on a PySide6 install
+        # without the WebEngine addon.
         self.exprweb = None
         if exprweb.WEBENGINE:
             try:
                 self.exprweb = exprweb.ExprWebView()
                 self.exprweb.bridge.symbolClicked.connect(self._select_keep_symbol)
-                self.exprweb.bridge.selectionChanged.connect(
-                    self._xprobe_selection)
             except Exception:
                 self.exprweb = None            # broken GL/WebEngine -> fall back
         if self.exprweb is not None:
@@ -384,6 +410,9 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         # Two overlapping Bode curves cannot show a 0.5 dB residual. The Error
         # tab is where "how good is this model" actually becomes readable.
         self.err_canvas = FigureCanvasQTAgg(Figure(figsize=(5.2, 3.0)))
+        # a fresh Figure's face is WHITE until the first solve draws
+        # into it -- on dark the empty Error tab flashed a white page
+        theme.style_figure(self.err_canvas.figure)
         # the Error tab is often first SHOWN long after the solve, and
         # its pane resizes independently: re-align on its own draws too
         self.err_canvas.mpl_connect("draw_event",
@@ -407,6 +436,8 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self._whatif_tab = self._whatif_page()
         tabs.addTab(self._whatif_tab, "What-if")
         tabs.addTab(self._comp_page(), "Suggestions")
+        tabs.addTab(self._margins_page(), "Margins")
+        tabs.addTab(self._sens_page(), "Sensitivities")
         tabs.addTab(self._gft_page(), "GFT")
         tabs.addTab(self.logview, "Log")
         self.tabs = tabs
@@ -442,6 +473,19 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self._cert_timer.setSingleShot(True)
         self._cert_timer.setInterval(250)
         self._cert_timer.timeout.connect(self._refresh_certificate)
+        # the ranking's scores and peaks are measured over the chosen
+        # band, so a band drag re-ranks the keep table (debounced
+        # longer than the certificate: a rank is a numeric sweep) --
+        # a list computed for another band is the stale-list trap
+        self._rank_band_timer = QTimer(self)
+        self._rank_band_timer.setSingleShot(True)
+        self._rank_band_timer.setInterval(700)
+        self._rank_band_timer.timeout.connect(self._rerank_on_band)
+        # the engine child's stderr goes to a file (host.py dup2);
+        # this tail brings its warnings into the Log where they belong
+        self._engine_log_timer = QTimer(self)
+        self._engine_log_timer.setInterval(2000)
+        self._engine_log_timer.timeout.connect(self._tail_engine_log)
         band_row.setToolTip(
             "The frequency band a budgeted result is certified for: the "
             "error budget is enforced HERE, and a reduced-order model is "
@@ -460,6 +504,11 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.nav = NavigationToolbar2QT(self.canvas, self,
                                         coordinates=False)
         self.nav.setOrientation(Qt.Vertical)
+        # hidden on request: the buttons duplicated what the mouse and
+        # the report/export verbs already do, and the strip stole plot
+        # width. The toolbar object stays alive -- matplotlib's canvas
+        # shortcuts and any programmatic pan/zoom still route through it
+        self.nav.setVisible(False)
         plot_area = QWidget()
         pa = QHBoxLayout(plot_area)
         pa.setContentsMargins(0, 0, 0, 0)
@@ -468,6 +517,14 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         pa.addWidget(self.nav, 0, Qt.AlignTop)
         self.canvas.mpl_connect("draw_event",
                                 lambda _ev: self._sync_band_row())
+        # margins are FRACTIONS frozen at render-time width; re-fit
+        # them whenever the canvas actually changes size (first light
+        # renders into a pane that has not been laid out yet)
+        self.canvas.mpl_connect(
+            "resize_event", lambda _ev: view.relayout(self.canvas.figure))
+        self.err_canvas.mpl_connect(
+            "resize_event",
+            lambda _ev: view.relayout(self.err_canvas.figure))
 
         # the right column: TWO pages up top (the analysis plots and
         # the schematic, each needing the full width to be read) over
@@ -475,7 +532,13 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         # Expression concern the run, not the page you happen to view
         self._schematic_tab = self._schematic_page()
         self.main_tabs = QTabWidget()
-        self.main_tabs.setDocumentMode(True)
+        # a plain tab widget, like the result strip below: document
+        # mode draws tabs with no pane frame -- on dark they floated
+        # detached over the bench (and its tab-bar base line is pure
+        # white, a glare there). Dark flattens the pane bevel to a
+        # 1px border (theme.py, by name): Fusion's inner highlight
+        # read as a raised button face.
+        self.main_tabs.setObjectName("main_tabs")
         self.main_tabs.addTab(plot_area, "Analysis")
         self.main_tabs.addTab(self._schematic_tab, "Schematic")
         self.main_tabs.currentChanged.connect(self._on_main_tab)
@@ -487,6 +550,27 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         right.addWidget(tabs)
         right.setSizes([500, 240])
         self.right_split = right
+        # the result strip reads bottom-up: its tab bar sits at the
+        # BOTTOM edge, and each pane's corner carries a maximize
+        # toggle -- press to take the full height, press again (or
+        # double-click the splitter bar) to come back
+        tabs.setTabPosition(QTabWidget.South)
+        self._right_max: str | None = None
+
+        def _mk_max(which, host):
+            from PySide6.QtWidgets import QToolButton
+            b = QToolButton()
+            b.setAutoRaise(True)
+            b.setIcon(theme.icon("expand"))
+            b.setToolTip(
+                "Full height for this pane; press again to restore\n"
+                "(double-clicking the splitter bar also restores)")
+            b.clicked.connect(lambda: self._toggle_right_max(which))
+            host.setCornerWidget(b, Qt.TopRightCorner)
+            return b
+
+        self._max_top_btn = _mk_max("top", self.main_tabs)
+        self._max_bot_btn = _mk_max("bottom", tabs)
 
         split = RestoringSplitter(Qt.Horizontal)
         split.setObjectName("h_split")
@@ -494,12 +578,13 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         split.addWidget(left)
         split.addWidget(right)
         # panes may collapse to nothing (a wide plot is worth it), so
-        # the handle must stay findable when one has: wider, and drawn
+        # the handle must stay findable when one has: wider. The LOOK
+        # comes from the app QSS (theme._qss: chrome background,
+        # three-dot grip, hover lift) -- a widget-level stylesheet
+        # here overrode it with a hardcoded light bar that glared on
+        # the dark theme (field report)
         for sp in (split, left, keep_col):
             sp.setHandleWidth(7)
-            sp.setStyleSheet(
-                "QSplitter::handle { background: #c8c8c8; }"
-                "QSplitter::handle:hover { background: #3a6ea5; }")
         # setSizes before show() is clobbered by the first layout pass (the
         # tables' size hints won, squeezing the plots to a sliver): stretch
         # factors carry the intent through layout, and showEvent re-applies
@@ -594,6 +679,38 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.left_split.setSizes([300, 330])
         self._keep_col.setSizes([520, 140])
         self.right_split.setSizes([500, 240])
+        self._right_max = None
+        self._sync_max_icons()
+
+    def _sync_max_icons(self):
+        # CircuitInsight's own themed glyphs: the Fusion titlebar
+        # icons drew in a dark shade (invisible on dark) and meant
+        # WINDOW maximize, not pane expand
+        for which, btn in (("top", self._max_top_btn),
+                           ("bottom", self._max_bot_btn)):
+            active = self._right_max == which
+            btn.setIcon(theme.icon("restore" if active else "expand"))
+
+    def _toggle_right_max(self, which: str):
+        """Maximize the plots/schematic pane or the result strip: the
+        other pane collapses; a second press (or a double-click on
+        the splitter bar) restores the default proportions."""
+        sp = self.right_split
+        sizes = sp.sizes()
+        total = sum(sizes) or 740
+        # the truth is the SIZES, not a flag: a drag or a double-click
+        # on the bar restores behind the button's back
+        maxed = (sizes[1] == 0 if which == "top" else sizes[0] == 0) \
+            if len(sizes) >= 2 else False
+        if maxed:
+            d = sp._default_sizes
+            share = [x / sum(d) for x in d]
+            sp.setSizes([max(1, int(total * s)) for s in share])
+            self._right_max = None
+        else:
+            sp.setSizes([total, 0] if which == "top" else [0, total])
+            self._right_max = which
+        self._sync_max_icons()
 
     def _toggle_left_panes(self):
         """The keyboard way home: any pane dragged to nothing, in any
@@ -689,11 +806,6 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             lambda: self._load_state_file(None))
         self.a_restore_last.setEnabled(False)
         m_file.addSeparator()
-        a_tog = m_file.addAction("Restore collapsed panes / collapse &left")
-        a_tog.setShortcut("Ctrl+Shift+L")
-        a_tog.triggered.connect(self._toggle_left_panes)
-        m_file.addAction("Reset la&yout").triggered.connect(self._reset_layout)
-        m_file.addSeparator()
         m_file.addAction("&Quit").triggered.connect(self.close)
 
         m_an = mb.addMenu("&Analysis")
@@ -723,7 +835,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.a_split.triggered.connect(self._split_advice)
         # the solver backend: set once, rarely -- a radio submenu driving
         # the (hidden) combo that holds the state
-        m_be = m_an.addMenu("Solver &backend")
+        self._backend_menu = m_an.addMenu("Solver &backend")
         self._backend_group = QActionGroup(self)
         self._backend_group.setExclusive(True)
         self._backend_actions = []
@@ -793,15 +905,6 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                 lambda _c=False, label=label: self._on_matchval_changed(label))
         self._policy_actions["weighted"].setChecked(True)
         m_dev.addSeparator()
-        # cross-probe: select here, highlight in the Virtuoso schematic
-        self.a_xprobe = m_dev.addAction("Cross-&probe to Virtuoso")
-        self.a_xprobe.setCheckable(True)
-        self.a_xprobe.setToolTip(
-            "Highlight the clicked symbol's device in the Virtuoso schematic.\n"
-            "Needs the circuitinsight[virtuoso] extra, a running skillbridge\n"
-            "server, and cin_xprobe.il loaded in the CIW.")
-        self.a_xprobe.toggled.connect(self._on_xprobe_toggled)
-        m_dev.addSeparator()
         # cap model: charge-matrix (accurate, exact transcapacitances) vs the
         # five-cap lumped model -- the textbook contrast. Toggling re-opens
         # the run (the model is baked into the reconstruction) and re-solves.
@@ -830,6 +933,38 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             "a signal-driven gate keep their separate gmb. Re-opens "
             "the run.")
         self.a_lump_gmb.toggled.connect(self._on_mos_model_toggled)
+
+        # Options: DESKTOP preferences -- theme and layout. The
+        # modeling choices (cap model, gmb lump, match policy) stay in
+        # Devices: they change the model, not the app.
+        m_opt = mb.addMenu("&Options")
+        m_opt.setTearOffEnabled(True)
+        self.a_dark = m_opt.addAction("&Dark theme")
+        self.a_dark.setCheckable(True)
+        self.a_dark.setChecked(theme.current == "dark")
+        self.a_dark.toggled.connect(
+            lambda on: self.apply_theme("dark" if on else "light"))
+        m_opt.addSeparator()
+        # a once-per-machine setting, not a schematic verb: the header
+        # button it replaces spent permanent toolbar room on it
+        a_lib = m_opt.addAction("Schematic symbol &library…")
+        a_lib.setToolTip("Choose the SVG symbol library directory (the "
+                         "one with terminals.csv); remembered across "
+                         "sessions")
+        a_lib.triggered.connect(self._schematic_pick_library)
+        a_flush = m_opt.addAction("Flush solve-time &calibration…")
+        a_flush.setToolTip(
+            "Forget everything the solve-time estimator has learned on "
+            "this machine (the measured model and the per-path "
+            "corrections) and re-measure from scratch. Use it after a "
+            "hardware change, or when training data was polluted by a "
+            "loaded server.")
+        a_flush.triggered.connect(self._flush_calibration)
+        m_opt.addSeparator()
+        a_tog = m_opt.addAction("Restore collapsed panes / collapse &left")
+        a_tog.setShortcut("Ctrl+Shift+L")
+        a_tog.triggered.connect(self._toggle_left_panes)
+        m_opt.addAction("Reset la&yout").triggered.connect(self._reset_layout)
 
         m_help = mb.addMenu("&Help")
         m_help.setTearOffEnabled(True)
@@ -873,6 +1008,14 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.nets_tree.connectionActivated.connect(self._goto_instance)
 
         self.dev_tabs = QTabWidget()
+        # the dark theme rules THIS pane's border explicitly (theme.py):
+        # its page is a BASE-dark tree that swallows the derived outline
+        self.dev_tabs.setObjectName("dev_tabs")
+        # the tab pane frames its page already: a tree keeping its own
+        # frame doubles the line on light and stacks two dark lines
+        # into a mush at the bottom on dark
+        self.devices.setFrameShape(QFrame.NoFrame)
+        self.nets_tree.setFrameShape(QFrame.NoFrame)
         self.dev_tabs.addTab(self.devices, "Instances")
         self.dev_tabs.addTab(self.nets_tree, "Nets")
 
@@ -882,17 +1025,26 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.devices.suggestRequested.connect(self.suggest_matches)
         self.devices.unmatchSelectionRequested.connect(self.unmatch_selected)
 
-        v = QVBoxLayout()
-        v.addWidget(self.dev_tabs, 1)
         # the operating-point card: the selected device, read the way a
         # designer reads it, persistent -- follows the selection from
-        # the tree, the schematic, an expression symbol, a keep row
+        # the tree, the schematic, an expression symbol, a keep row.
+        # Trees and card share a SPLITTER, so the card's height is the
+        # user's to drag (it was a fixed 240 px cap)
         from .opcard import OpCard
         self.op_card = OpCard()
         self.op_card.full_btn.clicked.connect(
             lambda: self._show_device_op_for(self.op_card.name)
             if self.op_card.name else None)
-        v.addWidget(self.op_card, 0)
+        dev_split = RestoringSplitter(Qt.Vertical)
+        dev_split.setObjectName("dev_split")
+        dev_split._default_sizes = [420, 200]
+        dev_split.addWidget(self.dev_tabs)
+        dev_split.addWidget(self.op_card)
+        dev_split.setStretchFactor(0, 1)
+        dev_split.setStretchFactor(1, 0)
+        dev_split.setCollapsible(0, False)
+        v = QVBoxLayout()
+        v.addWidget(dev_split, 1)
         return self._collapsible(box, v)
 
     def _keepset_group(self):
@@ -934,7 +1086,6 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.keep_tbl.itemChanged.connect(self._on_keep_changed)
         self.keep_tbl.itemSelectionChanged.connect(self._on_keep_row_selected)
 
-        from PySide6.QtWidgets import QLineEdit
 
         self.keep_filter = QLineEdit()
         self.keep_filter.setPlaceholderText(
@@ -1065,15 +1216,11 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         return self._collapsible(box, v)
 
     def _z_rank_target(self):
-        """The Impedance tool's active target (marker name or user
-        spec), or None outside the tool."""
+        """The Impedance tool's active target spec, or None outside
+        the tool (or before one is chosen)."""
         if self.mode_combo.currentText() != "Impedance":
             return None
-        port = self.probe_combo.currentText()
-        spec = getattr(self, "_imp_spec", None)
-        if port == self.USER_PORT:
-            return spec
-        return port or None
+        return getattr(self, "_imp_spec", None)
 
     def _rerank_for_z(self):
         """The keep table's contributors follow the response on the
@@ -1089,17 +1236,38 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         if t is None:
             return
         c = self.controller
-        desc = self._imp_desc(t) if isinstance(t, dict) else f"Z({t})"
+        desc = self._imp_desc(t)
         try:
             io = self._io()
         except Exception:
             io = None
+        # the ranking samples the band the PLOT shows -- without the
+        # bound the sampler spans only the reactive features, and a
+        # circuit whose features cluster at one resonance was scored
+        # at that single frequency (the DC plateau never sampled)
+        lo, hi = self.band_slider.values()
+        # resolve the target NOW, on the GUI thread: when Z cannot
+        # rank (a port between two internal nets), the table falls
+        # back to the transfer ranking -- which misled twice in the
+        # field while it fell back silently. The status bar now says
+        # WHOSE ranking the table carries.
+        if not c.can_rank_z(t):
+            if not io:
+                return
+            self.statusBar().showMessage(
+                f"{desc} is not a ground-referenced port — the "
+                f"symbols table shows the {io[0]} → {io[1]} TRANSFER "
+                f"ranking, not Z's")
+            self._rerank_after_rewrite(
+                f"ranking for {io[0]} → {io[1]} (transfer) …",
+                ranker=lambda: c.rank_symbols(*io, fmin=lo, fmax=hi))
+            return
 
         def rank():
             try:
-                return c.rank_symbols_z(t)
+                return c.rank_symbols_z(t, fmin=lo, fmax=hi)
             except Exception:                     # noqa: BLE001
-                return (c.rank_symbols(*io) if io else None)
+                return None
 
         self._rerank_after_rewrite(f"ranking for {desc} …", ranker=rank)
 
@@ -1125,7 +1293,6 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
 
     def _keep_header_menu(self, pos):
         """View options of the keep table: the peaks column, grouping."""
-        from PySide6.QtWidgets import QMenu
 
         menu = QMenu(self)
         for col, label in ((1, "Show dcOp column"), (2, "Show score column"),
@@ -1149,7 +1316,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
     def _keep_menu(self, pos):
         """Row verbs: the symbol's LaTeX alias, its device's alias, the
         planner, the ranking -- what the button row used to carry."""
-        from PySide6.QtWidgets import QInputDialog, QMenu
+        from PySide6.QtWidgets import QInputDialog
 
         it = self.keep_tbl.itemAt(pos)
         menu = QMenu(self)
@@ -1200,10 +1367,10 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
 
     def _build_backend_menu(self):
         """Analysis -> Solver backend mirrors the hidden combo both ways."""
-        menu = None
-        for m in self.menuBar().findChildren(QMenu):
-            if m.title() == "Solver &backend":
-                menu = m
+        # the menu is HELD from where it was created; it used to be
+        # re-found by matching its own title text, which quietly tied
+        # the wiring to a label a rename would have broken
+        menu = getattr(self, "_backend_menu", None)
         if menu is None:
             return
         for i in range(self.backend_combo.count()):
@@ -1232,6 +1399,18 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                 ("Suggest", "suggest",
                  bool(getattr(self, "_comp_suggestions", [])
                       or getattr(self, "_comp_multi", None))),
+            ]
+        if self.mode_combo.currentText() == "Impedance":
+            # the tool's own step: Solve has nothing to do until a
+            # target is chosen from the trees or a wire
+            return [
+                ("Open", "open", self.controller is not None),
+                ("Match", "match", bool(self._match_groups)),
+                ("Set target", "ztarget",
+                 getattr(self, "_imp_spec", None) is not None),
+                ("Choose symbols", "keep",
+                 self.controller is not None and bool(self.checked_keep())),
+                ("Solve", "solve", self.history.count() > 0),
             ]
         return [
             ("Open", "open", self.controller is not None),
@@ -1268,6 +1447,14 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         elif action == "match" and self.controller is not None:
             self.suggest_matches()
             self._update_crumb()
+        elif action == "ztarget" and self.controller is not None:
+            # bring the Nets tree forward -- targets are chosen from
+            # the circuit, and this is where they live
+            self.dev_tabs.setCurrentWidget(self.nets_tree)
+            self.statusBar().showMessage(
+                "impedance: set a target — right-click a net or a "
+                "two-terminal element (Set as impedance target), "
+                "or click a wire")
         elif action == "keep" and self.controller is not None:
             self._rank()
             self._update_crumb()
@@ -1464,6 +1651,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             self._showing_from_history = False
 
     def _set_strip(self, text: str, severity: str = "info"):
+        self._strip_sev = severity      # a theme switch re-tints it
         colors = theme.SEVERITY
         bg, fg = colors.get(severity, colors["info"])
         self.msg_strip.setStyleSheet(
@@ -1476,58 +1664,67 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.msg_strip.hide()
         self.msg_strip.setText("")
 
-    USER_PORT = "user selected"
-
     def _imp_desc(self, spec) -> str:
+        """The target label's language: what Solve will compute."""
         if "seen_by" in spec:
-            return f"Z seen by {spec['seen_by']}"
+            return f"seen by {spec['seen_by']}"
+        if "port" in spec:
+            return f"at marker {spec['port']}"
         if spec.get("ref"):
-            return f"Z({spec['node']}, {spec['ref']})"
-        return f"Z({spec['node']})"
+            return f"between nodes {spec['node']} and {spec['ref']}"
+        return f"from node {spec['node']} to gnd"
+
+    def _imp_update_target_lbl(self):
+        spec = getattr(self, "_imp_spec", None)
+        if spec is None:
+            self.imp_target_lbl.setText(
+                "none — right-click a net or element, or click a wire")
+            self.imp_target_lbl.setStyleSheet(f"color: {theme.MUTED};")
+        else:
+            self.imp_target_lbl.setText(self._imp_desc(spec))
+            self.imp_target_lbl.setStyleSheet("")
 
     def _impedance_at_nets(self, net: str, ref: str = ""):
         """A Nets-tree pick: one net is Z to ground, two are Z between
-        them. The port dropdown says 'user selected' so the toolbar
-        does not claim a marker port it is not using."""
+        them. Sets the TARGET only; Solve computes."""
         spec = {"node": net, "ref": ref} if ref else {"node": net}
         self._impedance_user_spec(spec)
 
     def _impedance_seen_by(self, name: str):
         """An Instances-tree pick on a two-terminal element: the
         impedance the element sees at its terminals -- the element
-        removed, sources zeroed (Thevenin looking outward)."""
+        removed, sources zeroed (Thevenin looking outward). Sets the
+        TARGET only; Solve computes."""
         self._impedance_user_spec({"seen_by": name})
 
-    def _impedance_user_spec(self, spec, solve=True):
+    def _impedance_user_spec(self, spec, solve=False):
+        """THE target setter: stores the spec, says it in the toolbar
+        label, re-ranks the keep table for it. The impedance itself
+        is computed by Solve alone (a selection is not a command)."""
         if self.controller is None:
             return
-        # mode first: entering Impedance repopulates the port combo,
-        # and that churn runs through _on_port_text -- the spec must
-        # be stored after it, or the handler wipes it
         self.mode_combo.setCurrentText("Impedance")
         self._imp_spec = spec
-        if self.probe_combo.findText(self.USER_PORT) < 0:
-            self.probe_combo.addItem(self.USER_PORT)
-        self.probe_combo.setCurrentText(self.USER_PORT)
-        self._rerank_for_z()
+        self._imp_update_target_lbl()
+        self._update_crumb()          # the Set-target step just landed
         desc = self._imp_desc(spec)
+        # shown BEFORE the rerank, whose fallback notice must survive
+        self.statusBar().showMessage(
+            f"impedance target: {desc} — Solve to compute")
+        self._rerank_for_z()
         if not solve:
-            # the target is chosen and the ranking follows; the solve
-            # waits for Solve (a selection is not a command)
-            self.statusBar().showMessage(
-                f"impedance target: {desc} — Solve to compute")
             return
         keep = self.checked_keep()
         self._launch(lambda cb: self.controller.impedance_result(
                          spec, keep=keep),
-                     f"impedance: {desc} …")
+                     f"impedance {desc} …")
 
     def _impedance_target_from_selection(self):
         """In the Impedance tool, SELECTING a net -- Nets tree or a
-        wire click -- chooses the port: the dropdown reads 'user
-        selected' and the keep ranking re-ranks for that Z, but
-        nothing solves until Solve (field request). One net is Z to
-        ground, two are Z between them."""
+        wire click -- chooses the target: the toolbar label says it
+        and the keep ranking re-ranks for that Z, but nothing solves
+        until Solve (field request). One net is Z to ground, two are
+        Z between them."""
         if self.controller is None                 or self.mode_combo.currentText() != "Impedance":
             return
         sel = self.nets_tree.selected_nets()
@@ -1537,28 +1734,14 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                 else {"node": sel[0], "ref": sel[1]})
         if spec == getattr(self, "_imp_spec", None):
             return
-        self._impedance_user_spec(spec, solve=False)
+        self._impedance_user_spec(spec)
 
     def _on_port_text(self, text: str):
-        """Choosing a real marker port leaves the user-selected spec:
-        the sentinel entry goes, so the dropdown never lies about
-        which port the next Solve will use."""
-        if text == self.USER_PORT or getattr(self, "_imp_spec",
-                                             None) is None:
-            if text and text != self.USER_PORT:
-                self._rerank_for_z()   # a marker picked: Z's ranking
-                if self.controller is not None and \
-                        self.mode_combo.currentText() in ("Impedance",
-                                                          "Loop gain"):
-                    self._update_estimate()
-            return
-        self._imp_spec = None
-        ix = self.probe_combo.findText(self.USER_PORT)
-        if ix >= 0:
-            self.probe_combo.blockSignals(True)
-            self.probe_combo.removeItem(ix)
-            self.probe_combo.blockSignals(False)
-        self._rerank_for_z()
+        """Loop-gain vocabulary only: the Impedance target lives in
+        _imp_spec with its own toolbar label and setters."""
+        if (text and self.controller is not None
+                and self.mode_combo.currentText() == "Loop gain"):
+            self._update_estimate()
 
     def _show_loop_reference(self) -> bool:
         """Loop-bench first light: the run's ground-truth loop gain
@@ -1580,19 +1763,23 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         return True
 
     def _on_mode_changed(self, mode: str):
-        probed = mode in ("Loop gain", "Compensate", "Modes", "GFT",
-                          "Impedance")
+        # Impedance is NOT probed: its target is a spec with its own
+        # toolbar label, never the probe combo (a port dropdown twice
+        # showed a ranking that was not the port's)
+        probed = mode in ("Loop gain", "Compensate", "Modes", "GFT")
         self._refresh_solve_hint()
-        self.probe_lbl.setText(" port: " if mode == "Impedance"
-                               else " probe: ")
         if self.controller is not None and probed:
-            want = (self.controller.ports if mode == "Impedance"
-                    else self.controller.probes)
+            want = self.controller.probes
             have = [self.probe_combo.itemText(i)
                     for i in range(self.probe_combo.count())]
             if have != list(want):
                 self.probe_combo.clear()
                 self.probe_combo.addItems(want)
+        imp = mode == "Impedance"
+        self._imp_tpre_act.setVisible(imp)
+        self._imp_target_act.setVisible(imp)
+        if imp:
+            self._imp_update_target_lbl()
         # Compensate owns the probe in ITS panel (the toolbar combo
         # stays the state, populated above; the panel mirrors it)
         show_probe = probed and mode != "Compensate"
@@ -1679,6 +1866,11 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             # target -- the flow 'select the net, then pick the tool'
             self._impedance_target_from_selection()
             self._rerank_for_z()
+            if getattr(self, "_imp_spec", None) is None:
+                self.statusBar().showMessage(
+                    "impedance: set a target — right-click a net or a "
+                    "two-terminal element (Set as impedance target), "
+                    "or click a wire")
         elif prev == "Impedance":
             self._rerank_on_io()
         if self.controller is not None:
@@ -1721,8 +1913,13 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         reduce = mode == "Reduce circuit"
         comp = mode == "Compensate"
         vis = {
-            self._whatif_tab: mode == "Transfer",
+            # What-if serves BOTH response benches: kept-symbolic
+            # sliders with live PM on a loop-gain result (the L-K
+            # margins bridge ticks the top knobs into the keep set)
+            self._whatif_tab: mode in ("Transfer", "Loop gain"),
             self._comp_tab: comp,
+            self._ml_tab: mode == "Loop gain",
+            self._ms_tab: mode == "Loop gain",
             self._gft_tab: mode == "GFT",
             # Summary/Expression/Error are views of a SOLVED response;
             # Compensate has no Solve any more, so they say nothing
@@ -1745,6 +1942,21 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self.comp_col.setVisible(comp)
         if not comp:
             self._comp_clear_proposed()           # overlay leaves with it
+        # the Margins verbs sit in the main toolbar and follow their
+        # bench; Compare corners also needs a point set
+        lg = mode == "Loop gain"
+        for a in (self._ml_sep_act, self._ml_btn_act,
+                  self._ml_whatif_act, self._ml_cplx_act):
+            a.setVisible(lg)
+        self._ml_cmp_act.setVisible(lg and self._ml_cmp_avail)
+        if not lg:
+            # the sensitivity map is the Loop-gain bench's overlay:
+            # leaving the bench releases the selected singularity,
+            # which takes the gradient and its wires off the schematic
+            tbl = getattr(self, "ml_tbl", None)
+            if tbl is not None and tbl.selectedItems():
+                tbl.clearSelection()
+                tbl.setCurrentCell(-1, -1)
         # a splitter child shown for the first time inherits size 0 --
         # the column then exists but cannot be seen; hand it the hidden
         # symbols column's room
@@ -1763,9 +1975,49 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         if reduce:
             self.dev_tabs.setCurrentWidget(self.nets_tree)
 
+    def _rerank_on_band(self):
+        """The band slider settled on a new range: re-rank the keep
+        table for it -- Z's own ranking in the Impedance tool, the
+        in -> out response's elsewhere. The benches without a live
+        keep panel (Compensate) skip."""
+        if self.controller is None:
+            return
+        if not getattr(self, "_keep_ranked", False):
+            return
+        mode = self.mode_combo.currentText()
+        if mode == "Impedance":
+            self._rerank_for_z()
+        elif mode in ("Transfer", "Loop gain", "GFT", "Reduce circuit"):
+            self._rerank_on_io()
+
     def _on_tool_selected(self, name: str):
         if name and self.mode_combo.currentText() != name:
             self.mode_combo.setCurrentText(name)
+
+    def _on_op_point(self, i: int):
+        """Bind the session to another discovered operating point. The
+        structure survives (topology, matches, reduction, ticks); every
+        result now describes the OTHER point and re-derives -- the
+        Solve * marker says so through the circuit key."""
+        c = self.controller
+        if c is None or not c.op_points or i < 0 or i == c.op_index:
+            return
+        c.set_op_point(i)
+        label = c.op_point_labels[i]
+        self._ml_clear()                   # the ledger described the
+        self._refresh_tools()              # other point's OP
+        if self.controller is not None:
+            self._update_estimate()
+        if self.mode_combo.currentText() in ("Loop gain", "Compensate"):
+            self._show_loop_reference()    # this point's own truth
+        try:
+            self._schematic_render()
+        except Exception:                  # noqa: BLE001
+            pass                           # decoration only
+        self._refresh_solve_hint()
+        self._set_strip(
+            f"operating point: {label} — analyses re-derive on this "
+            f"point's OP", "info")
 
     def declare_return_ratio(self):
         """Analysis menu: the user states that the run's AC data is a
@@ -1872,6 +2124,21 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self._set_strip("advisor: " + verdict, sev)
 
     # ----------------------------------------------------------------- open
+    @staticmethod
+    def _open_error_text(exc) -> str:
+        """The open-failure dialog's text, with the diagnosis the raw
+        join error only implies (field case: an edited schematic
+        Analyzed against the pre-edit simulation)."""
+        msg = f"{type(exc).__name__}: {exc}"
+        if "no OP record" in str(exc):
+            msg += ("\n\nDevices in the schematic have no simulated "
+                    "OP: the simulation predates the netlist (re-run "
+                    "it, then Analyze again), or the devices are "
+                    "DEACTIVATED in Virtuoso -- the netlister skips "
+                    "those, and the export now skips them too, so a "
+                    "fresh Analyze clears it.")
+        return msg
+
     def open_dialog(self):
         cin, _ = QFileDialog.getOpenFileName(
             self, "Open CIN topology", "", "CIN (*.cin.json *.json)")
@@ -1884,7 +2151,8 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         try:
             self.open_session(cin, psf)
         except Exception as exc:
-            QMessageBox.critical(self, "Open failed", f"{type(exc).__name__}: {exc}")
+            QMessageBox.critical(self, "Open failed",
+                                 self._open_error_text(exc))
 
     def _on_cap_model_toggled(self, matrix_on: bool):
         self.cap_model = "matrix" if matrix_on else "lumped"
@@ -1960,7 +2228,9 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         # lumped c**) cannot survive; everything that does, does.
         if checked:
             try:
-                ranking = self.controller.rank_symbols(*self._io())
+                ranking = self.controller.rank_symbols(
+                    *self._io(), fmin=self.band_slider.values()[0],
+                    fmax=self.band_slider.values()[1])
                 self._fill_keep_table(ranking, checked=checked)
             except Exception as exc:
                 self._set_strip(f"keep ticks could not be restored after "
@@ -1992,14 +2262,86 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                 f"model; press Solve to recompute with your keep set",
                 "warn")
 
+    def _flush_calibration(self):
+        """Options verb: forget the learned solve-time model everywhere
+        it lives -- this process, the engine child, the file -- then
+        re-measure the machine in the background."""
+        if QMessageBox.question(
+                self, "Flush calibration",
+                "Forget everything the solve-time estimator has learned "
+                "on this machine?\n\nThe measured model and every "
+                "per-path correction are deleted; the machine is "
+                "re-measured in the background and estimates re-learn "
+                "from your next solves.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No) != QMessageBox.Yes:
+            return
+        from ..analysis import estimate as _est
+        _est.flush_calibration()                  # this process + file
+        if self.controller is not None:
+            try:
+                self.controller.flush_calibration()   # the engine child
+            except Exception:                     # noqa: BLE001
+                pass
+        self.log("solve-time model: calibration flushed by request")
+        self.statusBar().showMessage("calibration flushed — re-measuring")
+        self._ensure_calibration()                # fresh measurement
+
+    def _tail_engine_log(self):
+        """Bring the engine child's stderr file into the Log, new lines
+        only; quiet on any filesystem hiccup. Doubles as the idle
+        watchdog: a death BETWEEN jobs would otherwise go unnoticed
+        until the next call raised."""
+        c = self.controller
+        idle = self._thread is None or not self._thread.isRunning()
+        if (idle and hasattr(c, "engine_alive") and not c.engine_alive()
+                and not getattr(self, "_engine_down_handled", False)):
+            self._engine_died("noticed while idle")
+        try:
+            with open(self._engine_log, "r", encoding="utf-8",
+                      errors="replace") as f:
+                f.seek(self._engine_log_pos)
+                chunk = f.read()
+                self._engine_log_pos = f.tell()
+        except OSError:
+            return
+        for line in chunk.splitlines():
+            line = line.strip()
+            if line:
+                self.log(f"engine: {line}")
+
     def open_session(self, cin, psf, probe=None, async_open=False):
         # cap model chosen in the Model menu; matrix is the accurate one on
         # non-reciprocal processes (SKY130 CM loops shift ~6 deg vs lumped),
         # and the GUI default -- lumped is offered for the textbook contrast
-        self.controller = SessionController.open(
+        # where the session lives is open_engine's decision: in-process
+        # by default (tests, headless), the spawned engine child when
+        # CIN_ENGINE=proc (launch.py sets it) -- the GIL-residue fix
+        from ..engine.remote import RemoteSession, open_engine
+        import tempfile
+        if hasattr(self.controller, "close_engine"):
+            self._engine_down_handled = True      # deliberate: no dialog
+            self._engine_log_timer.stop()
+            self.controller.close_engine()        # re-open: no orphan
+        self._engine_down_handled = False         # the NEW engine is armed
+        self._engine_log = str(Path(tempfile.gettempdir())
+                               / f"cin-engine-{os.getpid()}.log")
+        self._engine_log_pos = 0
+        self.controller = open_engine(
             cin, psf, cap_model=getattr(self, "cap_model", "matrix"),
-            mos_model=getattr(self, "mos_model", "separate"))
+            mos_model=getattr(self, "mos_model", "separate"),
+            stderr_path=self._engine_log)
+        if isinstance(self.controller, RemoteSession):
+            self._engine_log_timer.start()
         self._cin, self._psf = str(cin), str(psf)
+        # the previous session's tick set, stashed BEFORE anything in
+        # this open can autosave over the state file; the guard holds
+        # autosave off until the open flow has filled the table (the
+        # timer is the belt-and-braces release if the chain dies)
+        self._reopen_keep = self._read_saved_keep()
+        self._opening_guard = True
+        QTimer.singleShot(30000, lambda: setattr(
+            self, "_opening_guard", False))
         self._match_groups = []
         self._auto_token = None      # invalidate any in-flight auto chain
         self._open_async = bool(async_open)
@@ -2009,6 +2351,25 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         # A run that carries an stb analysis opens in the Loop-gain bench
         # with ITS designated probe preselected (--probe overrides the
         # discovery; any vsource qualifies).
+        pts = self.controller.op_point_labels
+        self.op_combo.blockSignals(True)
+        self.op_combo.clear()
+        self.op_combo.addItems(pts)
+        self.op_combo.setCurrentIndex(0)
+        self.op_combo.blockSignals(False)
+        self._op_lbl_act.setVisible(bool(pts))
+        self._op_act.setVisible(bool(pts))
+        # worst-corner sizing only makes sense over a point set; on one
+        # it IS the wanted default -- the corners were run to be held
+        self.robust_chk.setVisible(bool(pts))
+        self.robust_chk.setChecked(bool(pts))
+        self._ml_cmp_avail = bool(pts)
+        self._ml_cmp_act.setVisible(
+            bool(pts) and self.mode_combo.currentText() == "Loop gain")
+        if pts:
+            self.statusBar().showMessage(
+                f"operating-point set: {len(pts)} points discovered — "
+                f"active: {pts[0]}")
         probe = probe or self.controller.stb_probe()
         if probe and self.probe_combo.findText(probe) >= 0:
             self.mode_combo.setCurrentText("Loop gain")
@@ -2115,8 +2476,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self._filling = False
         self.keep_tbl.setRowCount(0)
         # a forced backend belongs to the circuit it was chosen for
-        from ..engine import interp
-        interp.PROBE_BACKEND = None
+        c.set_probe_backend(None)
         was, self._filling = self._filling, True
         try:
             self.backend_combo.setCurrentIndex(0)
@@ -2197,17 +2557,79 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                 self._refresh_matches_label()
                 self._surface_match_conflicts(baseline=self.result)
             plan = c.suggest_keep(inp, out, self.budget_spin.value())
-            ranking = c.rank_symbols(inp, out)
-            self._fill_keep_table(ranking, checked=list(plan.keep))
+            lo, hi = self.band_slider.values()
+            ranking = c.rank_symbols(inp, out, fmin=lo, fmax=hi)
+            saved = self._restored_ticks(ranking, plan.keep)
+            self._fill_keep_table(
+                ranking,
+                checked=saved if saved is not None else list(plan.keep))
             self._update_estimate()          # the empty-state hint yields
-            self._auto_status(name, n, carries, plan.keep)
+            if saved is None:
+                self._auto_status(name, n, carries, plan.keep)
             self._ii_strip()
         except Exception as exc:
             # fall back to the manual flow -- never let auto-setup break opening
             self.statusBar().showMessage(
                 f"{name}: {n} devices — Suggest matches, Rank, Solve "
                 f"(auto-setup skipped: {type(exc).__name__}).")
+        self._opening_guard = False          # autosave may write again
         self._update_crumb()
+
+    def _read_saved_keep(self):
+        """The last-state file's tick list for the CIN being opened, or
+        None; called ONCE at open start, before this open can touch
+        the file."""
+        import json
+        import zipfile
+
+        from . import state as st
+        try:
+            p = st.state_path(self._cin)
+            if not p.exists():
+                return None
+            with zipfile.ZipFile(p) as z:
+                manifest = json.loads(z.read("manifest.json"))
+            saved = manifest.get("keep")
+            return None if saved is None else [str(s) for s in saved]
+        except Exception:                         # noqa: BLE001
+            return None
+
+    def _restored_ticks(self, ranking, plan_keep):
+        """The last session's tick set for this CIN, validated against
+        the CURRENT model, or None (no state file, unreadable file, or
+        a saved set that matches nothing here -- a mangled or
+        different-model state yields to the auto plan, and says so).
+        Restoring the SELECTIONS by default is policy (user decision
+        2026-08-29: the tick count is visible, so a forgotten
+        low-ranked symbol is not silently restored); the SOLUTION
+        stays behind File -> Restore last state, fingerprint-gated.
+        Reads the stash taken at open_session start -- the file itself
+        may be re-written the moment this open shows a result. Logs
+        its own story; the caller only fills the table."""
+        saved = getattr(self, "_reopen_keep", None)
+        if saved is None:
+            return None
+        have = {n for n, _s, _p in ranking}
+        alive = [s for s in saved if s in have]
+        if saved and not alive:
+            self.log(f"last session's {len(saved)} ticked symbol(s) "
+                     f"match nothing in this model (a different cap "
+                     f"model, or a stale state) — using the auto plan")
+            return None
+        if len(alive) < len(saved):
+            self.log(f"restored {len(alive)} of {len(saved)} ticked "
+                     f"symbol(s) from the last session (the rest no "
+                     f"longer exist under this model; the auto plan "
+                     f"suggested {len(plan_keep)})")
+        else:
+            self.log(f"restored {len(alive)} ticked symbol(s) from "
+                     f"the last session (the auto plan suggested "
+                     f"{len(plan_keep)})")
+        self.statusBar().showMessage(
+            f"restored your {len(alive)} ticked symbols from the last "
+            f"session — Solve, or File → Restore last state for the "
+            f"full state (band, matches, solution)")
+        return alive
 
     def _auto_status(self, name, n, carries, keep) -> None:
         kept = ", ".join(keep) if keep else "none within budget"
@@ -2252,7 +2674,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             return c.attach_template(c.solve(inp, out, []))
 
         def fl_done(r):
-            self._log_finish("FIRST LIGHT")
+            # the FIRST LIGHT closing line is _launch's (verdict=)
             self._tick.stop()
             self._t0 = None
             self.progress.hide()
@@ -2288,10 +2710,12 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             # tool computes it without showing it
             baseline = getattr(self, "_first_light_result", None) \
                 or self.result
+            band = self.band_slider.values()
 
             def compute():
                 plan = c.suggest_keep(inp, out, self.budget_spin.value())
-                ranking = c.rank_symbols(inp, out)
+                ranking = c.rank_symbols(inp, out, fmin=band[0],
+                                         fmax=band[1])
                 matched = None
                 if groups:
                     # the matched model's own first light: it warms the
@@ -2309,11 +2733,17 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                     if matched is not None and self.result is baseline:
                         self._show(matched, push_history=False)
                     self._surface_match_conflicts(baseline=baseline)
+                saved = None
                 if not self.keep_tbl.rowCount():
-                    self._fill_keep_table(ranking,
-                                          checked=list(plan.keep))
+                    saved = self._restored_ticks(ranking, plan.keep)
+                    self._fill_keep_table(
+                        ranking,
+                        checked=(saved if saved is not None
+                                 else list(plan.keep)))
                     self._update_estimate()
-                self._auto_status(name, n, carries, plan.keep)
+                if saved is None:
+                    self._auto_status(name, n, carries, plan.keep)
+                self._opening_guard = False  # autosave may write again
                 self._ii_strip()
                 self._update_crumb()
 
@@ -2322,7 +2752,8 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         def start():
             if live():
                 self._launch(fl, f"first light: {inp} → {out} …",
-                             on_done=fl_done, est_s=None)
+                             on_done=fl_done, est_s=None,
+                             verdict="FIRST LIGHT")
 
         # the launcher defers the chain past the window's first paint
         # (a sympy-holding worker thread starves the first draw of the
@@ -2461,8 +2892,10 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         if self.controller is None:
             return
         inp, out = self._io()
+        lo, hi = self.band_slider.values()
         try:
-            ranking = self.controller.rank_symbols(inp, out)
+            ranking = self.controller.rank_symbols(inp, out,
+                                                   fmin=lo, fmax=hi)
         except Exception as exc:
             QMessageBox.warning(self, "Rank failed", f"{type(exc).__name__}: {exc}")
             return
@@ -2494,9 +2927,11 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             self._fill_keep_table(ranking, checked=checked)
             self.statusBar().showMessage("ranked", 3000)
 
+        band = self.band_slider.values()
+
         def compute():
             try:
-                return c.rank_symbols(inp, out)
+                return c.rank_symbols(inp, out, fmin=band[0], fmax=band[1])
             except Exception as exc:
                 return exc
 
@@ -2580,10 +3015,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
     def _apply_device_alias(self, name: str, text: str):
         if self.controller is None:
             return
-        if text:
-            self.controller.sym_aliases[name] = text
-        else:
-            self.controller.sym_aliases.pop(name, None)
+        self.controller.set_alias(name, text)
         self._save_aliases()
         self._render_expr()
         try:
@@ -2624,12 +3056,13 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             "mos_model": getattr(self, "mos_model", None),
             "io": (inp, out),
             "bench": self.mode_combo.currentText(),
+            "op": (getattr(c, "op_index", 0) if c is not None else 0),
         }
 
     _KEY_WORDS = {"reduction": "the working circuit (reduction)",
                   "matches": "the matched pairs", "cap_model": "the cap model",
                   "mos_model": "the MOS model", "io": "the in/out pair",
-                  "bench": "the bench"}
+                  "bench": "the bench", "op": "the operating point"}
 
     def _refresh_solve_hint(self):
         """The panel is the NEXT solve's input; the plot shows the LAST
@@ -2659,7 +3092,8 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         stale = bool(reasons)
         self.solve_btn.setText("Solve *" if stale else "Solve")
         self.solve_btn.setStyleSheet(
-            f"QPushButton {{ background: #fdf3e0; color: {theme.WARN}; "
+            f"QPushButton {{ background: {theme.WARN_TINT}; "
+            f"color: {theme.WARN}; "
             f"font-weight: bold; }}" if stale else "")
         tip = ("the result on screen is from a previous circuit state -- "
                "changed since: " + ", ".join(reasons) + " -- Solve recomputes"
@@ -2690,11 +3124,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self._refresh_solve_hint()
         if item.column() == 4:                    # per-symbol LaTeX override
             name = self.keep_tbl.item(item.row(), 0).text()
-            text = item.text().strip()
-            if text:
-                self.controller.sym_aliases[name] = text
-            else:
-                self.controller.sym_aliases.pop(name, None)
+            self.controller.set_alias(name, item.text().strip())
             self._save_aliases()
             self._render_expr()
             return
@@ -2711,15 +3141,16 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
     _BACKENDS = (None, "qq", "bot", "zp", "ratfun")
 
     def _on_backend_changed(self, idx: int):
-        """Expert override of the solver auto-selector. Written to the
-        engine global the estimator and the solve BOTH consult, so the
-        estimate immediately re-costs with the chosen backend."""
+        """Expert override of the solver auto-selector. Routed through
+        the SESSION -- the estimator and the solve both consult the
+        engine-side global, which in engine-process mode lives in the
+        child, where a GUI-side module write never lands."""
         if self._filling:
             return
-        from ..engine import interp
-
-        interp.PROBE_BACKEND = self._BACKENDS[idx] \
+        name = self._BACKENDS[idx] \
             if 0 <= idx < len(self._BACKENDS) else None
+        if self.controller is not None:
+            self.controller.set_probe_backend(name)
         self._update_estimate()
 
     def _show_auto_backend(self, resolved) -> None:
@@ -2849,7 +3280,9 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             else:
                 keep = list(self.controller.suggest_keep(
                     inp, out, self.budget_spin.value()).keep)
-            ranking = self.controller.rank_symbols(inp, out)
+            lo, hi = self.band_slider.values()
+            ranking = self.controller.rank_symbols(inp, out,
+                                                   fmin=lo, fmax=hi)
         except Exception as exc:
             QMessageBox.warning(self, "Suggest failed", f"{type(exc).__name__}: {exc}")
             return
@@ -2869,6 +3302,13 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
     def solve(self):
         if self.controller is None:
             return
+        # ONE pre-flight for every tool's Solve: an estimate over the
+        # time budget asks Continue up front instead of failing later
+        # (or, on the unbudgeted paths, silently running long)
+        budget = self._confirm_over_budget()
+        if budget is False:
+            return
+        self._insist_budget = budget          # loop gain passes it on
         if self.mode_combo.currentText() == "Compensate":
             self.suggest_comp()
             return
@@ -2876,20 +3316,19 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             self.run_modes()
             return
         if self.mode_combo.currentText() == "Impedance":
-            port = self.probe_combo.currentText()
             spec = getattr(self, "_imp_spec", None)
-            if port == self.USER_PORT and spec is not None:
-                target, desc = spec, self._imp_desc(spec)
-            elif port and port != self.USER_PORT:
-                target, desc = port, f"Z({port})"
-            else:
-                self.statusBar().showMessage("no port marker in this design")
+            if spec is None:
+                self.statusBar().showMessage(
+                    "no impedance target — right-click a net or a "
+                    "two-terminal element (Set as impedance target), "
+                    "or click a wire")
                 return
+            desc = self._imp_desc(spec)
             keep = self.checked_keep()
             kw, phrase = self._impedance_form_kw()
             self._launch(lambda cb: self.controller.impedance_result(
-                             target, keep=keep, progress=cb, **kw),
-                         f"impedance: {desc}{phrase}"
+                             spec, keep=keep, progress=cb, **kw),
+                         f"impedance {desc}{phrase}"
                          f"{f' [{len(keep)} kept]' if keep else ''} …")
             return
         if self.mode_combo.currentText() == "GFT":
@@ -2905,10 +3344,10 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                 return
             keep = self.checked_keep()
             kw, phrase = self._loopgain_form_kw()
-            budget = self.budget_spin.value()
             self._launch(lambda cb: self.controller.loop_gain(
                              probe, keep=keep, progress=cb,
-                             max_seconds=budget, **kw),
+                             max_seconds=self._insist_budget,
+                             note=lambda m: self.worker_note(m), **kw),
                          f"loop gain at {probe}{phrase}"
                          f"{f' [{len(keep)} kept]' if keep else ''} …")
             return
@@ -3231,6 +3670,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                            zorder=0))
         self._update_tol_bands()
         self._cert_timer.start()          # the band's demand, debounced
+        self._rank_band_timer.start()     # ...and the band's ranking
 
     def simplify(self):
         """Menu/shortcut entry: select the form so the toolbar agrees, then
@@ -3330,7 +3770,8 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             self.tabs.setCurrentWidget(w)
 
     def _on_done(self, result):
-        self._log_finish("DONE")
+        # the closing DONE line is logged centrally by _launch's
+        # done wrapper before any handler runs
         self._show_result_tab()
         self._learn_from_solve()
         self._tick.stop()
@@ -3370,10 +3811,10 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         that visible instead of magic, and names a fallback when one
         happened."""
         try:
-            from ..engine import interp
+            tl = (self.controller.last_solve()
+                  if self.controller is not None else None)
         except Exception:                        # pragma: no cover
             return ""
-        tl = getattr(interp, "LAST_SOLVE", None)
         if not tl:
             return ""
         note = f"  [{tl.get('backend', '?')}"
@@ -3388,6 +3829,46 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                                        or "reason not recorded")
         return note + "]"
 
+    def _confirm_over_budget(self):
+        """Pre-flight for a budgeted launch: when the estimate already
+        says the solve will blow the time budget, ASK -- a dialog with
+        Continue beats a refusal that sends the user hunting for the
+        budget spin (field request). Returns the max_seconds to pass:
+        the budget (within it), None (the user insisted -- no engine
+        refusal either), or False (do not run)."""
+        budget = self.budget_spin.value()
+        est = self._est_s
+        if not (est and budget and est > budget):
+            return budget
+        # the budget "spin" is hidden state (retired from the keep
+        # pane); pointing the user at it was a lie -- the dialog
+        # itself offers the raise instead
+        import math
+        new = min(600.0, math.ceil(est * 1.2 / 10.0) * 10.0)
+        box = QMessageBox(self)
+        box.setWindowTitle("Over the time budget")
+        box.setIcon(QMessageBox.Warning)
+        box.setText(f"This solve is estimated at ~{est:.0f} s — over "
+                    f"the {budget:.0f} s solve-time budget.")
+        once = box.addButton("Continue this once", QMessageBox.AcceptRole)
+        raise_b = box.addButton(f"Raise budget to {new:.0f} s",
+                                QMessageBox.AcceptRole)
+        box.addButton(QMessageBox.Cancel)
+        box.setDefaultButton(once)
+        box.exec()
+        if box.clickedButton() is once:
+            self.log(f"over-budget solve confirmed by the user "
+                     f"(~{est:.0f}s vs {budget:.0f}s budget)")
+            return None
+        if box.clickedButton() is raise_b:
+            self.budget_spin.setValue(new)    # persisted with the rest
+            self.log(f"solve-time budget raised to {new:.0f}s "
+                     f"(estimate ~{est:.0f}s)")
+            return new
+        self.statusBar().showMessage("solve not started (over the "
+                                     "time budget)")
+        return False
+
     def _on_failed(self, msg):
         self._tick.stop()
         self._t0 = None
@@ -3399,7 +3880,55 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self._log_finish("FAILED")
         self.tabs.setCurrentWidget(self.logview)  # the error is HERE
         self.statusBar().showMessage("solve failed")
-        self._set_strip("solve failed: " + msg, "error")
+        # the refusal's remedies are written for the API; the GUI user
+        # holds a SPIN, not a kwarg (field report: the honest estimate
+        # crossed the 100 s default for the first time and the strip
+        # said "pass max_seconds=None")
+        if "SolveTooLarge" in msg:
+            msg = msg.replace(
+                "pass max_seconds=None to insist",
+                f"raise the time budget (now "
+                f"{self.budget_spin.value():.0f} s, under Keep "
+                f"symbolic) to insist")
+            self._set_strip("solve refused: " + msg, "warn")
+        else:
+            self._set_strip("solve failed: " + msg, "error")
+        if msg.startswith("EngineDied"):
+            self._engine_died(msg)
+
+    def _engine_died(self, detail: str) -> None:
+        """The engine process died UNINVITED (a crash, a kill from
+        outside -- not a cancel). Crash isolation is the design's
+        promise: the window survives, the shown results survive, and
+        one dialog offers the same respawn-and-replay the hard cancel
+        uses (plan E-H)."""
+        if getattr(self, "_engine_down_handled", False):
+            return
+        if not hasattr(self.controller, "engine_restart"):
+            return
+        self._engine_down_handled = True
+        self.log(f"the engine process died: {detail}")
+        restart = QMessageBox.question(
+            self, "Engine died",
+            "The analysis engine process died unexpectedly.\n\n"
+            "Your shown results are intact. Restart the engine and "
+            "replay the session state (matches, reductions, aliases)?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes) == QMessageBox.Yes
+        if not restart:
+            self._set_strip(
+                "engine down — results remain readable; re-open the "
+                "session to compute again", "warn")
+            return
+        try:
+            self.controller.engine_restart()
+            self._engine_down_handled = False
+            self.log("engine restarted; session state replayed")
+            self.statusBar().showMessage("engine restarted")
+            self._clear_strip()
+        except Exception as exc:                  # noqa: BLE001
+            self._set_strip(f"engine restart failed: {exc} — re-open "
+                            f"the session", "error")
 
     def _show(self, result, overlays=(), push_history=True):
         self.result = result
@@ -3440,7 +3969,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self._refresh_solve_hint()
         if not self._showing_from_history:
             self._autosave_state()      # every shown result checkpoints
-        self.summary.setPlainText(view.summary_text(result))
+        self.summary.setPlainText(self._summary_with_extras(result))
         self._refresh_ledger(result)
         try:
             view.error_figure(result, self.err_canvas.figure)
@@ -3476,11 +4005,31 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                 return
             eqs = (self.controller.equivalent_elements()
                    if self.controller is not None else [])
-            self.summary.setPlainText(view.summary_text(result)
-                                      + chr(10) + chr(10)
-                                      + self._ledger_text(rep, eqs))
+            self.summary.setPlainText(
+                self._summary_with_extras(result, rep, eqs))
 
         self._run_bg(compute, done)
+
+    def _summary_with_extras(self, result, ledger=None, eqs=()) -> str:
+        """EVERY summary (re)render goes through here, so what attaches
+        to the shown result -- the cost ledger, cached numeral stories
+        -- survives any later async re-render instead of being
+        clobbered by whichever advisory lands last (field case: the
+        approximation report landed after Explain's stories and wiped
+        them; the engine process stretched the window)."""
+        txt = view.summary_text(result)
+        if ledger is not None:
+            txt += "\n\n" + self._ledger_text(ledger, eqs)
+        try:
+            keep = result.keep if isinstance(result.keep, list) else []
+            stories = (self.controller.cached_numerals(
+                result.inp, result.out, keep=keep)
+                if self.controller is not None else None)
+        except Exception:                         # noqa: BLE001
+            stories = None
+        if stories:
+            txt += "\n\n" + self._stories_text(stories)
+        return txt
 
     @staticmethod
     def _ledger_text(rep, eqs=()) -> str:
@@ -3611,73 +4160,87 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
                 self.keep_tbl.scrollToItem(it)
                 break
 
-    # ------------------------------------------------------- cross-probe
-    def _instances(self):
-        """Instance names of the reconstruction, for symbol resolution."""
-        if self.controller is None:
-            return []
+    def apply_theme(self, name: str):
+        """Switch the LIVE theme: swap the token palettes (chrome and
+        figure data colors), re-apply the Qt palette and stylesheet,
+        and repaint the surfaces holding baked color. The choice
+        persists in QSettings (ui/theme) and seeds the next launch."""
+        from PySide6.QtWidgets import QApplication
+
+        if theme.current == name:
+            return
+        theme.set_theme(name)
+        view.set_fig_theme(name)
+        app = QApplication.instance()
+        if app is not None:
+            theme.apply(app)
+        # figures bake their colors into artists: re-plot what is on
+        # screen, restyle the rest for their next draw
+        if self.result is not None:
+            self._show(self.result, push_history=False)
+        elif getattr(self, "_ref_on_screen", False):
+            self._show_loop_reference()
+        elif getattr(self, "_first_light_result", None) is not None \
+                and self.mode_combo.currentText() == "Transfer":
+            self._show(self._first_light_result, push_history=False)
+        else:
+            theme.style_figure(self.canvas.figure)
+            self.canvas.draw_idle()
+        theme.style_figure(self.err_canvas.figure)
+        self.err_canvas.draw_idle()
+        if getattr(self, "expr_canvas", None) is not None:
+            theme.style_figure(self.expr_canvas.figure)
+            self.expr_canvas.draw_idle()
+        # the trees' proxy style reads its colors at paint time and
+        # follows the switch on its own; a repaint suffices
+        for tree in (getattr(self, "devices", None),
+                     getattr(self, "nets_tree", None)):
+            if tree is not None:
+                tree.viewport().update()
+                QWidget.update(tree)      # the frame; the item-view
+                # overload shadows the argless QWidget one
+        # the schematic header's icons re-ink to the new theme's text
+        if hasattr(self, "_sch_fit_btn"):
+            self._sch_refresh_icons()
+        if hasattr(self, "_max_top_btn"):
+            self._sync_max_icons()        # the pane expand/restore pair
+        # the web shells swap their CSS tokens; the summary re-sets
+        # its kept text through the theme-aware stylesheet
+        if getattr(self, "exprweb", None) is not None:
+            self.exprweb.set_theme(name)
+        eq = getattr(self, "_ml_eq", None)
+        if eq is not None and hasattr(eq, "set_theme"):
+            eq.set_theme(name)
+        self.summary.setPlainText(self.summary.toPlainText())
+        # the OP card re-renders its rich text with the new tokens
+        card = getattr(self, "op_card", None)
+        if card is not None and card.name:
+            self._show_op_card(card.name)
+        # the schematic re-inks (its render key carries the theme)
         try:
-            an = self.controller._analyzer_ready()
-        except Exception:
-            return []
-        return sorted({p.inst for p in an.primitives})
-
-    def _on_xprobe_toggled(self, on: bool):
-        from ..virtuoso import xprobe
-
-        if not on:
-            if self._xprobe is not None:
-                self._xprobe.close()
-                self._xprobe = None
-            self._set_strip("cross-probe off")
-            return
-        probe, why = xprobe.CrossProbe.connect()
-        self._xprobe = probe
-        if probe is None:
-            # a failed connection must not leave the menu claiming it is on
-            self.a_xprobe.blockSignals(True)
-            self.a_xprobe.setChecked(False)
-            self.a_xprobe.blockSignals(False)
-            self._set_strip(f"cross-probe unavailable: {why}", "warn")
-        else:
-            self._set_strip("cross-probe on: clicking a symbol or a device "
-                            "row highlights it in the schematic")
-
-    def _xprobe_selection(self, names):
-        """Mirror the expression view's pinned SET into the schematic, so
-        ctrl-clicking several symbols lights all their devices at once.
-
-        The set is the single source of truth for what the schematic shows;
-        symbolClicked stays a pure keep-table navigation signal, so the two
-        never fight over the selection."""
-        if self._xprobe is None:
-            return
-        from ..virtuoso.xprobe import instance_for_symbol
-
-        known = self._instances()
-        insts = [i for i in (instance_for_symbol(n, known) for n in names) if i]
-        if insts:
-            self.xprobe_instances(insts)
-        else:
-            self._xprobe.clear()
-
-    def xprobe_symbol(self, name: str) -> bool:
-        """Highlight the device a keep-set symbol belongs to."""
-        from ..virtuoso.xprobe import instance_for_symbol
-
-        inst = instance_for_symbol(name, self._instances())
-        return self.xprobe_instances([inst] if inst else [])
-
-    def xprobe_instances(self, instances) -> bool:
-        """Highlight instances in the schematic; a no-op when probing is off."""
-        if self._xprobe is None or not instances:
-            return False
-        ok = self._xprobe.highlight(instances)
-        if not ok:
-            self._set_strip(
-                f"cross-probe: {', '.join(instances)} not found in the "
-                f"schematic window", "warn")
-        return ok
+            self._schematic_render()
+        except Exception:                     # noqa: BLE001
+            pass                              # decoration only
+        # surfaces that BAKED the old tokens into rich text or
+        # brushes: the flow crumb, the message strip, the match-tint
+        # rows of the Instances tree (field report: all three kept
+        # their light colors on a dark ground)
+        self._update_crumb()
+        if self.msg_strip.isVisible() and self.msg_strip.text():
+            self._set_strip(self.msg_strip.text(),
+                            getattr(self, "_strip_sev", "info"))
+        if getattr(self, "_match_groups", None):
+            try:
+                self.devices._set_groups_decorate(self._match_groups)
+            except Exception:                 # noqa: BLE001
+                pass                          # decoration only
+        if self.a_dark.isChecked() != (name == "dark"):
+            self.a_dark.blockSignals(True)
+            self.a_dark.setChecked(name == "dark")
+            self.a_dark.blockSignals(False)
+        s = self._settings()
+        s.setValue("ui/theme", name)
+        s.sync()
 
     def show_manual(self):
         """The user guide, shipped inside the package (gui/assets) and
@@ -3767,13 +4330,11 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         dlg.show()
 
     def _on_devices_selected(self):
-        """Selecting devices in the tree cross-probes them as a set and
-        shows the first one's operating point on the card."""
+        """Selecting devices in the tree shows the first one's
+        operating point on the card (the schematic follows through
+        its own tree hook)."""
         names = self.devices.selected_names()
         self._show_op_card(names[0] if names else None)
-        if self._xprobe is None:
-            return
-        self.xprobe_instances(names)
 
     def _show_op_card(self, name):
         """The card for `name` (a device), or cleared for None."""

@@ -20,16 +20,13 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QMenu, QTreeWidget, QTreeWidgetItem,
 )
 
-from . import view
+from . import theme, view
 
 LINK = "\U0001F517"          # match-set decoration
 EARTH = "⏚"             # AC-grounded net
 IN_MARK = "▶"           # input source's net
 OUT_MARK = "◀"          # output net
 
-#: light, colorblind-friendly member tints for match groups
-GROUP_TINTS = ("#dbe9f6", "#fbe4d5", "#e2efda", "#ece1f0",
-               "#fff2cc", "#dbeef4")
 
 _ROLE_NAME = Qt.UserRole             # full device / net name
 _ROLE_KIND = Qt.UserRole + 1         # "device" | "net" | "conn"
@@ -40,6 +37,60 @@ _GLANCE = ("gm", "gds", "gmbs", "ids", "vgs", "vds", "vdsat", "vth")
 _UNITS = {"v": "V", "i": "A", "g": "S", "c": "F", "q": "C", "r": "Ω"}
 
 
+class _BranchInk(object):
+    """Deferred import container for the proxy style (Qt classes at
+    module import would slow the headless paths)."""
+
+    _cls = None
+
+    @classmethod
+    def get(cls):
+        if cls._cls is None:
+            from PySide6.QtCore import Qt
+            from PySide6.QtGui import QColor, QPalette
+            from PySide6.QtWidgets import QProxyStyle, QStyle, QStyleOption
+
+            class _Proxy(QProxyStyle):
+                """The Windows style ties three looks to one palette:
+                its 2px 3D bevel frames the tree AND wraps the header
+                into a sunken well, while the dotted branch lines
+                share the same Dark role -- no palette shade serves a
+                quiet frame and readable connectors at once (field
+                report: the hierarchy lines vanished when the frame
+                went neighbor-quiet, and the header read as sunk).
+                So the proxy takes both jobs off the palette: the
+                frame is a flat 1px rectangle in the shade Fusion
+                frames every neighbor with, the branch primitive
+                repaints with the theme's MUTED ink. Colors are read
+                at paint time so a theme switch follows for free."""
+
+                def drawPrimitive(self, element, option, painter,
+                                  widget=None):
+                    if element == QStyle.PE_Frame:
+                        painter.save()
+                        painter.setPen(QColor(theme.frame_shade()))
+                        painter.setBrush(Qt.NoBrush)
+                        painter.drawRect(
+                            option.rect.adjusted(0, 0, -1, -1))
+                        painter.restore()
+                        return
+                    if element == QStyle.PE_IndicatorBranch:
+                        option = QStyleOption(option)
+                        option.palette.setColor(
+                            QPalette.Dark, QColor(theme.MUTED))
+                    super().drawPrimitive(element, option, painter,
+                                          widget)
+
+                def pixelMetric(self, metric, option=None,
+                                widget=None):
+                    if metric == QStyle.PM_DefaultFrameWidth:
+                        return 1          # the bevel's 2px inset goes
+                    return super().pixelMetric(metric, option, widget)
+
+            cls._cls = _Proxy
+        return cls._cls
+
+
 def _branch_style(widget) -> None:
     """Draw the actual branch lines. Fusion paints expand arrows but no
     connectors; the classic Windows style draws the dotted tree lines,
@@ -48,8 +99,9 @@ def _branch_style(widget) -> None:
 
     st = QStyleFactory.create("windows")
     if st is not None:
-        st.setParent(widget)                  # keep it alive with the tree
-        widget.setStyle(st)
+        proxy = _BranchInk.get()(st)          # owns the base style
+        proxy.setParent(widget)               # ...and dies with the tree
+        widget.setStyle(proxy)
 
 
 class InstanceTree(QTreeWidget):
@@ -236,8 +288,8 @@ class InstanceTree(QTreeWidget):
                     brush = QBrush()
                 else:
                     it.setText(self.NAME, f"{leaf} {LINK}{gi + 1}")
-                    brush = QBrush(QColor(
-                        GROUP_TINTS[gi % len(GROUP_TINTS)]))
+                    tints = theme.GROUP_TINTS
+                    brush = QBrush(QColor(tints[gi % len(tints)]))
                 for col in range(self.columnCount()):
                     it.setBackground(col, brush)
         finally:
@@ -269,9 +321,9 @@ class InstanceTree(QTreeWidget):
         lines = [f"<b>{name}</b> — {info.get('type', '')}"
                  + (f", {view.region_name(rec['region'])}"
                     if "region" in rec else "")]
-        terms = info.get("terminals") or {}
-        if terms:
-            lines.append("  ".join(f"{t}→{n}" for t, n in terms.items()))
+        # connectivity stays out of the tooltip (user-directed): the
+        # nets are one Nets-tree or schematic click away, and the
+        # glance is for the OPERATING POINT
         vals = []
         for key in _GLANCE:
             if key in rec:
@@ -309,7 +361,8 @@ class InstanceTree(QTreeWidget):
             terms = (self.info(item) or {}).get("terminals") or {}
             if len(dict.fromkeys(terms.values())) == 2:
                 menu.addAction(
-                    f"Impedance seen by {name.split('.')[-1]}",
+                    f"Set as impedance target "
+                    f"(seen by {name.split('.')[-1]})",
                     lambda name=name:
                     self.impedanceSeenRequested.emit(name))
             gi = self.group_of(name)
@@ -453,13 +506,14 @@ class NetTree(QTreeWidget):
         menu.addAction("AC ground (measure cost)…",
                        lambda: self.acgroundRequested.emit(net))
         menu.addSeparator()
-        menu.addAction(f"Impedance at {net.split('.')[-1]}",
+        menu.addAction(f"Set as impedance target "
+                       f"({net.split('.')[-1]} to gnd)",
                        lambda: self.impedanceRequested.emit(net, ""))
         sel = self.selected_nets()
         if len(sel) == 2 and net in sel:
             a, b = sel
             menu.addAction(
-                f"Impedance between {a.split('.')[-1]} and "
-                f"{b.split('.')[-1]}",
+                f"Set as impedance target (between {a.split('.')[-1]} "
+                f"and {b.split('.')[-1]})",
                 lambda: self.impedanceRequested.emit(a, b))
         menu.exec(self.viewport().mapToGlobal(pos))

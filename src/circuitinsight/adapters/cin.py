@@ -190,6 +190,12 @@ def _parse_definition(dname: str, rdef, err) -> Definition:
         if not isinstance(name, str) or not name:
             err(f"definition '{dname}' instance #{i}: 'name' must be a non-empty string")
             continue
+        if rinst.get("deactivated"):
+            # Virtuoso-deactivated (red X): the netlister skipped it,
+            # so the simulation carries no OP for it. The harvest
+            # keeps it so the schematic can draw it X-ed; the MODEL
+            # must not contain it.
+            continue
         terminals = rinst.get("terminals")
         if not isinstance(terminals, dict) or not all(
             isinstance(k, str) and isinstance(v, str) and v for k, v in terminals.items()

@@ -452,7 +452,6 @@ def test_latency_cache_reuses_the_untouched_side(monkeypatch):
     assert len(calls) == n_first + 1             # side B only
 
     # and the cached composition is still exact vs a fresh monolithic
-    an2 = Analyzer.from_cin(_ladder_cin())
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         sys2 = __import__("circuitinsight.engine.mna",

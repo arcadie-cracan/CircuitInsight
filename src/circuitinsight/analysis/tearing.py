@@ -666,9 +666,10 @@ def split_tf(primitives, ground, inp: str, out: str, cut,
     H_B = resB[m * m:]
 
     # KCL at the interface; Y[j][i] = current at clamp i when clamp j
-    # drives, so the KCL matrix is the transpose-indexed sum
-    M = [[sp.together(Y_A[j][i].expr + Y_B[j][i].expr) for j in range(m)]
-         for i in range(m)]
+    # drives, so the KCL matrix is the transpose-indexed sum -- built
+    # inside compose(), which is the only place it is read. It used to
+    # be built out here as well and thrown away, an m-by-m together()
+    # spent on every call for nothing.
     def compose(LA, YA, YB, HB):
         Mx = [[sp.together(YA[j][i].expr + YB[j][i].expr) for j in range(m)]
               for i in range(m)]
@@ -702,17 +703,30 @@ def split_tf(primitives, ground, inp: str, out: str, cut,
     exact = TransferFunction(expr=expr, values=values, symbols=symbols)
     approx = TransferFunction(expr=expr_b, values=values, symbols=symbols)
     freqs = np.geomspace(fmin, fmax, 60)
-    h0 = exact.numeric(freqs)
-    h1 = approx.numeric(freqs)
+    d_db, d_deg = _measured_error(exact, approx, freqs)
+    return ComposedTF(expr=expr_b, values=values, symbols=symbols,
+                      exact=exact,
+                      achieved_mag_err_db=d_db,
+                      achieved_phase_err_deg=d_deg,
+                      blocks_pruned=pruned, blocks_total=len(flat))
+
+
+def _measured_error(exact, approx, freqs) -> tuple[float, float]:
+    """Worst |approx/exact| over freqs (dB, deg). Both legs are read by
+    the exact-coefficient Horner: float64 on a big assembled composition
+    cancels catastrophically wherever |H| is small against its own terms
+    (fc field case), so a float64 gate could misprice the reduction in
+    either direction -- report a violation that is not there, or bless
+    one that is."""
+    import numpy as np
+
+    h0 = np.asarray(exact.numeric_hp(freqs))
+    h1 = np.asarray(approx.numeric_hp(freqs))
     good = np.abs(h0) > np.max(np.abs(h0)) * 1e-9
     with np.errstate(divide="ignore", invalid="ignore"):
         d_db = 20 * np.log10(np.abs(h1[good]) / np.abs(h0[good]))
     d_deg = np.degrees(np.angle(h1[good] / h0[good]))
-    return ComposedTF(expr=expr_b, values=values, symbols=symbols,
-                      exact=exact,
-                      achieved_mag_err_db=float(np.max(np.abs(d_db))),
-                      achieved_phase_err_deg=float(np.max(np.abs(d_deg))),
-                      blocks_pruned=pruned, blocks_total=len(flat))
+    return float(np.max(np.abs(d_db))), float(np.max(np.abs(d_deg)))
 
 
 def _sense_is_currentless(primitives, node: str, probe: str) -> bool:

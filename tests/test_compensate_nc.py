@@ -59,6 +59,78 @@ def test_pm_goal_rediscovers_section_vi(sys_uncomp):
     assert rc.f0_hz > 2 * c.f0_hz
 
 
+def _skewed_uncomp(kc, kgm):
+    """The uncompensated bench with caps and transconductances scaled --
+    a synthetic process corner of the SAME topology."""
+    import dataclasses
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        run = SpectreRun(FIX / "tb_ota2s_stb.cin.json", FIX / "psf_stb")
+        an = run.analyzer(cap_model="matrix")
+    prims = []
+    for p in an.primitives:
+        if p.inst == "I0.Cc":
+            continue
+        k = {"c": kc, "cx": kc, "vccs": kgm}.get(p.kind)
+        prims.append(dataclasses.replace(p, value=p.value * k)
+                     if (k and p.value is not None) else p)
+    return build_mna(prims, an.flat.ground, "IPRB0", an._alias)
+
+
+def test_worst_corner_sizing_holds_the_skew(sys_uncomp):
+    """corner_systems turns mfm into its worst-point version. A skewed
+    corner (caps down, gm up: higher crossover, more peaking) breaks
+    the nominal winner's certificate; the robust winner's value must
+    hold BOTH points within the budget. An identical corner must
+    change nothing at all."""
+    from circuitinsight.analysis.compensate import evaluate_suggestions
+
+    skew = _skewed_uncomp(kc=0.7, kgm=1.4)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        nom = suggest_compensation(sys_uncomp, "IPRB0", goal="mfm",
+                                   candidates=[CLASSIC])
+        rob = suggest_compensation(sys_uncomp, "IPRB0", goal="mfm",
+                                   candidates=[CLASSIC],
+                                   corner_systems=[skew])
+        same = suggest_compensation(sys_uncomp, "IPRB0", goal="mfm",
+                                    candidates=[CLASSIC],
+                                    corner_systems=[sys_uncomp])
+    # an identical corner changes nothing: same values, same verdicts
+    assert [(s.C, s.R, s.achieved) for s in same] == \
+        [(s.C, s.R, s.achieved) for s in nom]
+    # the skew actually bites the nominal winner (guards the scenario)
+    n0 = evaluate_suggestions(skew, "IPRB0", nom[:1])[0]
+    assert n0["flat_db"] > 1.0
+    # the robust winner holds the budget at BOTH points
+    best = next(s for s in rob if s.achieved)
+    for system in (sys_uncomp, skew):
+        r = evaluate_suggestions(system, "IPRB0", [best])[0]
+        assert r["flat_db"] <= 1.0 + 1e-9
+    # and it pays for the skew: more area than the nominal winner
+    assert best.area > nom[0].area
+
+
+def test_evaluate_suggestions_re_measures_the_sized_branch(sys_uncomp):
+    """evaluate_suggestions re-measures ALREADY-SIZED suggestions on a
+    system without re-sizing -- the corner-robustness primitive. On the
+    same operating point it must reproduce the suggester's own certified
+    metrics exactly (same updater, same grid, same folded margins)."""
+    from circuitinsight.analysis.compensate import evaluate_suggestions
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        sugg = suggest_compensation(sys_uncomp, "IPRB0", goal="mfm",
+                                    candidates=[CLASSIC])
+        rows = evaluate_suggestions(sys_uncomp, "IPRB0", sugg)
+    assert len(rows) == len(sugg)
+    for s, r in zip(sugg, rows):
+        assert r["flat_db"] == pytest.approx(s.flat_db, abs=1e-6)
+        assert r["pm_deg"] == pytest.approx(s.pm_deg, abs=1e-6)
+        assert r["ms"] >= 1.0
+
+
 def test_mfm_goal_holds_the_measured_response_flat(sys_uncomp):
     """goal='mfm' judges the MEASURED closed-loop magnitude: peaking of
     |T/(1-T)| at most 1 dB (the dominant-pair zeta proxy certified fc

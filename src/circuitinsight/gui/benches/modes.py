@@ -1,7 +1,7 @@
 """The Modes bench: the DM/CM 2x2 loop matrix and eigenloci."""
 from __future__ import annotations
 
-from .. import theme
+from .. import theme, view
 
 class ModesBenchMixin:
     # ---------------------------------------------------------------- modes
@@ -14,15 +14,13 @@ class ModesBenchMixin:
             return
 
         def fn(_cb):
-            an = self.controller._analyzer_ready()
-            return an.mode_loop(pa, pb)
+            return self.controller.mode_loop(pa, pb)
 
         self._launch(fn, f"mode loop matrix at ({pa}, {pb})…",
                      on_done=self._on_modes_done)
 
     def modes_sync(self, pa, pb):
-        an = self.controller._analyzer_ready()
-        rep = an.mode_loop(pa, pb)
+        rep = self.controller.mode_loop(pa, pb)
         self._on_modes_done(rep)
         return rep
 
@@ -55,7 +53,7 @@ class ModesBenchMixin:
                     ax.axvline(fu, color=colors[k % 2], lw=0.6, ls="--",
                                alpha=0.6)
         try:                       # the run's own stb, on its locus
-            stb = self.controller._run.stb()
+            stb = self.controller.stb_curves()
             sp_probe = self.controller.stb_probe()
             if sp_probe in rep.probes:
                 k = list(rep.probes).index(sp_probe)
@@ -74,9 +72,9 @@ class ModesBenchMixin:
         ax2.set_xlabel("frequency (Hz)")
         for ax in (ax1, ax2):
             ax.grid(True, which="both", alpha=0.25, lw=0.4)
-        ax1.legend(fontsize=8, frameon=False, loc="lower left")
-        fig.tight_layout()
-        theme.style_figure(fig)
+        fig.tight_layout(rect=(0, 0.06, 1, 1))
+        view.figure_legend(fig, ax1)      # one legend home: below the
+        theme.style_figure(fig)           # frequency axis, everywhere
         self.canvas.draw_idle()
         sev = "ok"
         if any(m[0] is not None and m[0] < 45 for m in rep.margins):

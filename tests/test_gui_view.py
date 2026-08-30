@@ -57,7 +57,7 @@ def test_expr_figure_renders(result):
 def test_markdown_report(result):
     md = view.markdown_report(result)
     assert md.startswith("# CircuitInsight")
-    assert "A_0" in md and "H(s)" in md
+    assert "A_{V0}" in md and "H(s)" in md
 
 
 def test_ranking_rows():
@@ -153,13 +153,12 @@ def test_simplify_is_the_accuracy_knob(session):
 
 
 def test_kept_capacitor_appears_in_dominant_pole(session):
-    """A kept capacitance must read as a LETTER somewhere -- the user's complaint
-    was keeping a cap and seeing no cap symbol.
-
-    It cannot appear in the factored N(s)/D(s) (numeric roots of a symbolic
-    quartic have no closed form), but it MUST appear in the symbolic dominant
-    pole/zero, and on a plain Solve, not only after Simplify.
-    """
+    """A kept capacitance must read as a LETTER somewhere. On a plain
+    Solve of a compact circuit the letter lives in the EXACT SYMBOLIC
+    N(s)/D(s); the closed-form dominant pole/zero belong to the
+    SIMPLIFIED forms only (user decision 2026-08-29: on the exact
+    solve the a0/a1 edge is a wall of coefficient terms -- symbolic-
+    looking noise; measured count_ops 80 even on this 4-keep case)."""
     session.set_matches(*session.suggest_matches())
     keep = ["gm_I0_MN1", "gds_I0_MN1", "gds_I0_MP1", "cdb_I0_MP1"]
     with warnings.catch_warnings():
@@ -169,13 +168,25 @@ def test_kept_capacitor_appears_in_dominant_pole(session):
 
     lines = view._expr_lines(r)
     labels = {lbl.strip(): tex for lbl, tex in lines}
-    assert "p_1 =" in labels, "no symbolic dominant pole shown"
-    assert "c_{db" in labels["p_1 ="], "kept capacitance absent from p_1"
-    # and A_0, being H(0), must be cap-free (a cap is open at DC)
-    assert "c_{db" not in labels.get("A_0 =", "")
+    # the closed-form edges are NOT shown on the exact solve
+    assert "p_1 =" not in labels and "z_1 =" not in labels
+    # and A_{V0}, being H(0), must be cap-free (a cap is open at DC)
+    assert "c_{db" not in labels.get("A_{V0} =", "")
     # the full 5th-order solve is too big for the expanded symbolic form -- it
     # must fall back to numeric corners, not print a many-digit-integer ratio
     assert view._raw_tf_lines(r) == []
+
+    # the letter payoff moved to the SIMPLIFIED form: one Simplify and
+    # the kept capacitance reads as a letter in the compact p_1
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rs = session.simplify("VIND", "vout", keep,
+                              mag_db=1.0, phase_deg=5.0)
+    labels_s = {lbl.strip(): tex
+                for lbl, tex in view._expr_lines(rs)}
+    assert "p_1 =" in labels_s
+    assert "c_{db" in labels_s["p_1 ="], \
+        "kept capacitance absent from the simplified p_1"
 
 
 @pytest.fixture(scope="module")
@@ -463,24 +474,28 @@ def test_prepare_display_prewarms_the_expression_lines(result):
     # not through the package's re-export
     from circuitinsight.gui.view import simplify as _simplify
 
-    real = _simplify.round_expr
+    # _wrapped_product renders the corner products on EVERY recompute
+    # of a corners-form result (round_expr sites hide inside try/except
+    # and the p1/z1 site is simplified-only now)
+    real = _simplify._wrapped_product
     def boom(*a, **k):
         raise AssertionError("cache miss: the GUI thread would compute")
-    _simplify.round_expr = boom
+    _simplify._wrapped_product = boom
     try:
         again = view._expr_lines(result, base=True, wrap=False)
         assert again is first                    # a lookup, not a compute
         with pytest.raises(AssertionError):
             view._expr_lines(result, base=False, wrap=False)  # other key
     finally:
-        _simplify.round_expr = real
+        _simplify._wrapped_product = real
 
 
 def test_impedance_dc_renders_as_z0_in_ohms():
-    """An impedance is DIMENSIONED: its DC value is Z_0 in ohms with
-    an SI multiple (and dB-ohm beside it for the plot's axis), never a
-    bare A_0 gain (field report: 'A_0 = 6.281e+04 (95.96 dB)' for Z at
-    a bias net). The transfer keeps its A_0."""
+    """The DC value wears the ratio's QUANTITY: an impedance is Z_0 in
+    ohms with an SI multiple (dB-ohm beside it), a voltage-driven net
+    voltage is the voltage gain A_{V0}, and a CURRENT-driven net
+    voltage is a transimpedance -- Z_0 in ohms too (field report:
+    'A_0 = 5.008e+04 (93.99 dB)' for I0 -> smpl)."""
     d = FIX.parent / "miller"
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -495,8 +510,9 @@ def test_impedance_dc_renders_as_z0_in_ohms():
     assert "Z0      :" in view.summary_text(rz)
     assert "Ω" in view.summary_text(rz)
     tl = view._expr_lines(rt)
-    assert tl[0][0] == "A_0 = "
+    assert tl[0][0] == "A_{V0} = "
     assert any(lab == "H(s) = " for lab, _ in tl)
+    assert rt.qty == "AV" and rz.qty == "Z"
 
 
 def test_conjugate_pair_factor_reads_q_explicitly():

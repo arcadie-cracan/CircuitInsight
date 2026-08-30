@@ -98,6 +98,16 @@ def test_compose_renders_every_mapped_instance():
     # wires, dots and instance labels are present
     assert svg.count("<path d=\"M ") >= len(flat.wires)
     assert "I0.MP0" in svg and "VIND" in svg
+    # a CONTRIBUTOR's body wears the accent in its own strokes, faded
+    # by weight -- and only that instance's group changes
+    lit = compose(flat, devtypes, SymbolLibrary(),
+                  contrib={"I0.MP0": 1.0, "I0.MN0": 0.1})
+    assert "#D55E00" in lit and "#D55E00" not in svg
+    from circuitinsight.schematic.compose import _contrib_color
+    assert _contrib_color(1.0) == "#D55E00"
+    assert _contrib_color(2.0) == "#D55E00"      # clamped
+    assert _contrib_color(0.1) in lit            # the faint one too
+    assert _contrib_color(0.0) != _contrib_color(1.0)
 
 
 def test_pages_keep_the_source_hierarchy():
@@ -283,6 +293,86 @@ def test_balun_and_switch_register_on_their_pins():
     res = _c.last_residuals
     assert res["S0"] < 2.0 and res["S1"] < 2.0
     assert res["I5"] < 6.0        # fitted; the centre tap bridges
+    # the pin-anchor bridges JOIN their nets: the viewer's runs must
+    # reach the symbols, not stop at the harvested wire ends (field
+    # report: the net highlight and the sensitivity map both left
+    # the last millimetres to every pin unlit)
+    pg = page(h, "tb_ota_folded_cascode")
+    raw = sum(1 for w in pg.wires if w.net == "vout")
+    assert len(_c.last_net_wires["vout"]) > raw
+
+
+@needs_lib
+def test_port_glyphs_take_the_display_port_ink():
+    """port_base (the dark display's Virtuoso pin red) recolors the
+    ipin/opin glyph bodies and their pin-name labels at compose time;
+    without it the canonical page stays black-on-white -- exports
+    never see the display palette."""
+    import json
+
+    from circuitinsight.schematic import SymbolLibrary, compose, page
+
+    fc = FIX / "spectre" / "fc"
+    h = load_hints(fc / "tb_fc.hints.json")
+    cin = json.loads((fc / "tb_fc.cin.json").read_text(encoding="utf-8"))
+    cdef = cin["definitions"]["ota_folded_cascode"]
+    dt = {i["name"]: (i["device_type"],
+                      (i.get("params") or {}).get("polarity"))
+          for i in cdef["instances"] if "device_type" in i}
+    pg = page(h, "ota_folded_cascode")
+    sub = frozenset(cin["definitions"])
+    plain = compose(pg, dt, SymbolLibrary(), subckts=sub)
+    red = compose(pg, dt, SymbolLibrary(), subckts=sub,
+                  port_base="#FE0000")
+    assert "#FE0000" in red and "#FE0000" not in plain
+    # only the ports took it: device artwork keeps its black strokes
+    assert 'stroke="#000000"' in red
+
+
+@needs_lib
+def test_deactivated_draws_xed_and_bodies_carry_ids():
+    """A deactivated instance is DRAWN, wearing Virtuoso's red X over
+    its body; and every placed symbol's artwork carries a body: id so
+    the viewer's selection box hugs the drawing, not the labels."""
+    import warnings
+
+    from circuitinsight.schematic import SymbolLibrary, compose
+    from circuitinsight.session import SessionController
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(
+            FIX / "spectre" / "ota5t" / "tb_ota5t.cin.json",
+            FIX / "spectre" / "ota5t" / "psf")
+    devtypes = {d.name: (d.device_type, d.params.get("polarity"))
+                for d in c._run.flat.devices}
+    flat = flatten(load_hints(HINTS))
+    plain = compose(flat, devtypes, SymbolLibrary())
+    assert 'id="body:I0.MP0"' in plain
+    assert 'stroke="#d00000"' not in plain
+    xed = compose(flat, devtypes, SymbolLibrary(),
+                  deactivated=frozenset({"I0.MP0"}))
+    assert 'stroke="#d00000"' in xed
+    # the composer publishes each body's GEOMETRIC rect (the viewer's
+    # selection bounds -- boundsOnElement padded past the artwork)
+    bodies = compose.last_bodies
+    assert len(bodies["I0.MP0"]) == 4
+    bx0, by0, bx1, by1 = bodies["I0.MP0"]
+    assert bx1 > bx0 and by1 > by0
+    # the X is the inscribed CENTERED SQUARE's diagonals, not the
+    # rect's own (which splay on non-square bodies)
+    import re as _re
+    mo = _re.search(r'<path d="M ([\d.eE+-]+) ([\d.eE+-]+) '
+                    r'L ([\d.eE+-]+) ([\d.eE+-]+) M [\d.eE+-]+ '
+                    r'[\d.eE+-]+ L [\d.eE+-]+ [\d.eE+-]+" '
+                    r'stroke="#d00000"', xed)
+    assert mo is not None
+    x0, y0, x1, y1 = map(float, mo.groups())
+    assert abs((x1 - x0) - (y1 - y0)) < 0.02
+    assert min(x1 - x0, y1 - y0) > 0
+    # centered inside the body rect
+    assert abs((x0 + x1) / 2 - (bx0 + bx1) / 2) < 0.02
+    assert abs((y0 + y1) / 2 - (by0 + by1) / 2) < 0.02
 
 
 @needs_lib
@@ -489,3 +579,51 @@ def test_proposed_branch_overlays_the_page():
                    subckts=frozenset(cin["definitions"]))
     assert 'id="proposed-branches"' not in svg2
     assert compose.last_proposed_drawn == 0
+
+
+def test_oriented_local_rect_matches_the_svg_transform():
+    """The body rect must land where _orient_svg puts the artwork:
+    M_svg = F.M.F (y-up world conjugated with the y-flip). Pinned on
+    R90, where the raw matrix flipped the off-diagonal signs and set
+    rotated bodies beside their symbol (field report: NM3)."""
+    from types import SimpleNamespace
+
+    from circuitinsight.schematic.compose import _oriented_local_rect
+    from circuitinsight.schematic.hints import ORIENTS
+
+    sym = SimpleNamespace(w=10.0, h=6.0)
+    loc = (0.0, 0.0, 2.0, 2.0)          # a blob at the local top-left
+    # identity: centered offset only
+    assert _oriented_local_rect(0, 0, sym, ORIENTS["R0"], loc) ==         (-5.0, -3.0, -3.0, -1.0)
+    # R90 via the SVG mapping x' = py, y' = -px (for m = [[0,-1],[1,0]])
+    m = ORIENTS["R90"]
+    got = _oriented_local_rect(0, 0, sym, m, loc)
+    a, b = m[0]
+    c, d = m[1]
+    pts = [(a * px - b * py, -c * px + d * py)
+           for px, py in ((-5, -3), (-3, -1), (-5, -1), (-3, -3))]
+    exp = (min(x for x, _ in pts), min(y for _, y in pts),
+           max(x for x, _ in pts), max(y for _, y in pts))
+    assert got == exp
+    # and the mirror that HID the bug stays right
+    assert _oriented_local_rect(0, 0, sym, ORIENTS["MY"], loc) ==         (3.0, -3.0, 5.0, -1.0)
+
+
+def test_rotated_label_reads_along_its_wire():
+    """A Cadence R90 label rotates about its anchor (justification in
+    the rotated frame); its obstacle box turns with it."""
+    from circuitinsight.schematic.compose import (_label_rot, _rot_box)
+    from circuitinsight.schematic.mathtext import svg_label
+
+    assert _label_rot("R90") == -90.0
+    assert _label_rot("R270") == 90.0
+    assert _label_rot("R0") == 0.0
+    out = svg_label(10.0, 20.0, "gnd!", 2.4, rotate=-90.0)
+    assert 'rotate(-90.0)' in out and 'translate(10.000, 20.000)' in out
+    # the turned box is TALL where the flat one is wide
+    fx0, fy0, fx1, fy1 = _rot_box(0, 0, "gnd!", 2.4, "start",
+                                  "alphabetic", 0.0)
+    rx0, ry0, rx1, ry1 = _rot_box(0, 0, "gnd!", 2.4, "start",
+                                  "alphabetic", -90.0)
+    assert (fx1 - fx0) > (fy1 - fy0)
+    assert (ry1 - ry0) > (rx1 - rx0)

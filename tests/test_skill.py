@@ -22,7 +22,7 @@ _ENV["PYTHONPATH"] = (str(Path(__file__).resolve().parents[1] / "src")
 
 
 @pytest.mark.parametrize("name", ["cin_export.il", "cin_launch.il",
-                                  "cin_xprobe.il", "cin_init.il"])
+                                  "cin_init.il"])
 def test_skill_file_shipped(name):
     p = skill.path(name)
     assert p.exists() and p.suffix == ".il"
@@ -54,10 +54,9 @@ def test_skill_import_pulls_no_heavy_gui_deps():
 
 def test_bootstrap_loads_every_other_il_file():
     """cin_init.il is advertised as THE one line for .cdsinit, so it must load
-    every sibling. It once omitted cin_xprobe.il, and the only symptom was the
-    GUI reporting "cross-probe unavailable: connected, but CInHighlight is not
-    defined" -- a silent feature loss, since the export and launch paths it
-    did load worked fine."""
+    every sibling. It once omitted a sibling, and the only symptom was a
+    silent feature loss -- the export and launch paths it did load worked
+    fine."""
     init = skill.path("cin_init.il").read_text(encoding="utf-8")
     siblings = sorted(p.name for p in skill.skill_dir().glob("cin_*.il")
                       if p.name != "cin_init.il")

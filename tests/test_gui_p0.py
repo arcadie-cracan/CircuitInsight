@@ -170,3 +170,16 @@ def test_progress_flags_an_estimate_that_has_been_blown(qapp, win):
     txt = win.progress.format()
     assert "(over)" in txt
     assert win._live_est > 1.5 * win._est_s
+
+
+def test_open_error_text_diagnoses_stale_op(qapp):
+    """A join failure names missing OP records; the dialog adds the
+    diagnosis (an edited schematic Analyzed against the pre-edit
+    simulation) and the remedy. Other failures stay untouched."""
+    from circuitinsight.gui.app import MainWindow
+
+    e = RuntimeError("OP join failed: I0.NM30: no OP record found")
+    t = MainWindow._open_error_text(e)
+    assert "RuntimeError" in t and "predates the netlist" in t
+    assert "DEACTIVATED" in t
+    assert "predates" not in MainWindow._open_error_text(ValueError("x"))

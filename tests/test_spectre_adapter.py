@@ -189,3 +189,211 @@ def test_end_to_end_pmos_stage_tf():
     gout = p["gds"] + 1 / run.op_data["RLP"]["r"]
     a0 = complex(H.numeric([0.01])[0])
     assert a0.real == pytest.approx(-p["gm"] / gout, rel=1e-9)
+
+
+FIX_SP = Path(__file__).resolve().parent / "fixtures" / "spectre"
+
+
+def _op_tree(tmp_path, n=2):
+    """A synthetic maestro ExplorerRun tree: n design points, each a
+    copy of the miller stb psf plus the runObjFile/variables_file that
+    label it."""
+    import shutil
+
+    src = FIX_SP / "miller" / "psf_stb"
+    corners = ["tt 27", "nom", "nom"]
+    temps = [27, -40, 85]
+    secs = ["tt", "ss", "ff"]
+    root = tmp_path / "ExplorerRun.0"
+    for i in range(1, n + 1):
+        psf = root / str(i) / "work_tb" / "psf"
+        shutil.copytree(src, psf)
+        (psf / "runObjFile").write_text(
+            'HEADER\n"PSFversion" "1.00"\n'
+            f'"#maeCorner" "{corners[i - 1]}"\n'
+            f' "#maeDesignPoint" {i}\n')
+        (psf / "variables_file").write_text(
+            'HEADER\nVALUE\n'
+            f'"temperature" "variable" ( {temps[i - 1]} ) PROP( )\nEND\n')
+        nl = psf.parent / "netlist"
+        nl.mkdir()
+        (nl / ".modelFiles").write_text(
+            f'include "models.spice" section={secs[i - 1]}\n')
+    return root
+
+
+def test_op_point_discovery_labels_the_corners(tmp_path):
+    """A maestro corner tree yields one labeled point per design point;
+    a plain psf directory yields exactly one, so opens stay uniform."""
+    from circuitinsight.adapters.spectre.points import discover_op_points
+
+    root = _op_tree(tmp_path, 3)
+    pts = discover_op_points(root)
+    assert [p.label for p in pts] == ["tt 27", "nom ss -40", "nom ff 85"]
+    assert [p.index for p in pts] == [1, 2, 3]
+    assert all((p.psf / "dcOpInfo.info").exists() for p in pts)
+    assert pts[1].variables["temperature"] == -40.0
+    assert pts[0].process == "tt"    # in the corner name, not repeated
+    # the netlister's toolArgs.ils keeps the corner name the USER wrote
+    # even where runObjFile recorded "nom" (fc field case: every 125C
+    # skew point); when present it wins, and a truthful name needs no
+    # section or temperature appended
+    (root / "2" / "work_tb" / "netlist" / "toolArgs.ils").write_text(
+        '((("sim" "spectre")) nil)'
+        '(("CornerName" "ss -40" "temperature" "-40"))(2)')
+    pts = discover_op_points(root)
+    assert [p.label for p in pts] == ["tt 27", "ss -40", "nom ff 85"]
+    single = discover_op_points(FIX_SP / "miller" / "psf_stb")
+    assert len(single) == 1
+
+
+def test_session_binds_and_switches_op_points(tmp_path):
+    """One session over the point set: opens on the first point,
+    switches with structure preserved (matches, declaration) and every
+    cache dropped -- the new point's analyses re-derive."""
+    import warnings
+
+    from circuitinsight.session import SessionController
+
+    root = _op_tree(tmp_path, 2)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(
+            FIX_SP / "miller" / "tb_ota2s_stb.cin.json", root,
+            cap_model="matrix")
+    assert c.op_point_labels == ["tt 27", "nom ss -40"]
+    assert c.op_path == root / "1" / "work_tb" / "psf"
+    assert c.has_stb
+    r1 = c.loop_gain("IPRB0")
+    c.declare_ac_loop_gain(None)
+    c.set_op_point(1)
+    assert c.op_path == root / "2" / "work_tb" / "psf"
+    r2 = c.loop_gain("IPRB0")
+    assert r2 is not r1              # caches dropped, re-derived
+    # identical copied data: the physics must agree across the rebind
+    assert abs(r1.pm_deg - r2.pm_deg) < 1e-9
+    # single-psf sessions have no point set and refuse to switch
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c1 = SessionController.open(FIX_SP / "miller" / "tb_ota2s.cin.json",
+                                    FIX_SP / "miller" / "psf")
+    assert c1.op_point_labels == []
+    with pytest.raises(ValueError):
+        c1.set_op_point(1)
+
+
+def test_points_manifest_is_the_official_point_set(tmp_path):
+    """A launcher-written manifest (from the simulator's OWN results
+    database) names the points officially; the session loads it as the
+    point set with no reconstruction. Entries without OP data are
+    skipped, and a manifest with none is a clear error."""
+    import json
+    import warnings
+
+    from circuitinsight.adapters.points import load_points_manifest
+    from circuitinsight.session import SessionController
+
+    root = _op_tree(tmp_path, 2)
+    man = tmp_path / "ExplorerRun.0.points.json"
+    man.write_text(json.dumps({
+        "cin_points_version": "0.1", "history": "ExplorerRun.0",
+        "points": [
+            {"corner": "ff 125", "psf": str(root / "1" / "work_tb" / "psf")},
+            {"corner": "tt", "psf": str(root / "2" / "work_tb" / "psf")},
+            {"corner": "ghost", "psf": str(root / "3" / "work_tb" / "psf")},
+        ]}))
+    pts = load_points_manifest(man)
+    assert [p.label for p in pts] == ["ff 125", "tt"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(
+            FIX_SP / "miller" / "tb_ota2s_stb.cin.json", man,
+            cap_model="matrix")
+    assert c.op_point_labels == ["ff 125", "tt"]
+    assert c.op_path == root / "1" / "work_tb" / "psf"
+    c.set_op_point(1)
+    assert c.op_path == root / "2" / "work_tb" / "psf"
+    empty = tmp_path / "empty.points.json"
+    empty.write_text(json.dumps({"points": [
+        {"corner": "x", "psf": str(root / "9" / "work_tb" / "psf")}]}))
+    with pytest.raises(ValueError, match="manifest"):
+        SessionController.open(
+            FIX_SP / "miller" / "tb_ota2s_stb.cin.json", empty)
+
+
+def test_margin_ledger_set_spans_the_points(tmp_path):
+    """Ledgers over the whole set without moving the bound point; the
+    per-point results are content-addressed, so the bound point's own
+    ledger is THE SAME object margin_ledger served, and identical
+    copied points read identically. A single-psf session refuses."""
+    import warnings
+
+    from circuitinsight.session import SessionController
+
+    root = _op_tree(tmp_path, 2)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(
+            FIX_SP / "miller" / "tb_ota2s_stb.cin.json", root,
+            cap_model="matrix")
+        bound = c.margin_ledger("IPRB0")
+        out = c.margin_ledger_set("IPRB0")
+    assert out["labels"] == ["tt 27", "nom ss -40"]
+    assert out["ref_index"] == 0
+    assert c._op_index == 0                    # the session stayed put
+    assert out["ledgers"][0] is bound["ledger"]
+    assert out["ledgers"][1].pm_deg == pytest.approx(
+        out["ledgers"][0].pm_deg, abs=1e-9)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c1 = SessionController.open(FIX_SP / "miller" / "tb_ota2s.cin.json",
+                                    FIX_SP / "miller" / "psf")
+    with pytest.raises(ValueError):
+        c1.margin_ledger_set("IPRB0")
+
+
+def test_suggestion_robustness_spans_the_point_set(tmp_path):
+    """Already-sized suggestions re-measured on EVERY operating point,
+    values held fixed. The synthetic tree copies one psf, so every
+    point must read identically and the worst case must equal the
+    suggester's own nominal certificate; a single-psf session has no
+    set and refuses."""
+    import warnings
+
+    from circuitinsight.analysis.compensate import Candidate
+    from circuitinsight.session import SessionController
+
+    root = _op_tree(tmp_path, 2)
+    cand = Candidate("miller", "I0.net1", "vout", "bridge", 1.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(
+            FIX_SP / "miller" / "tb_ota2s_stb.cin.json", root,
+            cap_model="matrix")
+        sugg = c.suggest_compensation("IPRB0", goal="mfm",
+                                      exclude=("I0.Cc",),
+                                      candidates=[cand])
+        rob = c.suggestion_robustness("IPRB0", sugg, exclude=("I0.Cc",))
+    assert len(rob) == len(sugg) > 0
+    r0 = rob[0]
+    assert r0["labels"] == ["tt 27", "nom ss -40"]
+    flats = [p["flat_db"] for p in r0["points"]]
+    assert flats[0] == pytest.approx(flats[1], abs=1e-9)
+    assert r0["worst_flat_db"] == pytest.approx(sugg[0].flat_db, abs=1e-6)
+    assert r0["worst_pm_deg"] == pytest.approx(sugg[0].pm_deg, abs=1e-6)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c1 = SessionController.open(FIX_SP / "miller" / "tb_ota2s.cin.json",
+                                    FIX_SP / "miller" / "psf")
+    with pytest.raises(ValueError):
+        c1.suggestion_robustness("IPRB0", sugg)
+    with pytest.raises(ValueError):
+        c1.suggest_robust_compensation("IPRB0")
+    # identical copied points: worst-corner sizing changes nothing
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rob = c.suggest_robust_compensation("IPRB0", goal="mfm",
+                                            exclude=("I0.Cc",),
+                                            candidates=[cand])
+    assert [(s.C, s.R, s.achieved) for s in rob] == \
+        [(s.C, s.R, s.achieved) for s in sugg]

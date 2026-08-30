@@ -545,7 +545,6 @@ def _gj_det_inv(M, n, zero):
 
 def _sweep(pts, P0, P1, K0, K1, col, patterns, values, top, min_share,
            progress=None):
-    n = P0.rows
     L = len(pts)
     dvals, nvals = [], []
     dder = {p: [] for p in patterns}

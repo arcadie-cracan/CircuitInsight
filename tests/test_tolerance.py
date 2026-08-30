@@ -2,7 +2,6 @@
 met at the NOMINAL operating point; tolerance_margin() reports what it
 becomes when parameters drift — sampled exactly, since both sides of the
 comparison are numeric."""
-import warnings
 from pathlib import Path
 
 import pytest

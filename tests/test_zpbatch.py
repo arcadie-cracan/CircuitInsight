@@ -6,7 +6,6 @@ and singular ones, and the full pipeline must reproduce the exact-QQ path's
 expressions bit-for-bit (the integration seam accepts zp results only
 through the same off-grid exact probe self-check, so equivalence here is
 the whole contract)."""
-import random
 import warnings
 from pathlib import Path
 
