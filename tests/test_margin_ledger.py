@@ -713,3 +713,64 @@ def test_the_equation_shows_a_partial_reading_as_structure():
     assert "(exact)" in text                # the value stays exact
     # a fully certified term still substitutes its own value
     assert [t for t in eq["terms"] if t["estimate"]]
+
+
+def test_a_folded_rhp_member_keeps_its_side():
+    """Folding is PRESENTATION, and it must not drop the RHP marker.
+
+    A RHP pole with a near RHP zero on top of it folds to one doublet
+    row, and a small-share RHP pole is gathered into the remainder.
+    Both used to render as ordinary dynamics -- 'doublet (0% apart)',
+    'N smaller terms' -- which put the table at odds with the
+    probe advisor, whose UNSTABLE verdict comes from the closed-loop
+    det A and is unaffected by any of this. The safety net was never
+    the ledger; the contradiction between the two views was the bug.
+    """
+    from circuitinsight.analysis.marginledger import (LedgerEntry,
+                                                      _pair_near_doublets)
+
+    def mk(kind, f0, rhp, ph):
+        return LedgerEntry(kind=kind, f0_hz=f0, zeta=None, rhp=rhp,
+                           pair=False, phase_deg=ph, mag_db=None,
+                           roots=(complex(f0, 0),))
+
+    p = mk("pole", 1e6, True, -3.0)
+    z = mk("zero", 1.001e6, True, +3.0)
+    doublet = [e for e in _pair_near_doublets([p, z], 0.3)
+               if e.kind == "doublet"]
+    assert doublet, "the couple must fold"
+    d = doublet[0]
+    assert d.rhp is True
+    assert "RHP" in d.describe()
+
+    # ...and a benign couple must NOT acquire a marker it never had
+    q = mk("pole", 1e6, False, -3.0)
+    y = mk("zero", 1.001e6, False, +3.0)
+    d2 = [e for e in _pair_near_doublets([q, y], 0.3)
+          if e.kind == "doublet"][0]
+    assert d2.rhp is False
+    assert "RHP" not in d2.describe()
+
+
+def test_the_remainder_carries_an_rhp_member(monkeypatch):
+    """The `rest` row hardcoded rhp=False, so a small-share RHP pole
+    gathered into it lost its side entirely."""
+    from circuitinsight.analysis.marginledger import (LedgerEntry,
+                                                      MarginLedger)
+
+    def mk(kind, f0, rhp, ph):
+        return LedgerEntry(kind=kind, f0_hz=f0, zeta=None, rhp=rhp,
+                           pair=False, phase_deg=ph, mag_db=None,
+                           roots=(complex(f0, 0),))
+
+    anchor = mk("gain", 0.0, False, -120.0)
+    big = mk("pole", 1e3, False, -40.0)
+    tiny_rhp = mk("pole", 1e9, True, -0.10)   # small share, RHP
+    led = MarginLedger(pm_deg=60.0, f_unity_hz=1e6, gm_db=12.0,
+                       f_180_hz=1e7, entries=[anchor, big, tiny_rhp],
+                       phase_residual_deg=0.0, mag_residual_db=0.0)
+    folded = led.fold(budget_deg=2.0, pair_tol=0.0)
+    rest = [e for e in folded if e.kind == "rest"]
+    assert rest, "the tiny term must gather"
+    assert rest[0].rhp is True, "the remainder dropped an RHP member"
+    assert "RHP" in rest[0].describe()

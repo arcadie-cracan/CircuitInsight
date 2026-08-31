@@ -116,3 +116,39 @@ def test_session_exposes_the_assessment_on_demand(bench):
         v = s.assess_root(probe, e.f0_hz)
     assert v.kind in ("localized", "collapsible", "distributed")
     assert v.describe()
+
+
+def test_the_verdict_does_not_overclaim_against_the_reader():
+    """Two calibration bugs, both of which accused the reader falsely.
+
+    The `localized` bar is 0.60, but the message blamed the reader for
+    a missing formula at every level above it. At 68% a third of the
+    weight is elsewhere and a single-location formula would be
+    materially wrong, so the reader declining is CORRECT -- and the
+    accusation sent a reader hunting a bug that was not there. Only a
+    root OWNED by its location earns that.
+
+    And the ray is computed without reference to the reconstruction,
+    so it cannot know whether a formula exists. It used to assert
+    there was none, including about roots the reader had named."""
+    from circuitinsight.analysis.rays import RayVerdict
+
+    owned = RayVerdict(kind="localized", l_nominal=0.99,
+                       node_nominal="net1 ↔ vout")
+    mixed = RayVerdict(kind="localized", l_nominal=0.68,
+                       node_nominal="mirr ↔ vdd!")
+
+    # owned: the reader is on the hook, but only CONDITIONALLY -- the
+    # verdict cannot see the reconstruction
+    assert "gap in the reader" in owned.describe()
+    assert "if no formula" in owned.describe()
+    assert "no formula named it, which is" not in owned.describe()
+
+    # merely centred: no accusation, and the spread is quantified
+    assert "gap in the reader" not in mixed.describe()
+    assert "32%" in mixed.describe()
+    assert "would not be exact" in mixed.describe()
+
+    # the band itself
+    from circuitinsight.analysis.rays import _OWNED
+    assert 0.60 < _OWNED <= 1.0, "owning must be stricter than localized"

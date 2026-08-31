@@ -103,6 +103,29 @@ def port_conductance(system, u, keep, *, open_branch=None):
     return num, den, val
 
 
+def eet_symbols(g, stamps, *, floor: float = 1e-3, cap: int = 16):
+    """The symbol list for the EET -- deliberately NOT the one the
+    determinants get.
+
+    `conductance_for_aggregate` caps its keep set hard because the
+    determinant cost explodes: on the folded cascode, 22 s at three
+    symbols and 562 s at five. The EET costs milliseconds, so it wants
+    every conductance that carries any weight. Starved of symbols it
+    does not fail loudly -- branch_form simply cannot NAME the branch
+    and reports it unnamed, which reads like a limit of the method
+    rather than a malformed question. That cascode branch is
+    gds_NM10 + gds_PM11 + gds_NM13 over gm_NM14 + gmbs_NM14, and none
+    of those survives a three-symbol cap.
+    """
+    from .reconstruct import _CLASS
+
+    gr = {n: abs(complex(v).real) for n, v in g.items()}
+    return tuple(n for n in sorted(gr, key=lambda n: -gr[n])
+                 if gr[n] >= floor
+                 and any(_CLASS.get(st[0], ("",))[0] == "conductive"
+                         for st in stamps.get(n, ())))[:cap]
+
+
 def conductance_for_aggregate(system, rec, stamps, g, *, probe=None,
                               max_keep: int = 5, floor: float = 0.02,
                               rel_tol: float = 0.25):

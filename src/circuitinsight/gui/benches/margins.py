@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QLabel, QPushButton, QSplitter,
+    QAbstractItemView, QLabel, QMenu, QPushButton, QSplitter,
     QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget)
 
@@ -136,6 +136,11 @@ class MarginsBenchMixin:
         # clicking the already-selected row again RELEASES it: the
         # right panel returns to the margin knobs, the lights go out
         self.ml_tbl.cellClicked.connect(self._ml_cell_clicked)
+        # the two DEEP readings are on demand, by right-click: each
+        # costs seconds of determinant work where this table must stay
+        # interactive, so neither can ride along with the ledger
+        self.ml_tbl.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.ml_tbl.customContextMenuRequested.connect(self._ml_menu)
         self.ms_tree.itemSelectionChanged.connect(self._ms_cross_light)
         # the per-corner comparison, shown once computed: rows are the
         # bound corner's terms, columns the corners, ranked by drift
@@ -236,21 +241,35 @@ class MarginsBenchMixin:
         if ze:
             out.append(f"ζ ≈ {ze['text']} = {ze['zeta_est']:.2f} "
                        f"({ze['err']:+.0%})")
+        # an on-demand reading, once asked for, travels with the row:
+        # the aggregate the text above names as G_eff is only a SYMBOL
+        # until the port is computed, and this is where the answer to
+        # that question belongs
+        pr = getattr(e, "port_reading", None)
+        if pr is not None:
+            out.append(MarginsBenchMixin._ml_port_text(pr))
+        rr = getattr(e, "ray_reading", None)
+        if rr is not None:
+            out.append(MarginsBenchMixin._ml_ray_text(rr))
         return "\n".join(out)
 
     @staticmethod
     def _ml_term(e) -> str:
+        # the RHP side belongs on EVERY row that can carry it, not
+        # only the unfolded ones. A RHP pole paired with a near RHP
+        # zero used to read as a plain doublet here, which put the
+        # table at odds with the advisor's UNSTABLE verdict
+        side = "RHP " if e.rhp else ""
         if e.kind == "gain":
             return "T0"
         if e.kind == "rest":
-            return f"{e.count} smaller terms"
+            return f"{side}{e.count} smaller terms"
         if e.kind == "band":
-            return f"band ({e.count} terms)"
+            return f"{side}band ({e.count} terms)"
         if e.kind == "doublet":
-            return ("cancelling doublet" if e.spacing < 1e-4
-                    else f"doublet ({e.spacing:.0%} apart)")
-        return (("RHP " if e.rhp else "") + e.kind
-                + (" pair" if e.pair else ""))
+            return side + ("cancelling doublet" if e.spacing < 1e-4
+                           else f"doublet ({e.spacing:.0%} apart)")
+        return side + e.kind + (" pair" if e.pair else "")
 
     def _ml_clear(self):
         self._ml_mark_freq(None)
@@ -362,6 +381,267 @@ class MarginsBenchMixin:
             self._ml_last_click = None
         else:
             self._ml_last_click = row
+
+    def _ml_render_equation(self, led):
+        """Build and show the hand equation. Separate from the ledger
+        handler because it is rendered TWICE: once when the ledger
+        lands, and again when a port expansion arrives and the bare
+        G_eff in it can be replaced by the algebra behind it."""
+        from ...analysis.marginledger import (margin_equation,
+                                              margin_equation_latex,
+                                              margin_equation_text)
+        try:
+            eq = margin_equation(led)
+        except ValueError:
+            return None
+        self._ml_eq_lines = margin_equation_text(eq)
+        if hasattr(self._ml_eq, "set_payload"):      # pragma: no cover
+            aliases = getattr(self.controller, "sym_aliases", {})
+            self._ml_eq.set_payload({
+                "lines": margin_equation_latex(
+                    eq, texer=lambda n: view.symbol_tex(
+                        n, aliases=aliases)),
+                "values": {}})
+        else:
+            self._ml_eq.setText("\n".join(self._ml_eq_lines))
+        self._ml_eq.setVisible(True)
+        self._ml_hand_size(0, 240)
+        return eq
+
+    # ---- the two on-demand readings -----------------------------
+    # Both answer a question the ledger RAISES but deliberately does
+    # not settle: what the aggregate G_eff actually is, and why a root
+    # reads as SHARED. Each costs seconds -- port determinants, a ray
+    # sweep -- so they run through the job runner like a solve instead
+    # of blocking the bench, and the answer is attached to the entry
+    # so the formula tooltip carries it from then on.
+
+    def _ml_menu(self, pos):
+        row = self.ml_tbl.rowAt(pos.y())
+        rows = getattr(self, "_ml_rows", ())
+        if row < 0 or row >= len(rows) or self.controller is None:
+            return
+        e = rows[row]
+        menu = QMenu(self.ml_tbl)
+        rec = getattr(e, "reconstruction", None)
+        agg = rec.aggregate if rec is not None else None
+        ok, why = self._ml_port_gate(e)
+        a_port = menu.addAction(
+            f"Expand {agg['symbol']} at its port" if agg
+            else "Expand the aggregate at its port")
+        a_port.setEnabled(ok)
+        if why:
+            a_port.setToolTip(why)
+        a_ray = menu.addAction("Assess this root (ray test)")
+        a_ray.setEnabled(bool(getattr(e, "roots", ())))
+        if not getattr(e, "roots", ()):
+            a_ray.setToolTip("this term has no root to follow")
+        act = menu.exec(self.ml_tbl.viewport().mapToGlobal(pos))
+        if act is a_port and a_port.isEnabled():
+            self.ml_port_expand(row)
+        elif act is a_ray and a_ray.isEnabled():
+            self.ml_assess(row)
+
+    @staticmethod
+    def _ml_port_gate(e):
+        """Whether this root's aggregate can be expanded at a port,
+        and if not, why. Only a CONDUCTANCE has the driving-point
+        route: the port is read from two determinants of the s = 0
+        matrix, which is purely conductive. A C_eff names a
+        capacitance and has no dual here, so the action says so rather
+        than offering a computation that returns nothing."""
+        rec = getattr(e, "reconstruction", None)
+        agg = rec.aggregate if rec is not None else None
+        if not agg:
+            return False, "this root's reading names no aggregate"
+        if agg["unit"] != "S":
+            return False, (f"{agg['symbol']} is a capacitance; the "
+                           "port route reads conductances only")
+        return True, ""
+
+    def _ml_on_demand(self, row, what):
+        """Shared launch path: the two readings take the same (probe,
+        f0) and differ only in the controller call they make."""
+        rows = getattr(self, "_ml_rows", ())
+        if self.controller is None or row < 0 or row >= len(rows):
+            return None
+        probe = self.probe_combo.currentText()
+        if not probe:
+            self.statusBar().showMessage("no loop probe in this design")
+            return None
+        e = rows[row]
+        # keep 3, not the API's 5. On the folded cascode's 20 kHz pole
+        # the two agree exactly -- same value, same ratio, same
+        # verdict -- but cost 22 s against 562 s. The extra symbols
+        # buy nothing an interactive action can spend 9 minutes on.
+        call = ((lambda pr, f0: self.controller.port_expression(
+            pr, f0, max_keep=3)) if what == "port"
+            else self.controller.assess_root)
+        label = ("the port conductance at " if what == "port"
+                 else "the ray test at ") + view.eng(e.f0_hz, "Hz")
+
+        def fn(_cb):
+            return {"row": row, "what": what,
+                    "out": call(probe, e.f0_hz)}
+
+        return fn, label
+
+    def ml_port_expand(self, row):
+        got = self._ml_on_demand(row, "port")
+        if got is not None:
+            fn, label = got
+            self._launch(fn, label + "…", est_s=None,
+                         on_done=self._on_ml_reading)
+
+    def ml_assess(self, row):
+        got = self._ml_on_demand(row, "ray")
+        if got is not None:
+            fn, label = got
+            self._launch(fn, label + "…", est_s=None,
+                         on_done=self._on_ml_reading)
+
+    def ml_reading_sync(self, row, what):
+        """Blocking, for tests and scripting."""
+        got = self._ml_on_demand(row, what)
+        if got is None:
+            return None
+        fn, _label = got
+        out = fn(None)
+        self._on_ml_reading(out)
+        return out
+
+    def _on_ml_reading(self, res):
+        self._tick.stop()
+        self._t0 = None
+        self.progress.hide()
+        self.cancel_btn.hide()
+        self._job_finished()
+        rows = getattr(self, "_ml_rows", ())
+        row, what, out = res["row"], res["what"], res["out"]
+        if row >= len(rows):
+            return                   # the ledger was refilled under us
+        e = rows[row]
+        rewrote = False
+        if what == "port":
+            e.port_reading = out
+            self.log(self._ml_port_text(out))
+            # the expansion belongs in the EQUATION, where the bare
+            # G_eff is printed and where a reader looks for it -- the
+            # log scrolls away
+            aliases = getattr(self.controller, "sym_aliases", {})
+            exp = self._ml_expansion(
+                out, lambda n: view.symbol_tex(n, aliases=aliases))
+            rec = getattr(e, "reconstruction", None)
+            if exp and rec is not None:
+                rec.expansion = exp
+                if getattr(self, "_ml_led", None) is not None:
+                    self._ml_render_equation(self._ml_led)
+                    rewrote = True
+        else:
+            e.ray_reading = out
+            self.log(self._ml_ray_text(out))
+        it = self.ml_tbl.item(row, 1)
+        if it is not None:
+            it.setToolTip(self._ml_formula_tip(e))
+        # _launch brings the Log forward while the job runs; the
+        # completion returns to wherever the ANSWER now is. A port
+        # reading that rewrote the equation belongs on the bench --
+        # but a ray verdict, and a port reading whose branches could
+        # not all be named, exist only in the log, and dropping the
+        # user on an unchanged pane would look like nothing happened.
+        self.tabs.setCurrentWidget(self._ml_tab if rewrote
+                                   else self.logview)
+        if rewrote:
+            self.ml_tbl.selectRow(row)
+
+    @staticmethod
+    def _ml_tex_expr(s, texer):
+        """LaTeX for one branch's printed form.
+
+        branch_form emits a simple grammar -- groups joined by '*',
+        at most one '/' -- so the two sides are lifted into a real
+        fraction, and every identifier goes through the SAME texer the
+        rest of the equation uses. Pasting the raw text in would put
+        gds\\_I0\\_NM14 beside the aliased names in the same line."""
+        import re
+
+        def tok(part):
+            # not preceded by a word char or a dot, so the 'e' of
+            # 1.54e-05 is left alone
+            return re.sub(r"(?<![\w.])[A-Za-z_][A-Za-z_0-9]*",
+                          lambda m: texer(m.group(0)),
+                          part).replace("*", r"\cdot ")
+
+        if "/" in s:
+            top, bot = s.split("/", 1)
+            return rf"\frac{{{tok(top)}}}{{{tok(bot)}}}"
+        return tok(s)
+
+    @classmethod
+    def _ml_expansion(cls, out, texer=None):
+        """The branch decomposition as one printable sum, or None.
+
+        Only when EVERY branch was named: a sum with a hole in it is
+        not the expression, and printing a partly-named one in the
+        equation would state as fact something the port did not
+        establish. The unnamed case still reaches the log, where it is
+        reported as unnamed."""
+        br = out.get("branches") or ()
+        if not out.get("matches") or not br:
+            return None
+        if any(not b.get("text") for b in br):
+            return None
+        tx = texer or (lambda n: n.replace("_", r"\_"))
+        parts = [b["text"] for b in br]
+        return {"text": " + ".join(parts),
+                "tex": " + ".join(cls._ml_tex_expr(p, tx)
+                                  for p in parts)}
+
+    @staticmethod
+    def _ml_port_text(out) -> str:
+        """The port answer in words. `matches` is the whole point: it
+        says the pole really IS that node's time constant, and where
+        it is false the algebra is reported as not applying rather
+        than shown as though it did."""
+        agg = out.get("aggregate") or {}
+        sym = agg.get("symbol", "the aggregate")
+        fixed = view.eng(agg.get("value", 0.0), "S")
+        lines = [f"{sym} at the {out['port']} port, in "
+                 + ", ".join(out["keep"])
+                 + f"  [{out['seconds']:.1f}s]"]
+        if out["matches"]:
+            lines.append(f"  {sym} = {view.eng(out['value'], 'S')}, the "
+                         f"identity fixed {fixed} ({out['ratio']:.2f}x)"
+                         " — the pole IS this node's time constant")
+            # the branch decomposition, NOT the raw num/den: those come
+            # back uncancelled and read as hundred-digit integers, which
+            # is not something to put in front of a designer
+            br = out.get("branches") or ()
+            if br:
+                lines.append(f"  {len(br)} parallel branches:")
+                for b in br:
+                    lines.append(
+                        f"    {b['text'] or '<not named>'}"
+                        f"   {view.eng(b['conductance'], 'S')}")
+        else:
+            lines.append(
+                f"  {sym} = {view.eng(out['value'], 'S')} against "
+                f"{fixed} ({out['ratio']:.2f}x): the port conductance "
+                "does NOT match, so this root is not that node's time "
+                "constant and the aggregate stands unexpanded")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _ml_ray_text(v) -> str:
+        """The ray verdict in words. The verdict says itself in one
+        sentence; what the log adds under it is the winning ray -- the
+        walk that gathers the root, which is where compensation
+        belongs."""
+        lines = [v.describe()]
+        for p in getattr(v, "path", ()) or ():
+            lines.append(f"  x{p.scale:g}: {view.eng(p.f0_hz, 'Hz')}, "
+                         f"L {p.localization:.0%} at {p.node}")
+        return "\n".join(lines)
 
     def _ml_mark_freq(self, f_hz, label: str | None = None):
         """A vertical cursor at the selected root's EXACT frequency,
@@ -550,28 +830,10 @@ class MarginsBenchMixin:
             + (f"   (certificate residuals {', '.join(res)})" if res
                else "  no crossing in band"))
 
-        from ...analysis.marginledger import (margin_equation,
-                                              margin_equation_latex,
-                                              margin_equation_names,
-                                              margin_equation_text)
-        try:
-            eq = margin_equation(led)
-        except ValueError:
-            eq = None
-        self._ml_eq_lines = []
-        if eq is not None:
-            self._ml_eq_lines = margin_equation_text(eq)
-            if hasattr(self._ml_eq, "set_payload"):  # pragma: no cover
-                aliases = getattr(self.controller, "sym_aliases", {})
-                self._ml_eq.set_payload({
-                    "lines": margin_equation_latex(
-                        eq, texer=lambda n: view.symbol_tex(
-                            n, aliases=aliases)),
-                    "values": {}})
-            else:
-                self._ml_eq.setText("\n".join(self._ml_eq_lines))
-            self._ml_eq.setVisible(True)
-            self._ml_hand_size(0, 240)
+        from ...analysis.marginledger import margin_equation_names
+
+        self._ml_led = led            # kept: a port expansion re-renders
+        eq = self._ml_render_equation(led)
 
         # the anchor T0 lives in the equation above with the other
         # definitions; the table keeps the singularities only, in the

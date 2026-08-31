@@ -141,21 +141,26 @@ class LedgerEntry:
     zeta_estimate: dict | None = None   # pairs: zeta = 2 pi f0 C/G named
 
     def describe(self) -> str:
+        # the RHP side rides on EVERY kind that can carry it. A folded
+        # row that drops the marker reads as ordinary dynamics, and a
+        # RHP pole paired with a near RHP zero is exactly the case the
+        # stability literature warns is easy to miss
+        side = "RHP " if self.rhp else ""
         if self.kind == "gain":
             what = "T0"
         elif self.kind == "rest":
-            what = f"{self.count} smaller terms"
+            what = f"{side}{self.count} smaller terms"
         elif self.kind == "band":
-            what = (f"band {self.f0_hz / 1e6:.3g}-"
+            what = (f"{side}band {self.f0_hz / 1e6:.3g}-"
                     f"{self.f0b_hz / 1e6:.3g} MHz ({self.count} terms)")
         elif self.kind == "doublet":
             z = f" zeta={self.zeta:.2f}" if self.zeta is not None else ""
             if self.spacing > 1e-4:
-                what = (f"doublet {self.f0_hz / 1e6:.3g}/"
+                what = (f"{side}doublet {self.f0_hz / 1e6:.3g}/"
                         f"{self.f0b_hz / 1e6:.3g} MHz{z} "
                         f"({self.spacing:.1%} apart)")
             else:
-                what = (f"cancelling doublet "
+                what = (f"{side}cancelling doublet "
                         f"{self.f0_hz / 1e6:.3g} MHz{z}")
         else:
             z = f" zeta={self.zeta:.2f}" if self.zeta is not None else ""
@@ -217,7 +222,11 @@ class MarginLedger:
         mg = (sum(x.mag_db for x in tail if x.mag_db is not None)
               if any(x.mag_db is not None for x in tail) else None)
         return anchor + keep + [LedgerEntry(
-            kind="rest", f0_hz=0.0, zeta=None, rhp=False, pair=False,
+            # an RHP member must not lose its side by being gathered:
+            # the remainder is a PRESENTATION fold, and a row that
+            # silently drops the marker contradicts the advisor
+            kind="rest", f0_hz=0.0, zeta=None,
+            rhp=any(x.rhp for x in tail), pair=False,
             phase_deg=ph, mag_db=mg, count=sum(x.count for x in tail),
             # WHO was folded: without the enumeration the remainder
             # row could not be reconciled against the Expression's
@@ -413,7 +422,8 @@ def compare_ledgers(ledgers, labels, *, ref_index: int = 0,
         lo = _center(g[0]["term"])
         hi = _center(g[-1]["term"])
         term_rows.append({"term": LedgerEntry(
-            kind="band", f0_hz=lo, zeta=None, rhp=False, pair=False,
+            kind="band", f0_hz=lo, zeta=None,
+            rhp=any(x["term"].rhp for x in g), pair=False,
             phase_deg=None, mag_db=None, count=len(g), f0b_hz=hi),
             "cells": [None] * n, "f0s": [None] * n, "delta": None})
     spans = []
@@ -859,7 +869,10 @@ def margin_equation(led: MarginLedger, *, budget_deg: float = 2.0,
         partial = None
         if e.estimate is None and rec is not None \
                 and rec.verdict == "partial" and rec.blocks:
-            partial = {"tex": rec.tex, "text": rec.text,
+            # tex is late-bound and picks up a port expansion by
+            # itself; text is a string, so it is taken through the
+            # accessor that substitutes one
+            partial = {"tex": rec.tex, "text": rec.display_text(),
                        "aggregate": rec.aggregate,
                        # an aggregate form is exact by its own
                        # identity, so the discarded reading's
@@ -1119,8 +1132,15 @@ def margin_equation_text(eq) -> list[str]:
                 short = (f" x{pa['prefactor']:.2f}"
                          if pa["prefactor"] else "")
                 if ag:
+                    # the value belongs to the SYMBOL. Once a port
+                    # expansion has written the algebra out in its
+                    # place there is nothing for it to attach to, and
+                    # trailing it anyway would read as the frequency
+                    # equalling a conductance. The expansion is its
+                    # own statement; the value keeps to the log.
                     short = (f" with {ag['symbol']} = "
-                             f"{ag['value']:.4g} {ag['unit']}")
+                             f"{ag['value']:.4g} {ag['unit']}"
+                             if ag["symbol"] in pa["text"] else "")
                 row += f", reads {pa['text']}{short}"
         ze = t.get("zeta_estimate")
         if ze is not None:

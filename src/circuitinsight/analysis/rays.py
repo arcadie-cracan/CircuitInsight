@@ -15,9 +15,13 @@ Newton rather than re-solved, and L watched along the path. Three
 outcomes, and each says something different to a designer:
 
   localized      L is high and stays high. The root lives at one node.
-                 If no formula named it, that is a gap in the reader,
-                 not a property of the circuit -- so it is reported as
-                 a defect rather than as a verdict about the design.
+                 If it is OWNED there (L >= _OWNED) and no formula
+                 named it, that is a gap in the reader, not a property
+                 of the circuit -- reported as a defect rather than as
+                 a verdict about the design. Merely clearing the bar
+                 is not enough to accuse: at 68% a third of the weight
+                 is elsewhere, a single-location formula would be
+                 materially wrong, and the reader declining is right.
 
   collapsible    L is low here but RISES along some ray. The root is
                  mixed between locations, and that ray is the
@@ -91,6 +95,12 @@ def localization(shares: dict):
     return shares[node] / tot, node
 
 
+# A root is OWNED by a location, rather than merely centred
+# there, only well above the 0.60 localized bar: the reader is
+# blamed for a missing formula at this level and not below it.
+_OWNED = 0.85
+
+
 @dataclasses.dataclass
 class RayPoint:
     scale: float
@@ -112,9 +122,28 @@ class RayVerdict:
 
     def describe(self) -> str:
         if self.kind == "localized":
-            return (f"the root already lives at {self.node_nominal} "
-                    f"({self.l_nominal:.0%}); no formula named it, "
-                    f"which is a gap in the reader")
+            # The accusation is only earned when the root sits almost
+            # entirely at one location. Above the 0.60 bar but well
+            # short of owning the root, a single-location formula
+            # would be materially wrong, so the reader declining is
+            # CORRECT and blaming it sends the reader hunting a bug
+            # that is not there. Field case: a miller loop-gain zero
+            # at 68% whose couplings (+3.50, +1.93, -9.10) do not
+            # quantize at all -- nesting, which the grammar cannot
+            # spell by design.
+            if self.l_nominal >= _OWNED:
+                # CONDITIONAL: the ray is computed without reference to
+                # the reconstruction, so it cannot know whether a
+                # formula was found. It used to assert there was none,
+                # and said so even about roots the reader HAD named.
+                return (f"the root already lives at {self.node_nominal} "
+                        f"({self.l_nominal:.0%}); if no formula named "
+                        f"it, that is a gap in the reader rather than "
+                        f"a property of the circuit")
+            return (f"the root sits mostly at {self.node_nominal} "
+                    f"({self.l_nominal:.0%}), but {1 - self.l_nominal:.0%}"
+                    " of the weight is elsewhere: a single-location "
+                    "formula would not be exact")
         if self.kind == "collapsible":
             way = "up" if self.best_scale > 1 else "down"
             return (f"shared ({self.l_nominal:.0%} at "

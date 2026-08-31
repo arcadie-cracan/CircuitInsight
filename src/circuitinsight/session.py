@@ -2764,13 +2764,55 @@ class SessionController:
                                            an._alias)
         g, _H = loop_pole_jet(fn, Q, ib, ip, stamps, vals,
                               2 * np.pi * complex(x))
+        # the loop must be OPEN at the probe. A driving-point
+        # conductance read with the feedback closed is the conductance
+        # the loop presents, not the one the pole is made of -- on the
+        # folded cascode that reads 522x the value the identity fixes,
+        # so every root would come back as not matching
         out = conductance_for_aggregate(system, e.reconstruction,
-                                        stamps, g, max_keep=max_keep)
+                                        stamps, g, probe=probe,
+                                        max_keep=max_keep)
         if out is None:
             raise ValueError("this root's aggregate has no readable "
                              "capacitor port")
         out["f0_hz"] = e.f0_hz
         out["aggregate"] = e.reconstruction.aggregate
+        # The determinants above prove the VALUE; they do not say it
+        # readably -- num/den come back uncancelled, because cancelling
+        # them explodes, so what they hand over is a rational with
+        # hundred-digit coefficients. The EET peels the same port into
+        # parallel branches and names each one, and it costs
+        # milliseconds where the determinants cost seconds. On the
+        # folded cascode's 20 kHz pole this is the difference between
+        # G_eff = gds_PM12 + <cascode branch> and a wall of integers.
+        #
+        # It gets its OWN symbol list, and a much wider one. `keep`
+        # above is capped to bound the determinants, whose cost
+        # explodes -- 22 s at three symbols, 562 s at five. The EET
+        # costs milliseconds, so spending the determinant's budget on
+        # it is a category error: starved of symbols it cannot NAME a
+        # branch, and reports it unnamed. The folded cascode's cascode
+        # branch is gds_NM10 + gds_PM11 + gds_NM13 over gm_NM14 +
+        # gmbs_NM14, and not one of those survives a three-symbol cap.
+        out["branches"], out["eet_total"] = [], None
+        try:
+            from .analysis.portg import (branch_form, eet_symbols,
+                                         nested_eet)
+            wide = eet_symbols(g, stamps)
+            out["eet_symbols"] = wide
+            r = nested_eet(system, stamps[out["port"]][0][1],
+                           list(wide) or list(out["keep"]),
+                           open_branch=probe)
+            if r:
+                out["eet_total"] = float(r["total"])
+                for gate, info in (r["branches"] or {}).items():
+                    f = branch_form(info, gate, vals)
+                    out["branches"].append(
+                        {"gate": gate,
+                         "conductance": float(info["conductance"]),
+                         "text": f["text"] if f else None})
+        except Exception:                            # noqa: BLE001
+            pass          # the value stands even when nothing names it
         return out
 
     def assess_root(self, probe: str, f0_hz: float):

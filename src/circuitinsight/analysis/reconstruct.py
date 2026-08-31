@@ -81,6 +81,14 @@ class Reconstruction:
     #                                  a single quantity that the
     #                                  identity then fixes exactly:
     #                                  {symbol, unit, value, exponent}
+    expansion: dict | None = None    # what that named quantity turned
+    #                                  out to BE, once the port was
+    #                                  asked: {text, tex}. Filled in on
+    #                                  demand -- the port costs seconds
+    #                                  -- and once filled the equation
+    #                                  prints the algebra in place of
+    #                                  the bare G_eff symbol, which is
+    #                                  where a reader looks for it
 
     def tex(self, texer=None) -> str:
         """The expression in LaTeX. Half exponents render as roots,
@@ -103,8 +111,11 @@ class Reconstruction:
             body(b) for b in blocks if b.exponent < 0]
         if agg:
             # the unread side, named: exact by the identity, so it
-            # wears its own symbol rather than a question mark
+            # wears its own symbol rather than a question mark -- or
+            # the algebra itself, once the port has been asked
             sym = rf"{agg['symbol'][0]}_{{\mathrm{{eff}}}}"
+            if self.expansion and self.expansion.get("tex"):
+                sym = rf"\left[{self.expansion['tex']}\right]"
             (num if agg["exponent"] > 0 else den).insert(0, sym)
         elif self.verdict != "formula":
             num = ["?"] + num
@@ -116,6 +127,17 @@ class Reconstruction:
         # runs on 3.11 in the field
         bot = r"\,".join(den)
         return rf"\frac{{{top}}}{{{bot}}}"
+
+    def display_text(self) -> str:
+        """`text` with the aggregate replaced by what the port said it
+        is. `text` is built at construction, before any port has been
+        asked, so it keeps the bare symbol; `tex` is late-bound and
+        picks the expansion up on its own."""
+        exp = (self.expansion or {}).get("text")
+        if not (self.aggregate and exp):
+            return self.text
+        return self.text.replace(self.aggregate["symbol"],
+                                 f"[{exp}]", 1)
 
     def describe(self) -> str:
         cov = "  ".join(f"{k} {v:+.2f}" for k, v in

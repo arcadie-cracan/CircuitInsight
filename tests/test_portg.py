@@ -212,3 +212,74 @@ def test_a_sum_is_recovered_from_the_null_and_the_pole():
     assert "d1+d2" in f["text"] or "d2+d1" in f["text"]
     # and the sums are recovered as totals, not as products
     assert f["constant"] == pytest.approx(1.0, rel=1e-6)
+
+
+def test_port_expression_opens_the_loop_at_the_probe(monkeypatch, bench):
+    """The session entry point MUST forward its probe.
+
+    A driving-point conductance read with the feedback still closed is
+    the conductance the loop presents, not the one the pole is made
+    of. On the folded cascode the two differ by 522x, which makes
+    every root report as not matching and the aggregate never expand.
+    The algorithm grew `open_branch` for exactly this, and the API
+    that calls it silently did not pass it -- so the contract is
+    pinned here rather than left to the next reader to rediscover."""
+    from circuitinsight.analysis import portg
+    from circuitinsight.session import SessionController
+
+    seen = {}
+    real = portg.conductance_for_aggregate
+
+    def spy(system, rec, stamps, g, **kw):
+        seen.update(kw)
+        return real(system, rec, stamps, g, **kw)
+
+    monkeypatch.setattr(portg, "conductance_for_aggregate", spy)
+    s = SessionController.open(str(FIX / "tb_ota2s_stb.cin.json"),
+                               str(FIX / "psf_stb"))
+    s.set_matches(*s.suggest_matches())
+    probe = s.stb_probe() or s.probes[0]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            s.port_expression(probe, 1e6)
+        except ValueError:
+            pass                # no aggregate here; the call still ran
+    assert seen, "port_expression never reached the port algebra"
+    assert seen.get("probe") == probe, (
+        "the loop was left CLOSED: probe not forwarded")
+
+
+def test_the_eet_is_not_starved_by_the_determinant_cap():
+    """The two routes need SEPARATE symbol lists.
+
+    `keep` is capped to bound the determinants, whose cost explodes --
+    on the folded cascode, 22 s at three symbols against 562 s at
+    five. The EET costs milliseconds. Spending the determinant's
+    budget on it is a category error with a QUIET symptom: starved of
+    symbols, branch_form cannot name a branch and reports it unnamed,
+    which reads like a limit of the method rather than a malformed
+    question. Pinned on a synthetic reading so it asserts on every
+    run, whatever a fixture happens to certify."""
+    from circuitinsight.analysis.portg import eet_symbols
+
+    # a cascode branch's worth of conductances, plus a capacitor that
+    # must NOT be selected and a mover below the floor
+    g = {"gds_NM14": 0.9, "gm_NM14": -0.7, "gmbs_NM14": -0.2,
+         "gds_NM10": 0.05, "gds_PM11": 0.04, "gds_NM13": 0.03,
+         "CL": -1.0, "dust": 1e-9}
+    stamps = {n: [("g", None, None, "M")] for n in g if n != "CL"}
+    stamps["CL"] = [("c", None, None, "C")]
+
+    syms = eet_symbols(g, stamps)
+    # every conductance that carries weight -- the three small ones
+    # that FORM the sum included; that is the whole point
+    for n in ("gds_NM14", "gm_NM14", "gmbs_NM14",
+              "gds_NM10", "gds_PM11", "gds_NM13"):
+        assert n in syms, n
+    assert "CL" not in syms          # reactive: not a port conductance
+    assert "dust" not in syms        # below the floor
+    assert len(syms) > 3, "a determinant-sized cap cannot name a sum"
+    # ordered by weight, and the cap still bounds it
+    assert syms[0] == "gds_NM14"
+    assert len(eet_symbols(g, stamps, cap=2)) == 2

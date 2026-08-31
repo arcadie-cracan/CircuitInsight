@@ -309,3 +309,262 @@ def test_root_tooltip_carries_the_verdict_and_its_residuals(qapp):
             assert ("SHARED" in joined) or ("partly read:" in joined)
     finally:
         w.close()
+
+
+def test_on_demand_readings_reach_the_row(qapp):
+    """The two DEEP readings are the ones the ledger raises but does
+    not settle: what an aggregate G_eff actually is, and why a root
+    reads as SHARED. Both were reachable only from Python until the
+    bench grew a right-click for them, so what matters here is the
+    whole path -- dispatch, attach to the entry, and the answer
+    landing in the tooltip a designer actually reads."""
+    from circuitinsight.gui.app import MainWindow
+
+    w = MainWindow()
+    type(w).settings_path = None
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            w.open_session(FIX / "miller" / "tb_ota2s_stb.cin.json",
+                           FIX / "miller" / "psf_stb", None)
+            w.margins_sync("IPRB0")
+            row = next(r for r, e in enumerate(w._ml_rows)
+                       if e.kind == "pole" and e.f0_hz > 0 and e.roots)
+            got = w.ml_reading_sync(row, "ray")
+        assert got is not None and got["what"] == "ray"
+        e = w._ml_rows[row]
+        v = e.ray_reading
+        assert v.kind in ("localized", "collapsible", "distributed")
+        # the verdict must reach the cell the designer reads, not just
+        # the log -- that was the whole gap
+        tip = w.ml_tbl.item(row, 1).toolTip()
+        assert v.describe() in tip
+    finally:
+        w.close()
+
+
+def test_the_port_action_is_gated_on_a_conductive_aggregate():
+    """A C_eff names a capacitance and the driving-point route reads
+    conductances only, so the menu must say so rather than offer a
+    computation that returns nothing. Gating it here keeps an expected
+    answer from arriving as a job failure."""
+    from circuitinsight.gui.app import MainWindow
+
+    gate = MainWindow._ml_port_gate
+
+    class E:
+        def __init__(self, agg):
+            self.reconstruction = (
+                None if agg is None else type("R", (), {"aggregate": agg}))
+
+    ok, why = gate(E({"symbol": "G_eff", "unit": "S"}))
+    assert ok and not why
+    ok, why = gate(E({"symbol": "C_eff", "unit": "F"}))
+    assert not ok and "conductances only" in why
+    ok, why = gate(E(None))
+    assert not ok and "names no aggregate" in why
+    ok, why = gate(object())              # a row with no reading at all
+    assert not ok and why
+
+
+def test_reading_renderers_speak_both_verdicts():
+    """The port text must not dress a root in algebra that does not
+    apply: when the port conductance disagrees with the value the
+    identity fixed, it has to SAY so."""
+    from circuitinsight.gui.app import MainWindow
+
+    base = {"port": "cl", "keep": ("gds_M1", "gds_M2"), "num": "N",
+            "den": "D", "value": 2e-5, "seconds": 1.2,
+            "aggregate": {"symbol": "G_eff", "value": 2e-5},
+            "branches": [{"gate": "gds_M2", "conductance": 1.2e-5,
+                          "text": "gds_M2"},
+                         {"gate": "gds_M1", "conductance": 8e-6,
+                          "text": None}]}
+    ok = MainWindow._ml_port_text({**base, "matches": True,
+                                   "ratio": 1.0})
+    assert "G_eff at the cl port" in ok
+    assert "IS this node's time constant" in ok
+    # the READABLE decomposition, and an unnamed branch owned up to --
+    # never the raw num/den, which are uncancelled hundred-digit
+    # rationals and unreadable on a row
+    assert "2 parallel branches" in ok
+    assert "gds_M2" in ok and "<not named>" in ok
+    bad = MainWindow._ml_port_text({**base, "matches": False,
+                                    "ratio": 5.2, "value": 1e-4})
+    assert "does NOT match" in bad
+    assert "stands unexpanded" in bad
+    assert "IS this node's time constant" not in bad
+
+
+def test_the_expansion_is_typeset_like_the_rest_of_the_equation():
+    """The port's answer goes INTO the equation, where the bare G_eff
+    is printed, so it has to be typeset the same way: real fractions,
+    and every identifier through the session's own texer rather than
+    pasted in raw beside the aliased names. The numeric residual a
+    branch may carry must survive that pass -- the 'e' of 1.54e-05 is
+    not an identifier."""
+    from circuitinsight.gui.app import MainWindow
+
+    def tx(n):
+        return r"\mathrm{%s}" % n.replace("_", "")
+
+    out = {"matches": True, "branches": [
+        {"text": "gds_NM14*(gds_PM11+gds_NM10)/(gm_NM14+gmbs_NM14)",
+         "conductance": 3.9e-7},
+        {"text": "gds_PM12*gds_PM13/(gm_PM12+gmbs_PM12+1.54e-05)",
+         "conductance": 2.6e-7}]}
+    e = MainWindow._ml_expansion(out, tx)
+    assert e["tex"].count(r"\frac") == 2      # one per branch
+    assert r"\cdot" in e["tex"]
+    assert "1.54e-05" in e["tex"], "the residual was mangled"
+    assert r"\mathrm{gdsNM14}" in e["tex"], "texer not applied"
+    assert "gds_NM14" not in e["tex"], "a raw name leaked through"
+    # the plain-text form stays the readable one
+    assert e["text"].startswith("gds_NM14*(")
+
+    # a branch nobody could name must NOT reach the equation: a sum
+    # with a hole in it is not the expression
+    half = {"matches": True, "branches": [
+        {"text": "gds_PM12", "conductance": 2.6e-7},
+        {"text": None, "conductance": 3.9e-7}]}
+    assert MainWindow._ml_expansion(half, tx) is None
+    # nor does one whose port did not certify
+    nomatch = {"matches": False, "branches": out["branches"]}
+    assert MainWindow._ml_expansion(nomatch, tx) is None
+
+
+def test_the_equation_drops_the_definition_it_no_longer_needs():
+    """`reads G_eff/(2pi CL) with G_eff = 634 nS` loses that trailing
+    clause once a port expansion writes the algebra in the symbol's
+    place. The value belongs to the SYMBOL; with nothing named for it
+    to attach to, trailing it anyway states that a frequency equals a
+    conductance."""
+    from circuitinsight.analysis.reconstruct import Block, Reconstruction
+
+    blk = Block(members=("CL",), exponent=-1.0, exponent_raw=-1.0,
+                exponent_from_rho=None)
+    rec = Reconstruction(
+        verdict="partial", text="G_eff/(2pi*CL)", blocks=(blk,),
+        aggregate={"symbol": "G_eff", "unit": "S", "value": 6.34e-7,
+                   "exponent": 1.0, "blocks": (blk,)})
+    assert rec.display_text() == "G_eff/(2pi*CL)"
+    rec.expansion = {"text": "gds_A+gds_B", "tex": r"g_A+g_B"}
+    assert rec.display_text() == "[gds_A+gds_B]/(2pi*CL)"
+    assert "G_eff" not in rec.display_text()
+    # and the LaTeX picks it up without being asked again
+    assert r"g_A+g_B" in rec.tex()
+    assert r"\mathrm{eff}" not in rec.tex()
+
+
+def test_the_aggregate_value_never_trails_an_expanded_reading(qapp):
+    """A UNITS guard, driven through the real renderer.
+
+    `reads <frequency expr> = <conductance>` is nonsense, and it is
+    exactly what substituting the algebra in and keeping the trailing
+    value produces. The value belongs to the SYMBOL: either that is
+    named and carries it, or the algebra stands alone."""
+    import warnings as _w
+
+    from circuitinsight.analysis.marginledger import (
+        margin_equation, margin_equation_text)
+    from circuitinsight.session import SessionController
+
+    with _w.catch_warnings():
+        _w.simplefilter("ignore")
+        s = SessionController.open(
+            str(FIX / "miller" / "tb_ota2s_stb.cin.json"),
+            str(FIX / "miller" / "psf_stb"))
+        s.set_matches(*s.suggest_matches())
+        probe = s.stb_probe() or s.probes[0]
+        led = s.margin_ledger(probe)["ledger"]
+
+    def reads_lines(l):
+        return [x for x in margin_equation_text(margin_equation(l))
+                if "reads" in x]
+
+    e = next((x for x in led.entries
+              if getattr(x, "reconstruction", None)
+              and x.reconstruction.aggregate), None)
+    if e is None:
+        pytest.skip("this fixture names no aggregate at this pass")
+    agg = e.reconstruction.aggregate
+    before = reads_lines(led)
+    assert any(f"with {agg['symbol']} =" in x for x in before), before
+
+    e.reconstruction.expansion = {"text": "gds_A+gds_B",
+                                  "tex": r"g_A+g_B"}
+    after = reads_lines(led)
+    joined = " | ".join(after)
+    assert "[gds_A+gds_B]" in joined, joined
+    assert agg["symbol"] not in joined
+    # the conductance must not trail what is now a frequency
+    assert f"{agg['value']:.4g}" not in joined, (
+        "a conductance trailed a frequency expression")
+
+
+def test_a_port_reading_rewrites_the_equation_pane(qapp):
+    """The whole point of the on-demand port reading: the answer has
+    to reach the EQUATION, where the bare aggregate symbol is printed.
+    It reached the log first and that was not enough -- the log
+    scrolls away, and the pane went on showing G_eff.
+
+    The subtlety worth pinning is that the bench's rows come from ONE
+    fold of the ledger while margin_equation folds it AGAIN. Setting
+    the expansion on a row's reconstruction only shows up because a
+    plain entry passes through folding by reference. If that ever
+    stops being true, the pane silently stops updating while the log
+    keeps working -- exactly the shape of the bug this guards."""
+    from circuitinsight.gui.app import MainWindow
+
+    w = MainWindow()
+    type(w).settings_path = None
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            w.open_session(FIX / "miller" / "tb_ota2s_stb.cin.json",
+                           FIX / "miller" / "psf_stb", None)
+            hit = []
+            for cplx in (1, 2, 3):
+                w.margins_sync("IPRB0", complexity=cplx)
+                hit = [(r, e) for r, e in enumerate(w._ml_rows)
+                       if getattr(e, "reconstruction", None)
+                       and e.reconstruction.aggregate]
+                if hit:
+                    break
+        if not hit:
+            pytest.skip("no aggregate to expand in this fixture")
+        row, e = hit[0]
+        agg = e.reconstruction.aggregate
+        assert any(agg["symbol"] in ln for ln in w._ml_eq_lines)
+
+        out = {"port": "CL", "keep": ("gA", "gB"), "num": "N",
+               "den": "D", "value": agg["value"], "seconds": 1.0,
+               "matches": True, "ratio": 1.0, "aggregate": agg,
+               "branches": [
+                   {"gate": "gA", "conductance": 1e-6,
+                    "text": "gds_A*(gds_C+gds_D)/(gm_A+gmbs_A)"},
+                   {"gate": "gB", "conductance": 2e-6,
+                    "text": "gds_B*gds_E/(gm_B+gmbs_B)"}]}
+        w._on_ml_reading({"row": row, "what": "port", "out": out})
+
+        joined = " | ".join(w._ml_eq_lines)
+        assert "gds_A*(gds_C+gds_D)" in joined, "the pane did not update"
+        assert agg["symbol"] not in joined, "the bare symbol survived"
+        # and the row's tooltip carries it too
+        assert w.ml_tbl.item(row, 1).toolTip()
+        # the job left the Log forward; a reading that REWROTE the
+        # equation has to hand the bench back, on the row it answered
+        assert w.tabs.currentWidget() is w._ml_tab
+        assert w.ml_tbl.currentRow() == row
+
+        # ...but a reading whose branches could not all be named
+        # changes nothing in the pane, so it stays where its answer is
+        e.reconstruction.expansion = None
+        w.tabs.setCurrentWidget(w.logview)
+        half = dict(out, branches=[
+            {"gate": "gA", "conductance": 1e-6, "text": None},
+            out["branches"][1]])
+        w._on_ml_reading({"row": row, "what": "port", "out": half})
+        assert w.tabs.currentWidget() is w.logview
+    finally:
+        w.close()
