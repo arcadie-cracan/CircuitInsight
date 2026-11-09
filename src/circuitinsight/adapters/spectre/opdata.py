@@ -18,6 +18,9 @@ from pathlib import Path
 from .backends import RawRecord, read_dcopinfo_raw
 
 _INT_SENTINEL = 2147483647
+#: a bulk junction conductance above this (1000 x Spectre's default gmin)
+#: means the junction conducts: it is stamped, and the join warns
+JUNCTION_G_FLOOR = 1e-9
 
 # psf struct name -> model class (a CIN device_type, or None = don't check)
 _STRUCT_CLASSES = {
@@ -101,6 +104,14 @@ def _canonical_mosfet(raw: dict) -> dict[str, float]:
             v = _num(raw, f"c{i}{j}" if i != j else f"c{i}{i}")
             if v is not None:
                 out[f"k{i}{j}"] = v
+    # bulk junction conductances: at a sane bias they read gmin (1 pS) and
+    # are left out, so they add no symbols; past the floor a junction
+    # conducts and the device's g_bd/g_bs are real elements (a forward
+    # drain-bulk diode at a collapsed bias carried 53 mS, case 11)
+    for k in ("gbd", "gbs"):
+        v = _num(raw, k)
+        if v is not None and abs(v) > JUNCTION_G_FLOOR:
+            out[k] = abs(v)
     # DC / reporting metadata (never becomes a primitive: names distinct).
     # isub/iavl are the substrate (impact-ionization) current -- carried so
     # the reconstruction can FLAG devices where II is significant but no

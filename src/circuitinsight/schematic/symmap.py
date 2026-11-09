@@ -21,6 +21,11 @@ class SymbolSpec:
     #: the symbol has no canonical size (a balun, a block): fit it to
     #: the harvested pin pitch like a block, orientation by residual
     scalable: bool = False
+    #: the symbol keeps its size but lies along the harvested pins
+    #: (orientation by residual, like a block): an in-line device the
+    #: PDK draws much smaller than the library, whose wires are then
+    #: trimmed back to the anchors
+    inline: bool = False
 
 
 _MOS_N = SymbolSpec("nmos-4t.svg", {"g": "G", "d": "D", "s": "S", "b": "B"})
@@ -77,6 +82,15 @@ CELL_SYMBOLS = {
     "noConn": SymbolSpec("no-connect.svg", {"@origin": "1"}),
 }
 
+#: CIN devices whose stock Cadence cell deserves its own drawing. The
+#: analogLib iprobe is a 0 V source to the netlist, but Virtuoso draws
+#: it as a small in-line glyph a quarter the size of a source: the
+#: source symbol keeps its size, lies along the wire, and the wire
+#: ends are trimmed back to its anchors (field request: no shrinking).
+DEVICE_CELL_SYMBOLS = {
+    "iprobe": SymbolSpec("vsrc.svg", {"p": "+", "n": "-"}, inline=True),
+}
+
 #: cells that draw anonymously: a ground, supply or no-connect symbol
 #: is pure decoration, its instance name (I3, I14, ...) names nothing
 #: anyone references, so the composer writes no designator for it
@@ -94,6 +108,11 @@ def anchor_for(spec: SymbolSpec, raw_term: str):
     """Library anchor name for a harvested terminal name, or None."""
     canon = RAW_TERMS.get(raw_term, raw_term)
     return spec.terms.get(canon, spec.terms.get(raw_term))
+
+
+def resolve_device_cell(cell: str):
+    """Symbol override for a CIN device by its harvested stock cell."""
+    return DEVICE_CELL_SYMBOLS.get(cell)
 
 
 def resolve_cell(cell: str):

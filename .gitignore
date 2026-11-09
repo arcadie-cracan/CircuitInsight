@@ -34,3 +34,18 @@ nul
 
 # session states (autosaved beside the CIN)
 *.cistate
+
+# ISETC 2026 talk (beamer, xelatex) build artifacts
+paper/slides/*.aux
+paper/slides/*.log
+paper/slides/*.nav
+paper/slides/*.snm
+paper/slides/*.toc
+paper/slides/*.out
+paper/slides/*.xdv
+paper/slides/*.fls
+paper/slides/*.fdb_latexmk
+paper/slides/*.vrb
+
+# paper PDFs kept next to their reproductions are not ours to distribute
+surveys/**/*.pdf

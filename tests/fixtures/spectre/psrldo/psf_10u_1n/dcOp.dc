@@ -1,0 +1,123 @@
+HEADER
+"PSFversion" "1.00"
+"simulator" "spectre"
+"version" "25.1.0.235.isr5"
+"date" "3:20:44 PM, Tue Nov 3, 2026"
+"design" "// tb_psrldo.scs -- SKY130 re-design of LDO1 of Sularea, Raducan, Neag,"
+"analysis type" "dc"
+"analysis name" "dcOp"
+"analysis description" "DC Analysis `dcOp'"
+"xVecSorted" "unsorted"
+"tolerance.relative" 1.000000000000000e-03
+"reltol" 1.000000000000000e-03
+"abstol(V)" 1.000000000000000e-06
+"abstol(I)" 1.000000000000000e-12
+"temp" 2.700000000000000e+01
+"tnom" 2.700000000000000e+01
+"tempeffects" "all"
+"gmindc" 1.000000000000000e-12
+TYPE
+"LogicV" FLOAT DOUBLE PROP(
+"key" "node"
+)
+"V" FLOAT DOUBLE PROP(
+"units" "V"
+"key" "node"
+"tolerance" 1.000000000000000e-06
+)
+"I" FLOAT DOUBLE PROP(
+"units" "A"
+"key" "branch"
+"tolerance" 1.000000000000000e-12
+)
+"MMF" FLOAT DOUBLE PROP(
+"units" "A*turn"
+"key" "node"
+"tolerance" 1.000000000000000e-12
+)
+"Wb" FLOAT DOUBLE PROP(
+"units" "Wb"
+"key" "node"
+"tolerance" 1.000000000000000e-09
+)
+"Temp" FLOAT DOUBLE PROP(
+"units" "C"
+"key" "node"
+"tolerance" 1.000000000000000e-04
+)
+"Pwr" FLOAT DOUBLE PROP(
+"units" "W"
+"key" "node"
+"tolerance" 1.000000000000000e-09
+)
+"U" FLOAT DOUBLE PROP(
+"units" ""
+"key" "node"
+"tolerance" 1.000000000000000e-06
+)
+"V/Sec" FLOAT DOUBLE PROP(
+"units" "V/s"
+"key" "node"
+"tolerance" 9.999999999999999e-05
+)
+"I/Sec" FLOAT DOUBLE PROP(
+"units" "A/s"
+"key" "node"
+"tolerance" 1.000000000000000e-06
+)
+"1/Sec" FLOAT DOUBLE PROP(
+"units" "1/s"
+"key" "node"
+"tolerance" 9.999999999999999e-05
+)
+"HOD" FLOAT DOUBLE PROP(
+"units" ""
+"key" "node"
+"tolerance" 1.000000000000000e-02
+)
+"Q" FLOAT DOUBLE PROP(
+"units" "Coul"
+"key" "node"
+"tolerance" 1.000000000000000e-15
+)
+"Efield" FLOAT DOUBLE PROP(
+"units" "V/m"
+"key" "node"
+"tolerance" 1.000000000000000e-06
+"sigtype" "optical"
+)
+VALUE
+"vin" "V" 1.800000000000000e+00
+"ref" "V" 9.000000000000000e-01
+"vbp" "V" 1.320000000000000e+00
+"vcp" "V" 1.150000000000000e+00
+"vcn" "V" 7.200000000000000e-01
+"s18" "V" 1.584274142126910e+00
+"tail" "V" 1.320364932750020e+00
+"a" "V" 5.503128851500181e-01
+"b" "V" 5.500269052489986e-01
+"fb" "V" 9.001880469519086e-01
+"tailp" "V" 1.379510642412647e+00
+"hp" "V" 9.000000000000000e-01
+"s5" "V" 2.331813760747670e-01
+"c" "V" 5.501698951995083e-01
+"s6" "V" 2.331767744759696e-01
+"s9" "V" 2.177781169187346e-01
+"bp" "V" 1.306226722101735e+00
+"s11" "V" 1.593020626025501e+00
+"s14" "V" 1.601734577416326e+00
+"vb" "V" 1.439510592486538e+00
+"va1" "V" 2.193584515807962e-01
+"p1" "V" 1.439510592486538e+00
+"s19" "V" 8.838893182218515e-01
+"va2" "V" 1.599980900913129e+00
+"gate" "V" 1.418023022520909e+00
+"out" "V" 1.500313411586514e+00
+"fb_x" "V" 1.500313411586514e+00
+"IPRB0:in" "I" 2.000417882115353e-06
+"VBP:p" "I" 0.000000000000000e+00
+"VCN:p" "I" 0.000000000000000e+00
+"VCP:p" "I" 0.000000000000000e+00
+"VIN:p" "I" -2.941719244979871e-05
+"VREF:p" "I" 0.000000000000000e+00
+END

@@ -292,15 +292,32 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self._pm_act = tb.addWidget(self.strat_pm_spin)
         self._gm_act = tb.addWidget(self.strat_gm_spin)
         self._rej_act = tb.addWidget(self.strat_rej_spin)
+        # the ORDER CAP: the one field of the tolerance contract that
+        # every strategy carries (BandCriterion.cap, 6 by default) and
+        # that the toolbar never showed, so every reduction ran at an
+        # invisible 6 -- the dead-knob bug the criterion module warns
+        # about, inverted. Strategy-independent, so it sits beside the
+        # strategy rather than among its budgets. The pursuit stops at
+        # the cap and the strip reports the miss; 2 is the textbook
+        # two-pole form of a two-stage amplifier.
+        self.cap_spin = self._spin(6, 1, 12, 1, " reactances")
+        self.cap_spin.setDecimals(0)
+        self.cap_spin.setPrefix("≤ ")
+        self.cap_spin.setToolTip(
+            "The order cap. The pursuit stops at this many reactances "
+            "and reports how far the band tolerance was missed. 6 keeps "
+            "a model readable; 2 is the textbook two-pole form of a "
+            "two-stage amplifier.")
+        self._cap_act = tb.addWidget(self.cap_spin)
         for s in (self.strat_pm_spin, self.strat_gm_spin,
-                  self.strat_rej_spin):
+                  self.strat_rej_spin, self.cap_spin):
             s.valueChanged.connect(lambda _v: self._on_strategy_changed())
         # budget spins only exist for the budgeted forms
         self._budget_lbl_act.setVisible(False)
         self._mag_act.setVisible(False)
         self._phase_act.setVisible(False)
         for a in (self._strategy_act, self._pm_act, self._gm_act,
-                  self._rej_act):
+                  self._rej_act, self._cap_act):
             a.setVisible(False)
         self.toolbar = tb
 
@@ -3274,9 +3291,13 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         try:
             if lowest:
                 fmin, fmax = self.band_slider.values()
+                # under the SAME contract the solve will run: the
+                # letters suggested are the letters it keeps, cap included
                 keep = self.controller.suggest_story_keep(
                     inp, out, fmin=fmin, fmax=fmax,
-                    tol_db=self.mag_spin.value())
+                    tol_db=self.mag_spin.value(),
+                    strategy=self._strategy(),
+                    strategy_opts=self._strategy_opts())
             else:
                 keep = list(self.controller.suggest_keep(
                     inp, out, self.budget_spin.value()).keep)
@@ -3442,6 +3463,10 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         self._pm_act.setVisible(contract and strat == "stability")
         self._gm_act.setVisible(contract and strat == "stability")
         self._rej_act.setVisible(contract and strat == "rejection")
+        # the cap governs the PURSUIT, which only the lowest-order solve
+        # runs: the Reduce bench's scans price under the strategy and
+        # band but never pursue, so there the cap would be a dead knob
+        self._cap_act.setVisible(lowest)
         self.band_row.setVisible(contract)
         self._on_band_changed(*self.band_slider.values())
 
@@ -3452,14 +3477,19 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             self.strategy_combo.currentText(), "plain")
 
     def _strategy_opts(self) -> dict:
+        """The contract's budgets AND its order cap: make_criterion
+        reads every one of them from this dict, so the cap travels the
+        same path as the budgets to the pursuit, the story keep, the
+        certificate and the cache key."""
         s = self._strategy()
+        cap = {"cap": int(self.cap_spin.value())}
         if s == "stability":
             return {"pm_deg": self.strat_pm_spin.value(),
-                    "gm_db": self.strat_gm_spin.value()}
+                    "gm_db": self.strat_gm_spin.value(), **cap}
         if s == "rejection":
-            return {"rej_db": self.strat_rej_spin.value()}
+            return {"rej_db": self.strat_rej_spin.value(), **cap}
         return {"gain_db": self.mag_spin.value(),
-                "phase_deg": self.phase_spin.value()}
+                "phase_deg": self.phase_spin.value(), **cap}
 
     def _strategy_eps_eq(self) -> float:
         """The strategy budget as a comparable relative tolerance, for
@@ -3491,6 +3521,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
         inp, out = self._io()
         fmin, fmax = self.band_slider.values()
         eps_eq = self._strategy_eps_eq()
+        cap = int(self.cap_spin.value())      # read now, printed later
         c = self.controller
         seq = getattr(self, "_cert_seq", 0) + 1
         self._cert_seq = seq
@@ -3499,7 +3530,7 @@ class MainWindow(JobRunnerMixin, PersistenceMixin, ReportMixin,
             if seq != self._cert_seq or self.controller is not c:
                 return                      # superseded by a newer drag
             try:
-                self.cert_lbl.setText(cert.describe(eps_eq))
+                self.cert_lbl.setText(cert.describe(eps_eq, cap=cap))
                 self.cert_lbl.setVisible(True)
             except Exception:
                 self.cert_lbl.setText("")

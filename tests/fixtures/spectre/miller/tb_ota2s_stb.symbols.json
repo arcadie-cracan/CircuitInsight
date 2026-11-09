@@ -1,0 +1,48 @@
+{
+ "symbols_version": "0.1",
+ "cells": {
+  "ota2s": {
+   "symbol": "gm.svg",
+   "pins": {
+    "inp": "in+",
+    "inn": "in-",
+    "out": "out"
+   },
+   "stubs": {
+    "vbn": "auto"
+   },
+   "confirmed": true,
+   "evidence": {
+    "vdd": [
+     "inside: mixed: MP2.b, MP2.s, MP1.b, MP1.s, MP0.b, MP0.s",
+     "parent: on vdd!"
+    ],
+    "vss": [
+     "inside: mixed: MN3.b, MN3.s, MN2.b, MN2.s, MN1.b, MN0.b",
+     "parent: on gnd!"
+    ],
+    "vbn": [
+     "inside: reaches only MOS gates (MN3, MN2)",
+     "parent: driven by IB (isource)",
+     "CONFLICT: inside says input, parent says bias",
+     "bias: the diode MN2 sits in the testbench, so the tool reads it as an input; confirmed by hand as a stub"
+    ],
+    "inp": [
+     "inside: reaches only MOS gates (MN1)",
+     "parent: driven by I5",
+     "name says +"
+    ],
+    "inn": [
+     "inside: reaches only MOS gates (MN0)",
+     "parent: driven by IPRB0",
+     "name says -"
+    ],
+    "out": [
+     "inside: reaches only MOS drains/sources (MN3, MP2)",
+     "parent: driven by IPRB0",
+     "CONFLICT: inside says output, parent says input"
+    ]
+   }
+  }
+ }
+}

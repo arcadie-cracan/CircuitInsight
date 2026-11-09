@@ -2204,9 +2204,13 @@ def test_schematic_pane_reports_its_missing_pieces(qapp, tmp_path):
     win = MainWindow()
     assert win.main_tabs.indexOf(win._schematic_tab) >= 0
     assert win.tabs.indexOf(win._schematic_tab) < 0   # not a strip tab
+    # the shipped ota5t fixture carries its hints since 2026-10-30; a
+    # bare copy of the CIN in tmp_path has none beside it
+    bare = tmp_path / "tb_ota5t.cin.json"
+    bare.write_bytes((FIX / "tb_ota5t.cin.json").read_bytes())
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        win.open_session(str(FIX / "tb_ota5t.cin.json"), str(FIX / "psf"))
+        win.open_session(str(bare), str(FIX / "psf"))
     assert "no layout hints" in win._sch_status.text()
     win.close()
 
@@ -3436,3 +3440,79 @@ def test_an_advisory_phase_does_not_quote_the_solve_estimate(qapp):
         assert "est ~12s" in w.logview.toPlainText()
     finally:
         w.close()
+
+
+def test_order_cap_spin_reaches_the_textbook_two_pole_form(qapp, tmp_path):
+    """The order cap is a field of the tolerance contract that every
+    strategy carries; until it had a spin, every GUI reduction ran at an
+    invisible 6. The spin shows on the lowest-order form only (the
+    Reduce bench's scans price under the strategy and band but never
+    pursue), travels in the strategy opts, and at 2 the Miller fixture
+    prints the paper's second-order form -- symbolic Cc and CL in a
+    degree-2 denominator -- with the strip saying the tolerance was
+    missed at the cap and naming the cap as a remedy. The leading
+    numeral snaps to 1 although the budget is already missed: the snap
+    is judged against the achieved score."""
+    from circuitinsight.gui import view
+    from circuitinsight.gui.app import MainWindow
+
+    MainWindow.settings_path = str(tmp_path / "gui.ini")
+    try:
+        win = MainWindow()
+    finally:
+        MainWindow.settings_path = None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        win.open_session(str(MILLER / "tb_ota2s.cin.json"),
+                         str(MILLER / "psf"))
+        win.in_combo.setCurrentText("VIND")
+        win.out_combo.setCurrentText("vout")
+    try:
+        win.mode_combo.setCurrentText("Transfer")
+        win.form_combo.setCurrentText("Exact")
+        assert not win._cap_act.isVisible()
+        win.form_combo.setCurrentText("Simplified · full order")
+        assert not win._cap_act.isVisible()
+        win.form_combo.setCurrentText("Simplified · lowest order")
+        assert win._cap_act.isVisible()
+        for strat in ("Stability (margins)", "Rejection (dB)", "Gain & phase"):
+            win.strategy_combo.setCurrentText(strat)
+            assert win._cap_act.isVisible()
+            assert win._strategy_opts()["cap"] == 6     # the old default
+        win.mode_combo.setCurrentText("Reduce circuit")
+        assert win._strategy_act.isVisible() and not win._cap_act.isVisible()
+        win.mode_combo.setCurrentText("Transfer")
+        win.form_combo.setCurrentText("Simplified · lowest order")
+
+        win.cap_spin.setValue(2)
+        assert win._strategy_opts()["cap"] == 2
+        win.band_slider.setValues(1e3, 1e8)
+        win.mag_spin.setValue(1.0)
+        win.phase_spin.setValue(5.0)
+        from PySide6.QtCore import Qt
+        keep = {"gm_I0_MN1", "gm_I0_MP2", "gds_I0_MN1", "gds_I0_MP1",
+                "gds_I0_MP2", "gds_I0_MN3", "I0_Cc", "CL"}
+        for r in range(win.keep_tbl.rowCount()):
+            it = win.keep_tbl.item(r, 0)
+            if it is not None and it.flags() & Qt.ItemIsUserCheckable:
+                it.setCheckState(Qt.Checked if it.text() in keep
+                                 else Qt.Unchecked)
+        assert set(win.checked_keep()) == keep
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            r = win.reduce_sync()
+        assert r.reduced_order
+        assert "reduced to 2 reactance(s)" in r.warnings[0]
+        assert "NOT MET at the order cap" in r.warnings[0]
+        assert "raise the cap" in r.warnings[0]
+        labels = {lbl.strip(): tex for lbl, tex in view._expr_lines(r)}
+        d = labels["D(s) ="]
+        assert "s^{2}" in d and "s^{3}" not in d
+        assert r"\mathrm{Cc}" in d and r"\mathrm{CL}" in d
+        assert "g_{ds," in d and "g_{m," in labels["N(s) ="]
+        # the snap: no 10^18 leading numeral on a form that is otherwise
+        # the textbook's
+        assert "10^{" not in d and "10^{" not in labels["N(s) ="]
+        assert any("order cap (2)" in x for x in r.details)
+    finally:
+        win.close()

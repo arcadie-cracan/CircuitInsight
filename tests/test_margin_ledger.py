@@ -774,3 +774,58 @@ def test_the_remainder_carries_an_rhp_member(monkeypatch):
     assert rest, "the tiny term must gather"
     assert rest[0].rhp is True, "the remainder dropped an RHP member"
     assert "RHP" in rest[0].describe()
+
+
+def test_rebias_exponent_follows_the_region_and_the_kind():
+    """Uniform "every parameter up 1%" is not a knob and manufactures
+    cancellations. The re-bias exponent is d ln(param)/d ln(bias):
+    gm as sqrt(I_D) in strong inversion, as I_D in subthreshold
+    (Spectre region 3); gds as I_D either way; capacitances barely
+    track bias; an explicit component is its own knob."""
+    from circuitinsight.analysis.marginledger import rebias_exponent as w
+
+    assert w("gm_I0_MP1", 2) == 0.5
+    assert w("gm_I0_MP1", 3) == 1.0            # subthreshold
+    assert w("gmbs_I0_MP1", 2) == 0.5
+    assert w("gds_I0_MP1", 2) == 1.0
+    assert w("gds_I0_MP1", 3) == 1.0
+    assert w("cgs_I0_MP1", 2) == 0.0
+    assert w("cgd_I0_MP1", 3) == 0.0
+    assert w("CL", None, explicit=True) == 1.0
+    assert w("I0_Rz", None, explicit=True) == 1.0
+    # and a gm/gds ratio: zero under uniform weights, NOT under re-bias
+    s_gm, s_gds = +1.0, -1.0
+    assert s_gm + s_gds == 0.0
+    assert w("gm_X", 2) * s_gm + w("gds_X", 2) * s_gds == -0.5
+
+
+def test_a_shared_symbol_splits_over_its_hot_members():
+    """root_sens carries the split of a matched symbol's sensitivity
+    over the members that actually act on the root, so the list and
+    the map count it ONCE between them rather than in full under one
+    device and in full on every lit one."""
+    import warnings
+
+    from pathlib import Path
+
+    from circuitinsight.session import SessionController
+
+    FIX = Path(__file__).resolve().parent / "fixtures" / "spectre"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        s = SessionController.open(
+            str(FIX / "miller" / "tb_ota2s_stb.cin.json"),
+            str(FIX / "miller" / "psf_stb"))
+        s.set_matches(*s.suggest_matches())
+        probe = s.stb_probe() or s.probes[0]
+        led = s.margin_ledger(probe)["ledger"]
+    seen = 0
+    for e in led.entries:
+        for r in getattr(e, "root_sens", ()) or ():
+            sh = r.get("shares")
+            assert sh is not None, r["symbol"]
+            assert set(sh) == set(r["insts"])
+            assert abs(sum(sh.values()) - 1.0) < 1e-9, r["symbol"]
+            assert all(v >= 0 for v in sh.values())
+            seen += 1
+    assert seen, "no sensitivities to check"

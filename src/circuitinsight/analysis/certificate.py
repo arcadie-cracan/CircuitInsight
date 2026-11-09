@@ -43,12 +43,20 @@ class OrderCertificate:
         """Minimal order the band demands at tolerance eps."""
         return int(np.sum(self.sv > eps))
 
-    def describe(self, eps: float) -> str:
+    def describe(self, eps: float, cap: int | None = None) -> str:
+        """`cap` is the order cap the pursuit will stop at; when the
+        band demands more, the label says so BEFORE the solve, so a
+        capped model is read as the designer's approximation and not
+        as a surprise in the strip."""
         from ..units import eng
 
         k = self.order_at(eps)
         bits = [f"{self.shape} band {eng(self.fmin, 'Hz')}–"
                 f"{eng(self.fmax, 'Hz')} needs order {k} at {eps:.0%}"]
+        if cap is not None and k > cap:
+            bits.append(f"capped at {cap}: the {cap}-reactance model is "
+                        f"an approximation, and the solve will report "
+                        f"its miss")
         if self.doublets:
             worst = min(self.doublets, key=lambda d: d[2])
             bits.append(f"note: pole/zero doublet near "

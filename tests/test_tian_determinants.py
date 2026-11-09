@@ -73,3 +73,31 @@ def test_dt_divides_both_eq30_parts_exactly():
     for part in (num, den):
         _q, r = sp.div(sp.Poly(part, S), Dt)
         assert r.is_zero
+
+
+def test_numeric_s_sweep_matches_the_qq_s_determinants():
+    """The sweep tian_determinants runs is exact, not approximate: each
+    of the five is bit-identical to the direct QQ[s] determinant it
+    replaced (srepr equality, not merely the same polynomial)."""
+    from circuitinsight.analysis.loopgain import _probe_nodes
+    from circuitinsight.engine.mna import _det, hybrid_split
+
+    _an, system = _system()
+    d = tian_determinants(system, PROBE)
+    ib = system.branch_index[PROBE]
+    p, q = _probe_nodes(system, PROBE)
+    subs, _ = hybrid_split(system, [])
+    A = system.A.xreplace(subs)
+    z_i = sp.zeros(A.rows, 1)
+    z_i[p, 0] = 1
+
+    def swapped(col, z):
+        Ak = A.copy()
+        Ak[:, col] = z
+        return Ak
+
+    ref = {"Dt": A, "Nb_v": swapped(ib, system.z),
+           "Np_v": swapped(p, system.z), "Nb_p": swapped(ib, z_i),
+           "Nq_p": swapped(q, z_i)}
+    for k, M in ref.items():
+        assert sp.srepr(d[k]) == sp.srepr(_det(M)), k

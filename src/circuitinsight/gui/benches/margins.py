@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget)
 
+from ...analysis.marginledger import rebias_exponent
 from .. import view
 
 
@@ -93,6 +94,9 @@ class MarginsBenchMixin:
             # gradient, the contributor list and the plot cursor are
             # the selection's three synchronized views
             self._ml_eq.bridge.frootClicked.connect(self._ml_term_clicked)
+            # a G_eff/C_eff is the one thing in that line carrying an
+            # action, and it is where the reader is already looking
+            self._ml_eq.bridge.aggClicked.connect(self._ml_agg_clicked)
 
         self.ml_tbl = QTableWidget(0, 7)
         self.ml_tbl.setHorizontalHeaderLabels(
@@ -192,15 +196,38 @@ class MarginsBenchMixin:
         szs[idx] = give
         self._ml_vsplit.setSizes(szs)
 
-    def _ml_term_clicked(self, nm: str):
-        """A theta link in the equation: select the root's row in the
-        roots table, which fires the standard cross-light."""
+    def _ml_row_of(self, nm: str) -> int:
+        """The table row wearing the equation's term name, or -1."""
         tbl = self.ml_tbl
         for r in range(tbl.rowCount()):
             it = tbl.item(r, 0)
             if it is not None and it.text().split("  ·")[0] == nm:
-                tbl.selectRow(r)
-                return
+                return r
+        return -1
+
+    def _ml_term_clicked(self, nm: str):
+        """A theta link in the equation: select the root's row in the
+        roots table, which fires the standard cross-light."""
+        r = self._ml_row_of(nm)
+        if r >= 0:
+            self.ml_tbl.selectRow(r)
+
+    def _ml_agg_clicked(self, nm: str):
+        """A RIGHT-click on the equation's G_eff/C_eff: the SAME menu
+        the row offers, opened where the symbol is printed.
+
+        A reader looking at the equation is looking at the symbol, not
+        at the table. What they get is a menu, not an immediate launch:
+        the reading costs seconds, and firing on button-down leaves no
+        chance to see what was about to happen, or to pick the ray test
+        instead (field report)."""
+        from PySide6.QtGui import QCursor
+
+        r = self._ml_row_of(nm)
+        if r < 0:
+            return
+        self.ml_tbl.selectRow(r)          # say WHICH root is being read
+        self._ml_root_menu(r, QCursor.pos(), parent=self._ml_eq)
 
     @staticmethod
     def _ml_formula_tip(e) -> str:
@@ -416,13 +443,19 @@ class MarginsBenchMixin:
     # of blocking the bench, and the answer is attached to the entry
     # so the formula tooltip carries it from then on.
 
-    def _ml_menu(self, pos):
-        row = self.ml_tbl.rowAt(pos.y())
+    def _ml_root_menu(self, row, where, parent=None):
+        """The on-demand menu for ONE root, at a global point.
+
+        Shared by the table row and by a right-click on the equation's
+        G_eff: the same two readings, worded and gated once. A menu
+        rather than a direct launch -- each costs seconds, and an
+        action that fires the instant a button goes down gives no
+        chance to see what it was going to do."""
         rows = getattr(self, "_ml_rows", ())
         if row < 0 or row >= len(rows) or self.controller is None:
             return
         e = rows[row]
-        menu = QMenu(self.ml_tbl)
+        menu = QMenu(parent or self.ml_tbl)
         rec = getattr(e, "reconstruction", None)
         agg = rec.aggregate if rec is not None else None
         ok, why = self._ml_port_gate(e)
@@ -436,11 +469,15 @@ class MarginsBenchMixin:
         a_ray.setEnabled(bool(getattr(e, "roots", ())))
         if not getattr(e, "roots", ()):
             a_ray.setToolTip("this term has no root to follow")
-        act = menu.exec(self.ml_tbl.viewport().mapToGlobal(pos))
+        act = menu.exec(where)
         if act is a_port and a_port.isEnabled():
             self.ml_port_expand(row)
         elif act is a_ray and a_ray.isEnabled():
             self.ml_assess(row)
+
+    def _ml_menu(self, pos):
+        row = self.ml_tbl.rowAt(pos.y())
+        self._ml_root_menu(row, self.ml_tbl.viewport().mapToGlobal(pos))
 
     @staticmethod
     def _ml_port_gate(e):
@@ -566,11 +603,29 @@ class MarginsBenchMixin:
         import re
 
         def tok(part):
+            # an engineering value with its unit -- "15.6 uS", thin
+            # space, from units.eng -- is STASHED before the identifier
+            # pass, which would otherwise read "uS" as a symbol name and
+            # hand it to the texer. Typeset as 15.6\,\mu\mathrm{S}.
+            kept = []
+
+            def stash(m):
+                num, pre, unit = m.groups()
+                pre = {"u": r"\mu"}.get(pre, pre)
+                pre = rf"\mathrm{{{pre}}}" if pre and pre != r"\mu" \
+                    else pre
+                kept.append(rf"{num}\,{pre}\mathrm{{{unit}}}")
+                return f"\x00{len(kept) - 1}\x00"
+
+            part = re.sub(r"(\d+(?:\.\d+)?) ([afpnumkMGT]?)"
+                          r"(Hz|S|F|V|A|W|Ohm)\b", stash, part)
             # not preceded by a word char or a dot, so the 'e' of
             # 1.54e-05 is left alone
-            return re.sub(r"(?<![\w.])[A-Za-z_][A-Za-z_0-9]*",
-                          lambda m: texer(m.group(0)),
-                          part).replace("*", r"\cdot ")
+            part = re.sub(r"(?<![\w.])[A-Za-z_][A-Za-z_0-9]*",
+                          lambda m: texer(m.group(0)), part)
+            part = re.sub(r"\x00(\d+)\x00",
+                          lambda m: kept[int(m.group(1))], part)
+            return part.replace("*", r"\cdot ")
 
         if "/" in s:
             top, bot = s.split("/", 1)
@@ -708,25 +763,40 @@ class MarginsBenchMixin:
         # cascode PM11 dark on an exact tie). Only the HOT members of
         # a matched symbol carry their symbol's weight -- lighting the
         # whole match group was misleading.
+        # The map shows CONTRIBUTION -- the same gross the contributor
+        # list ranks by: per instance, the sum of |df0| over the
+        # symbols acting through it, each split by its share. One
+        # number, so the brightest device on the page is the top row
+        # of the list. It used to take the max |S| per symbol and fold
+        # capacitor tau-shares in, which ranked the page by a third
+        # quantity neither view displayed.
+        weights = self._ml_contrib_weights(e, self._ms_map)
+        self._ml_light(weights, net=e.node or None)
+
+    @staticmethod
+    def _ml_contrib_weights(e, ms_map, *, floor: float = 0.03) -> dict:
+        """{instance: 0..1} for the schematic gradient -- each device's
+        CONTRIBUTION, the sum of |df0| over the symbols acting through
+        it split by their shares, normalised to the strongest.
+
+        Pure, so it is testable without a schematic: the miller
+        fixture carries no hints, and a guard that only checked the
+        map once it was lit was checking nothing there."""
         weights: dict[str, float] = {}
-        ms = list(e.root_sens)
-        m0 = (ms[0]["mag"] if ms else 1.0) or 1.0
-        for m in ms:
-            w = m["mag"] / m0
-            for i in (m.get("insts")
-                      or self._ms_map.get(m["symbol"], ())):
-                weights[i] = max(weights.get(i, 0.0), w)
-        ts = list(e.taus)
-        t0 = max((abs(t["share"]) for t in ts), default=1.0) or 1.0
-        for t in ts:
-            w = abs(t["share"]) / t0
-            for i in (t.get("insts")
-                      or self._ms_map.get(t["symbol"], ())):
-                weights[i] = max(weights.get(i, 0.0), w)
+        for m in e.root_sens:
+            insts = m.get("insts") or ms_map.get(m["symbol"], ())
+            if not insts:
+                continue
+            shares = m.get("shares") or {i: 1.0 / len(insts)
+                                         for i in insts}
+            for i in insts:
+                weights[i] = weights.get(i, 0.0) + abs(
+                    m["df0"]) * float(shares.get(i, 0.0))
+        w0 = max(weights.values(), default=1.0) or 1.0
+        weights = {i: w / w0 for i, w in weights.items()}
         # a floor keeps the deep tail from speckling the page with
         # imperceptible boxes; everything above it fades honestly
-        weights = {i: w for i, w in weights.items() if w >= 0.03}
-        self._ml_light(weights, net=e.node or None)
+        return {i: w for i, w in weights.items() if w >= floor}
 
     def _ms_cross_light(self):
         if getattr(self, "_ms_filling", False):
@@ -825,10 +895,13 @@ class MarginsBenchMixin:
                         f"{view.eng(led.f_180_hz, 'Hz')}")
         res = [f"{r:.1e}" for r in (led.phase_residual_deg,
                                     led.mag_residual_db) if r is not None]
+        stab = getattr(led, "stability", None)
         self._ml_head.setText(
             "  /  ".join(head)
             + (f"   (certificate residuals {', '.join(res)})" if res
-               else "  no crossing in band"))
+               else "  no crossing in band")
+            + (f"\n{stab['verdict'].upper()}: {stab['reason']}"
+               if stab else ""))
 
         from ...analysis.marginledger import margin_equation_names
 
@@ -974,11 +1047,32 @@ class MarginsBenchMixin:
             tree.setHeaderLabels(
                 [f"contributors to {label or self._ml_term(e)} "
                  f"({view.eng(e.f0_hz, 'Hz')})", "class", "value",
-                 "df0 %/%", "dζ per %"])
-            tree.headerItem().setToolTip(
+                 "df0 %/%", "dζ per %", "re-bias %/%"])
+            hdr = tree.headerItem()
+            hdr.setToolTip(
                 0, "Click the selected singularity again (or "
                    "Ctrl+click it) to return to the margin-knob "
                    "view (dPM/dGM per element).")
+            # Two questions, two columns, and the list is RANKED by the
+            # first. df0 on a device row is its CONTRIBUTION -- the sum
+            # of |df0| over its parameters, how much of the root runs
+            # through it. re-bias is its LEVERAGE -- the same
+            # sensitivities weighted by d ln(param)/d ln(bias), i.e.
+            # what re-biasing the device 1% actually does. They differ
+            # exactly when the device's parameters oppose each other:
+            # a cascode whose gds sits in the numerator and gm in the
+            # denominator is central to the formula (high
+            # contribution) yet nearly inert to re-bias. Both are
+            # true; neither hides the other.
+            hdr.setToolTip(
+                3, "device rows: sum of |df0| over the device's "
+                   "parameters -- how much of the root runs through "
+                   "it. The list is ranked by this.")
+            hdr.setToolTip(
+                5, "device rows: the same sensitivities weighted by "
+                   "d ln(param)/d ln(bias) -- what re-biasing this "
+                   "device by 1% does to the root. Near zero with a "
+                   "large contribution means its parameters cancel.")
             taus = {t["symbol"]: t for t in e.taus}
             groups: dict[str, list] = {}
             singles = []
@@ -986,24 +1080,47 @@ class MarginsBenchMixin:
                 insts = r.get("insts") or ()
                 knob = self._ms_knob.get(r["symbol"], "device")
                 if knob == "component" or not insts:
-                    singles.append(r)
+                    singles.append((r, 1.0))
                 else:
-                    groups.setdefault(insts[0], []).append(r)
+                    # a shared symbol goes under EVERY hot member, by
+                    # its share -- the map lights them the same way
+                    shares = r.get("shares") or {
+                        i: 1.0 / len(insts) for i in insts}
+                    for inst in insts:
+                        groups.setdefault(inst, []).append(
+                            (r, float(shares.get(inst, 0.0))))
 
-            def _row(r, under=None):
+            def _w(r, under):
+                knob = self._ms_knob.get(r["symbol"], "device")
+                region = None
+                if under and self.controller is not None:
+                    try:
+                        region = self.controller.device_op(
+                            under).get("region")
+                    except Exception:                # noqa: BLE001
+                        region = None
+                return rebias_exponent(r["symbol"], region,
+                                       explicit=(knob == "component"))
+
+            def _row(r, share, under=None):
                 knob = self._ms_knob.get(r["symbol"], "device")
                 val = self._ms_val.get(r["symbol"])
                 label = self._ms_local_name(r["symbol"], under)
+                d = r["df0"] * share
                 it = QTreeWidgetItem(
                     [label,
                      "component" if knob == "component" else "re-bias",
                      view.eng(val, view.op_unit(r["symbol"]), sig=4)
                      if val is not None else "",
-                     f"{r['df0']:+.3f}", f"{r['dzeta']:+.4f}"])
+                     f"{d:+.3f}", f"{r['dzeta'] * share:+.4f}",
+                     f"{_w(r, under) * d:+.3f}"])
                 tips = []
                 if label != r["symbol"]:
                     tips.append(f"in formulas: the matched group's "
                                 f"shared symbol {r['symbol']}")
+                if share < 0.999:
+                    tips.append(f"{share:.0%} of that symbol's "
+                                "sensitivity acts through this device")
                 tt = taus.get(r["symbol"])
                 if tt is not None:
                     tips.append(f"tau share {tt['share']:+.0%}, "
@@ -1013,19 +1130,23 @@ class MarginsBenchMixin:
                 return it
 
             tops = []
-            for r in singles:
-                tops.append((abs(r["df0"]), _row(r)))
+            for r, share in singles:
+                tops.append((abs(r["df0"]), _row(r, share)))
             for inst, rows in groups.items():
-                rows.sort(key=lambda r: -abs(r["df0"]))
-                tot = sum(r["df0"] for r in rows)
+                rows.sort(key=lambda rs: -abs(rs[0]["df0"] * rs[1]))
+                gross = sum(abs(r["df0"] * s) for r, s in rows)
+                lever = sum(_w(r, inst) * r["df0"] * s for r, s in rows)
                 head = QTreeWidgetItem(
-                    [inst, "device", "", f"{tot:+.3f}",
-                     f"{sum(r['dzeta'] for r in rows):+.4f}"])
-                head.setToolTip(
-                    3, "every parameter of this device up 1% together")
-                for r in rows:
-                    head.addChild(_row(r, under=inst))
-                tops.append((abs(rows[0]["df0"]), head))
+                    [inst, "device", "", f"{gross:.3f}",
+                     f"{sum(r['dzeta'] * s for r, s in rows):+.4f}",
+                     f"{lever:+.3f}"])
+                head.setToolTip(3, "contribution: sum of |df0| over "
+                                   "this device's parameters")
+                head.setToolTip(5, "leverage: re-biasing this device "
+                                   "1% moves the root by this")
+                for r, s in rows:
+                    head.addChild(_row(r, s, under=inst))
+                tops.append((gross, head))
             tops.sort(key=lambda t: -t[0])
             for k, (_, it) in enumerate(tops[:14]):
                 tree.addTopLevelItem(it)

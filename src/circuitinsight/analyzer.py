@@ -43,6 +43,11 @@ class Analyzer:
                                          mos_model=mos_model,
                                          lump_info=self.lumped_gmb)
         self._alias: dict[str, str] = {}
+        #: the last estimate_solve_time(), keyed by the solve it priced:
+        #: the tf() that follows learns from it (analysis.estimate.
+        #: learn_from_solve), so plain scripts refine the machine's
+        #: calibration exactly as the GUI does
+        self._priced: tuple | None = None
 
     # -------------------------------------------------- constructors
     @classmethod
@@ -73,6 +78,7 @@ class Analyzer:
         target = self._alias.get(instances[0], instances[0])
         for inst in instances[1:]:
             self._alias[inst] = target
+        self._priced = None                # a different system now
 
     # -------------------------------------------------- analyses
     def _guard_lumped_input(self, inp: str | None) -> None:
@@ -164,9 +170,28 @@ class Analyzer:
         method: 'auto' (multilinear interpolation for hybrid solves),
         'interp', or 'direct'.
         """
+        priced = getattr(self, "_priced", None)
+        key = (inp, out, norm_keep(keep))
         keep = norm_keep_list(keep)
-        return solve_tf(self.system(inp), out, keep, method=method,
-                        progress=progress)
+        if (priced is None or priced[0] != key
+                or method not in ("auto", "interp")):
+            return solve_tf(self.system(inp), out, keep, method=method,
+                            progress=progress)
+        import time
+
+        from .analysis.estimate import learn_from_solve
+        from .engine import interp
+
+        self._priced = None
+        interp.LAST_SOLVE = None           # learn only from THIS solve
+        t0 = time.perf_counter()
+        tf = solve_tf(self.system(inp), out, keep, method=method,
+                      progress=progress)
+        try:
+            learn_from_solve(priced[1], time.perf_counter() - t0)
+        except Exception:                  # noqa: BLE001
+            pass                           # learning never fails a solve
+        return tf
 
     def loop_gain(self, probe: str, keep=(), progress=None,
                   note=None) -> TransferFunction:
@@ -579,10 +604,19 @@ class Analyzer:
         mode whose cost is unbounded, so it is the one worth estimating. It used
         to be silently costed as `[]` (the cheapest case), which meant the
         estimator reported milliseconds for a solve that would run for hours.
+
+        Priced with this machine's cached calibration (loaded on first use).
+        A tf() of the same (inp, out, keep) that follows feeds its measured
+        wall-clock back into that calibration. `.seconds` is the solve
+        itself; `.startup_s` the one-time worker-pool startup the first
+        parallel solve of a process pays on top. Scripts on Windows need an
+        ``if __name__ == "__main__":`` guard (the solver spawns workers).
         """
         from .analysis.estimate import estimate_solve
 
-        return estimate_solve(self, inp, out, norm_keep(keep))
+        est = estimate_solve(self, inp, out, norm_keep(keep))
+        self._priced = ((inp, out, norm_keep(keep)), est)
+        return est
 
     def plan_keep(self, inp: str, out: str, budget_s: float,
                   metric: str = "complex", fmin: float | None = None,
@@ -595,10 +629,15 @@ class Analyzer:
 
         return plan_keep(self, inp, out, budget_s, metric, fmin, fmax, max_keep)
 
-    def bandwidth_report(self):
-        """Per-capacitor/inductor bandwidth attribution via zero-value time
-        constants (exact, from the network denominator; no output node or
-        symbolic solve needed). See analysis/bandwidth.py."""
+    def bandwidth_report(self, inp: str | None = None, out: str | None = None):
+        """Per-capacitor/inductor bandwidth attribution via time and transfer
+        constants (Hajimiri, TCAS-I 2010), exact and with no symbolic solve.
+
+        With no arguments: zero-value time constants tau_i^0, the second-order
+        constants tau_j^i, b2, Q and f_n, which need only the network
+        denominator. With an input and output (as for tf()): also H^0, the
+        transfer constants H^i and the modified ZVT estimate of eqs. (41)-(42).
+        See analysis/bandwidth.py."""
         from .analysis.bandwidth import bandwidth_contributions
 
-        return bandwidth_contributions(self)
+        return bandwidth_contributions(self, inp, out)

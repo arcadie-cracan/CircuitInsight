@@ -1,0 +1,95 @@
+// tb_psrldo.scs -- SKY130 re-design of LDO1 of Sularea, Raducan, Neag,
+// "High Power Supply Rejection Capacitor-less Low Dropout Regulators",
+// ROMJIST 25(2) 2022, 179-204, Fig. 5, to the paper's specifications:
+// Vout = 1.5 V from Vin = 1.8 V, IL 1 uA..50 mA, CL 10 pF..1 nF, Iq <= 25 uA,
+// PSR better than -40 dB at 1 MHz, PM > 10 deg and GM > 5 dB everywhere.
+//
+// Same topology as the paper's Fig. 5, device for device: PMOS input pair
+// M1/M2 on a cascoded tail M17/M18; cascodes M5/M6 over M7/M8 whose gates
+// meet at c through the LCMFB resistors R4 (from node A) and R3 (from B);
+// second-stage transconductors M10 (gate A) and M16 (gate B) mirrored
+// through R4/R3; the M10 branch goes up through the cascode M9 into the
+// cascoded PMOS diode M11/M12, mirrored by M13/M14 into the OTA output VB,
+// which M15/M16 pull down; R1-C1 from VB to the supply; the voltage buffer
+// is the NMOS follower M19 (sunk by M23, whose gate is node B as drawn)
+// and the PMOS follower M20 fed by the cascoded source M21/M22; C2 from
+// OUT to VA1 (source of M15), C3 from OUT to VA2 (source of M21); the PSR
+// enhancer is the PMOS pair M3 (gate REF, drain A) / M4 (gate HP, drain B)
+// on IPTAT, with Rin from REF to HP and Cin from the supply to HP. Pass
+// device pfet_01v8 at L = 0.15 um (the regular Vth keeps the light-load
+// leakage below 1 uA where the buffer's range ends); the mirrors use the
+// lvt PMOS (the stacked PMOS branches do not fit the 0.95 V regular Vth
+// under 1.8 V). Bias voltages are ideal sources. The Tian probe IPRB0 sits
+// between OUT and the top of the divider.
+//
+//   spectre tb_psrldo.scs -format psfascii -raw ./psf +log run.log
+simulator lang=spectre
+global 0
+include "<pdk-models>" section=tt
+
+parameters vin=1.8 il=1m cl=100p vref=0.9 vbp=0.48 vcp=0.65 vcn=0.72 \
+    r34=80k r1=20k c1=2p c2=30p c3=3p rf1=300k rf2=450k \
+    rin=60k cin=1p iptat=0.5u wpass=5u mpass=800
+
+VIN (vin 0) vsource dc=vin mag=1
+VREF (ref 0) vsource dc=vref
+VBP (vin vbp) vsource dc=vbp
+VCP (vin vcp) vsource dc=vcp
+VCN (vcn 0) vsource dc=vcn
+
+// ---- input pair on the cascoded tail
+M17 (s18 vbp vin vin) pfet_01v8_lvt w=10u l=1u m=2
+M18 (tail vcp s18 vin) pfet_01v8_lvt w=10u l=0.5u m=2
+M1 (a ref tail vin) pfet_01v8_lvt w=10u l=0.5u m=2
+M2 (b fb tail vin) pfet_01v8_lvt w=10u l=0.5u m=2
+// ---- PSR enhancer: high-pass Rin-Cin and the pair M3/M4 into A and B
+IPTAT (vin tailp) isource dc=iptat
+Rin (ref hp) resistor r=rin
+Cin (vin hp) capacitor c=cin
+M3 (a ref tailp vin) pfet_01v8_lvt w=10u l=1u
+M4 (b hp tailp vin) pfet_01v8_lvt w=10u l=1u
+// ---- first stage loads: cascodes M5/M6 over M7/M8, LCMFB through R4/R3
+M5 (a vcn s5 0) nfet_01v8_lvt w=10u l=0.5u
+M7 (s5 c 0 0) nfet_01v8 w=10u l=1u
+R4 (a c) resistor r=r34
+M6 (b vcn s6 0) nfet_01v8_lvt w=10u l=0.5u
+M8 (s6 c 0 0) nfet_01v8 w=10u l=1u
+R3 (b c) resistor r=r34
+// ---- second stage: M10 (gate A) up through M9 into the diode M11/M12,
+//      mirrored by M13/M14 into VB; M16 (gate B) through M15 pulls VB down
+M10 (s9 a 0 0) nfet_01v8 w=10u l=1u m=2
+M9 (bp vcn s9 0) nfet_01v8_lvt w=10u l=0.5u
+M11 (bp vcp s11 vin) pfet_01v8_lvt w=10u l=0.5u m=2
+M12 (s11 bp vin vin) pfet_01v8_lvt w=10u l=1u m=2
+M13 (s14 bp vin vin) pfet_01v8_lvt w=10u l=1u m=2
+M14 (vb vcp s14 vin) pfet_01v8_lvt w=10u l=0.5u m=2
+M16 (va1 b 0 0) nfet_01v8 w=10u l=1u m=2
+M15 (vb vcn va1 0) nfet_01v8_lvt w=10u l=0.5u
+// ---- R1-C1 from VB to the supply
+C1 (vin p1) capacitor c=c1
+R1 (p1 vb) resistor r=r1
+// ---- voltage buffer: NMOS follower M19 sunk by M23 (gate B, as drawn),
+//      PMOS follower M20 fed by the cascoded source M21/M22
+M19 (vin vb s19 0) nfet_01v8_lvt w=10u l=0.5u m=3
+M23 (s19 b 0 0) nfet_01v8 w=10u l=1u m=2
+M22 (va2 bp vin vin) pfet_01v8_lvt w=10u l=1u m=5
+M21 (gate vcp va2 vin) pfet_01v8_lvt w=10u l=0.5u m=5
+M20 (0 s19 gate vin) pfet_01v8_lvt w=10u l=0.5u
+// ---- pass device, the local loops C2/C3, load, divider, main-loop probe
+MP (out gate vin vin) pfet_01v8 w=wpass l=0.15u m=mpass
+C2 (out va1) capacitor c=c2
+C3 (out va2) capacitor c=c3
+CL (out 0) capacitor c=cl
+IL (out 0) isource dc=il
+IPRB0 (out fb_x) iprobe
+Rf1 (fb_x fb) resistor r=rf1
+Rf2 (fb 0) resistor r=rf2
+
+simulatorOptions options psfversion="1.4.0" temp=27 tnom=27 scalem=1.0 \
+    scale=1.0 gmin=1e-12 rforce=1 maxnotes=5 maxwarns=5 digits=8 cols=80 \
+    pivrel=1e-3
+dcOp dc write="spectre.dc" maxiters=150 maxsteps=10000 annotate=status
+dcOpInfo info what=oppoint where=rawfile
+stb stb start=1 stop=10G dec=20 probe=IPRB0 annotate=status
+ac ac start=1 stop=1G dec=20 annotate=status
+saveOptions options save=allpub

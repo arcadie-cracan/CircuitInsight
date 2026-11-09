@@ -20,6 +20,32 @@ from ..units import eng
 S = sp.Symbol("s")
 
 
+def _absorb_scalar(f: sp.Expr) -> sp.Expr:
+    """Fold a numeric content that sp.factor pulled out of a polynomial
+    back into one of its sum factors.
+
+    factor() writes c*(A)(B) with the polynomial's content c in front.
+    Dividing two such forms, sympy moves 1/c_d into the numerator, so a
+    denominator content of 2.5e-21 prints as a 4e20 on EVERY term of
+    both N(s) and D(s) -- observed on the two-reactance Miller form,
+    whose 78 uS back-gate term gives the denominator a content the
+    other coefficients do not share. A scalar on both sides of the
+    fraction bar is not a gain and not a coefficient anyone wrote; it
+    belongs inside the sum it was extracted from. +-1 is left alone."""
+    c, rest = f.as_coeff_Mul()
+    if c == 1 or c == -1 or not c.is_Number:
+        return f
+    if rest.is_Add:
+        return sp.expand(c * rest)
+    if rest.is_Mul:
+        args = list(rest.args)
+        for i, a in enumerate(args):
+            if a.is_Add:
+                args[i] = sp.expand(c * a)
+                return sp.Mul(*args)
+    return f
+
+
 def _tidy(expr: sp.Expr, digits: int = 4) -> sp.Expr:
     """Replace unwieldy exact-Rational coefficients (hybrid-mode artifacts)
     with short Floats. Small numbers (exponents, 1/2 from baluns, unit
@@ -306,9 +332,22 @@ def snap_unity(tf, criterion, freqs, h_full):
     try:
         h_snap = snapped.numeric(f)
         score = float(criterion.score(f, np.asarray(h_full), h_snap))
+        score0 = float(criterion.score(f, np.asarray(h_full),
+                                       tf.numeric(f)))
     except Exception:
         return tf, 1.0, None
-    if not np.isfinite(score) or score > 1.0:
+    # Within the budget the snap is covered outright. Under an ORDER
+    # CAP the budget may already be missed before the snap -- the
+    # two-reactance Miller form sits 7 dB off its full response -- and
+    # judging the snap against 1 then refuses it always, leaving a
+    # 10^18 numeral on both polynomials of a form that is otherwise the
+    # textbook's. The reference is the score the form already carries:
+    # a snap that does not worsen it beyond a few percent of itself is
+    # the same measured approximation it was.
+    if not np.isfinite(score):
+        return tf, 1.0, None
+    if score > 1.0 and not (np.isfinite(score0) and score0 > 1.0
+                            and score <= score0 * 1.05):
         return tf, 1.0, None
     err = abs(20.0 * np.log10(k))
     snapped.achieved_mag_err_db = max(float(tf.achieved_mag_err_db), err)
@@ -486,7 +525,8 @@ def simplify_tf(
     if cmax not in (0, 1):
         n, d = sp.expand(n / cmax), sp.expand(d / cmax)
     if not huge and sp.count_ops(n) + sp.count_ops(d) <= _COSMETIC_OPS_LIMIT:
-        expr = _tidy(sp.factor(n) / sp.factor(d))
+        expr = _tidy(_absorb_scalar(sp.factor(n))
+                     / _absorb_scalar(sp.factor(d)))
     else:
         expr = _tidy(n / d)
 

@@ -50,7 +50,7 @@ from ..keep import is_all
 # the cancel-ops guard lives in engine.interp: one number for
 # every "skip the final cancel() when the expression is huge"
 # site
-from ..engine.interp import _CANCEL_OPS_LIMIT
+from ..engine.interp import _CANCEL_OPS_LIMIT, numeric_s_dets
 
 
 def _probe_nodes(system: MnaSystem, probe: str) -> tuple[int, int]:
@@ -140,7 +140,8 @@ def numeric_loop_response(primitives, ground, probe, freqs,
     return out
 
 
-def tian_determinants(system: MnaSystem, probe: str) -> dict:
+def tian_determinants(system: MnaSystem, probe: str,
+                      progress=None) -> dict:
     """The five Cramer determinants the numeric Eq. 30 combines, as
     exact polynomials in s at the system's numeric values:
 
@@ -167,7 +168,10 @@ def tian_determinants(system: MnaSystem, probe: str) -> dict:
     follows analytically -- no finite differences, no step size.
     Multiplicity caveat: a symbol carrying k stamps (matched twins
     share one symbol) is degree k, not affine, and needs k+1 points
-    per dimension."""
+    per dimension.
+
+    progress: optional callable(done, total) over the sweep's
+    determinants, as for solve_tf."""
     if probe not in system.branch_index:
         raise MnaError(
             f"probe {probe!r} is not a voltage-defined branch; map the "
@@ -184,14 +188,21 @@ def tian_determinants(system: MnaSystem, probe: str) -> dict:
     A_num = system.A.xreplace(subs)
     z_v = system.z
 
-    def cramer(col: int, z: sp.Matrix) -> sp.Expr:
+    def cramer(col: int, z: sp.Matrix) -> sp.Matrix:
         Ak = A_num.copy()
         Ak[:, col] = z
-        return _det(Ak)
+        return Ak
 
-    return {"Dt": _det(A_num),
-            "Nb_v": cramer(ib, z_v), "Np_v": cramer(p, z_v),
-            "Nb_p": cramer(ib, z_i), "Nq_p": cramer(q, z_i)}
+    # the numeric-s sweep, not five QQ[s] determinants: the same exact
+    # polynomials (bit-identical, checked on the fastldo and Miller
+    # fixtures), about 3x faster overall on a 31x31 LDO (130 numeric-s
+    # dets at 0.1 s against 5 symbolic ones at 8 s) -- and the sweep
+    # reports progress and can cancel
+    keys = ("Nb_v", "Np_v", "Nb_p", "Nq_p")
+    Dt, nums = numeric_s_dets(
+        A_num, [cramer(ib, z_v), cramer(p, z_v),
+                cramer(ib, z_i), cramer(q, z_i)], progress)
+    return {"Dt": Dt, **dict(zip(keys, nums))}
 
 
 def tian_combine(d: dict):
@@ -215,8 +226,9 @@ def loop_gain(system: MnaSystem, probe: str, keep=(),
 
     `system` must be built with ``input_name=probe`` so the series-voltage
     injection RHS is in place. keep follows the tf() convention: [] (the
-    default; None is its alias) fully numeric (fast direct-determinant
-    path), [names] hybrid, ALL fully symbolic -- the injections route
+    default; None is its alias) fully numeric (the five Cramer
+    determinants of tian_determinants, by solve_tf's numeric-s sweep),
+    [names] hybrid, ALL fully symbolic -- the injections route
     through the same hybrid machinery as tf(), so kept symbols stay
     symbolic in T."""
     if probe not in system.branch_index:
@@ -240,7 +252,8 @@ def loop_gain(system: MnaSystem, probe: str, keep=(),
         # reads. Eq. 30 yields the classical return ratio (positive real
         # at DC under negative feedback); Spectre's loopGain displays
         # -T, and we follow the stb convention throughout
-        num, den = tian_combine(tian_determinants(system, probe))
+        num, den = tian_combine(tian_determinants(system, probe,
+                                                  progress=progress))
         expr = -num / den
     else:
         # hybrid / fully symbolic: four rational solves on the shared matrix

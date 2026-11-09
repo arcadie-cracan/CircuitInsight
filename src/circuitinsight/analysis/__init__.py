@@ -2,7 +2,8 @@
 
 from .acground import (AcGroundReport, BiasCandidate,  # noqa: F401
                         scan_ac_grounds)
-from .bandwidth import BandwidthReport, bandwidth_contributions  # noqa: F401
+from .bandwidth import (BandwidthPair, BandwidthReport,  # noqa: F401
+                        bandwidth_contributions)
 from .sensitivity import SensitivityReport, sensitivities  # noqa: F401
 from .chunks import (PassiveChunk, chunk_admittance,  # noqa: F401
                      passive_chunks)

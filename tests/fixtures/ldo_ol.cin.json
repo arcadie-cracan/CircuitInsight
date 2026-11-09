@@ -1,0 +1,259 @@
+{
+ "cin_version": "0.1",
+ "design": {
+  "name": "ldo_ol",
+  "source": {
+   "kind": "hand"
+  },
+  "note": "Macromodel of Milliken, Silva-Martinez and Sanchez-Sinencio, IEEE TCAS-I 54(9) 2007, Fig. 8, with the Tables II/III values at Iout = 0: CGS = 100 pF, CGD = 26 pF, Cout = 100 pF, Rf1 = 156 k, Rf2 = 124 k, Cf2 = 1 pF, Cf = 20 pF, Rf = 200 k. GP = 286 uS and Rds = 30 k are this benchmark's reading at the 10 uA divider current; GE Re = 20, G1 R1 = 20, Gf1 = 286 uS (the weak-inversion limit at 10 uA), Gf2 R2 = 31.6 (30 dB, Table III), the parasitics Ce, C1, C2 are this benchmark's choice within the paper's stated gains. Loop opened at Vfb: V1 drives GE, vfb is the return."
+ },
+ "top": "main",
+ "ground": [
+  "0"
+ ],
+ "definitions": {
+  "main": {
+   "ports": [],
+   "instances": [
+    {
+     "name": "V1",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "vfbp",
+      "n": "0"
+     }
+    },
+    {
+     "name": "GE",
+     "device_type": "vccs",
+     "terminals": {
+      "p": "ve",
+      "n": "0",
+      "cp": "vfbp",
+      "cn": "0"
+     },
+     "params": {
+      "gm": "50u"
+     }
+    },
+    {
+     "name": "Re",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "ve",
+      "n": "0"
+     },
+     "params": {
+      "r": "400k"
+     }
+    },
+    {
+     "name": "Ce",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "ve",
+      "n": "0"
+     },
+     "params": {
+      "c": "100f"
+     }
+    },
+    {
+     "name": "G1",
+     "device_type": "vccs",
+     "terminals": {
+      "p": "vg",
+      "n": "0",
+      "cp": "ve",
+      "cn": "0"
+     },
+     "params": {
+      "gm": "150u"
+     }
+    },
+    {
+     "name": "R1",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "vg",
+      "n": "0"
+     },
+     "params": {
+      "r": "133k"
+     }
+    },
+    {
+     "name": "C1",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "vg",
+      "n": "0"
+     },
+     "params": {
+      "c": "100f"
+     }
+    },
+    {
+     "name": "Cgs",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "vg",
+      "n": "0"
+     },
+     "params": {
+      "c": "100p"
+     }
+    },
+    {
+     "name": "Cgd",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "vg",
+      "n": "out"
+     },
+     "params": {
+      "c": "26p"
+     }
+    },
+    {
+     "name": "GP",
+     "device_type": "vccs",
+     "terminals": {
+      "p": "0",
+      "n": "out",
+      "cp": "0",
+      "cn": "vg"
+     },
+     "params": {
+      "gm": "286u"
+     }
+    },
+    {
+     "name": "Rds",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "out",
+      "n": "0"
+     },
+     "params": {
+      "r": "30k"
+     }
+    },
+    {
+     "name": "Cout",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "out",
+      "n": "0"
+     },
+     "params": {
+      "c": "100p"
+     }
+    },
+    {
+     "name": "Rf1",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "out",
+      "n": "vfb"
+     },
+     "params": {
+      "r": "156k"
+     }
+    },
+    {
+     "name": "Rf2",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "vfb",
+      "n": "0"
+     },
+     "params": {
+      "r": "124k"
+     }
+    },
+    {
+     "name": "Cf2",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "vfb",
+      "n": "0"
+     },
+     "params": {
+      "c": "1p"
+     }
+    },
+    {
+     "name": "Cf",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "out",
+      "n": "vx"
+     },
+     "params": {
+      "c": "20p"
+     }
+    },
+    {
+     "name": "Rf",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "vx",
+      "n": "vf"
+     },
+     "params": {
+      "r": "200k"
+     }
+    },
+    {
+     "name": "Gf1",
+     "device_type": "vccs",
+     "terminals": {
+      "p": "vf",
+      "n": "0",
+      "cp": "vx",
+      "cn": "0"
+     },
+     "params": {
+      "gm": "286u"
+     }
+    },
+    {
+     "name": "R2",
+     "device_type": "resistor",
+     "terminals": {
+      "p": "vf",
+      "n": "0"
+     },
+     "params": {
+      "r": "316k"
+     }
+    },
+    {
+     "name": "C2",
+     "device_type": "capacitor",
+     "terminals": {
+      "p": "vf",
+      "n": "0"
+     },
+     "params": {
+      "c": "50f"
+     }
+    },
+    {
+     "name": "Gf2",
+     "device_type": "vccs",
+     "terminals": {
+      "p": "vg",
+      "n": "0",
+      "cp": "vf",
+      "cn": "0"
+     },
+     "params": {
+      "gm": "100u"
+     }
+    }
+   ]
+  }
+ }
+}

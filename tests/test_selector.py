@@ -99,13 +99,19 @@ def test_estimate_mirrors_the_selector():
     an = Analyzer.from_cin(est._ladder_cin(20))
     small = est.estimate_solve(an, "Vin", "n20", ["R1", "R2"])
     assert small.backend == "qq"
+    # both sides at the SAME t_det and a pinned calibration: a measured
+    # probe against a constant one made this depend on load and on
+    # whichever calibration an earlier test left behind
+    est.set_calibration(est._DEFAULT_CAL)
+    s_deg, t_det, spread = est._probe(an.system("Vin"))
     big = est.estimate_solve(an, "Vin", "n20",
-                             [f"R{i}" for i in range(1, 21)])
+                             [f"R{i}" for i in range(1, 21)],
+                             _probe_cache=(s_deg, t_det, 22, spread))
     assert big.backend == "bot"
     assert big.seconds > 0
     # the bot model must undercut the dense-QQ projection for huge grids
-    raw, n_dets, par = est._raw_work(big.grid_size, big.s_degree, 1e-4)
-    assert big.seconds < est._CAL.predict(raw, big.coeff_spread, par)
+    raw, n_dets, par = est._raw_work(big.grid_size, big.s_degree, t_det)
+    assert big.seconds < est.get_calibration().predict(raw, spread, par)
 
 
 def test_estimate_backend_respects_forced_qq(monkeypatch):

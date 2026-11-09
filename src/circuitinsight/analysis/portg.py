@@ -103,6 +103,82 @@ def port_conductance(system, u, keep, *, open_branch=None):
     return num, den, val
 
 
+def branch_instances(system, u, stamps, *, open_branch=None) -> dict:
+    """{symbol: the instance of it that acts on THIS port}.
+
+    A matched group shares one symbol, named after one member. Printing
+    that name against a port the member is not in points a reader at
+    the wrong transistor: on the folded cascode the output branch runs
+    through PM14 and PM15, while the shared symbols are spelled PM12
+    and PM13 — right values, wrong devices, and a designer tracing the
+    path finds nothing there.
+
+    Which instance acts here is decidable. Each stamp is rank-one, so
+    the port quantity u^T G^-1 u moves with (u^T M a)(b^T M u): one
+    inverse, then an inner product per stamp. The LOOP MUST BE OPEN
+    first — with feedback closed every element influences every other
+    and matched twins in symmetric positions are indistinguishable
+    (measured: 9.9e3 against 8.6e3, and the wrong one wins). Opened,
+    the same pair separates by three orders of magnitude.
+    """
+    import numpy as _np
+
+    from ..engine.mna import S, hybrid_split
+    from .loopgain import _probe_nodes
+
+    subs, _ = hybrid_split(system, [])
+    A = _np.array(sp.matrix2numpy(
+        system.A.xreplace(subs).xreplace({S: 0}).evalf(40)), dtype=complex)
+    uv = _np.asarray(u, dtype=complex).ravel()
+    keep_i = list(range(A.shape[0]))
+    if open_branch is not None:
+        k = system.branch_index.get(open_branch)
+        if k is None:
+            raise KeyError(f"no branch {open_branch!r} to open")
+        p, q = _probe_nodes(system, open_branch)
+        support = {i for i in range(len(uv)) if uv[i] != 0}
+        far = [n for n in (p, q) if n not in support]
+        drop = {k} | set(far[:1] or [p])
+        keep_i = [i for i in keep_i if i not in drop]
+        A = A[_np.ix_(keep_i, keep_i)]
+        uv = uv[keep_i]
+    try:
+        M = _np.linalg.inv(A)
+    except _np.linalg.LinAlgError:                   # pragma: no cover
+        return {}
+    Mu, uM = M @ uv, uv @ M
+    out = {}
+    for name, sts in stamps.items():
+        best = None
+        for _kind, a, b, inst in sts:
+            if a is None or b is None:
+                continue
+            av = _np.asarray(a, dtype=complex).ravel()[keep_i]
+            bv = _np.asarray(b, dtype=complex).ravel()[keep_i]
+            w = abs(complex(uM @ av) * complex(bv @ Mu))
+            if best is None or w > best[0]:
+                best = (w, inst)
+        if best is not None and best[0] > 0:
+            out[name] = best[1]
+    return out
+
+
+def respell(name: str, inst: str | None) -> str:
+    """`gds_I0_PM12` acting through I0.PM14 is spelled gds_I0_PM14.
+
+    The same move the sensitivity views make (_ms_local_name): the
+    shared symbol keeps its identity everywhere it is a JOIN KEY, and
+    wears the hot device's name where it is being read as physics.
+    """
+    if not inst or "_" not in name:
+        return name
+    dev = inst.replace(".", "_")
+    head, _, tail = name.partition("_")
+    if tail == dev:
+        return name
+    return f"{head}_{dev}"
+
+
 def eet_symbols(g, stamps, *, floor: float = 1e-3, cap: int = 16):
     """The symbol list for the EET -- deliberately NOT the one the
     determinants get.
@@ -292,7 +368,7 @@ def nested_eet(system, u, symbols, *, open_branch=None, tol=0.05):
 
 
 def branch_form(info, gate, values, *, tol=1e-3, sum_tol=0.12,
-                residual_tol=0.05):
+                residual_tol=0.05, insts=None):
     """The printed form of one branch, read from its EET signature.
 
     Within a branch each element declares its role by what removing or
@@ -313,6 +389,20 @@ def branch_form(info, gate, values, *, tol=1e-3, sum_tol=0.12,
     The dimension is then checked strictly: a conductance branch must
     net one conductance, counting each sum as the single factor it is.
     """
+    def _residual(rest):
+        # the unnamed remainder of a sum is a CONDUCTANCE -- this is a
+        # DC branch -- and it is read by a designer, so it wears
+        # engineering notation and its unit: "+15.6 uS", not "+1.56e-05"
+        from ..units import eng
+        return ("+" if rest > 0 else "-") + eng(abs(rest), "S")
+
+    def _spell(m):
+        # a matched group's shared symbol wears the name of the device
+        # it acts through HERE; without this the folded cascode's
+        # output branch reads PM12/PM13 for transistors that are
+        # PM14/PM15, which sends a reader to the wrong devices
+        return respell(m, (insts or {}).get(m))
+
     y = info["conductance"]
 
     def _group(items, key):
@@ -362,16 +452,16 @@ def branch_form(info, gate, values, *, tol=1e-3, sum_tol=0.12,
     for g in num_g:
         named = sum(abs(values[m]) for m in g["members"])
         rest = g["total"] - named
-        body = "+".join(g["members"])
+        body = "+".join(_spell(m) for m in g["members"])
         if abs(rest) > residual_tol * abs(g["total"]):
-            body += f"+{rest:.3g}"
+            body += _residual(rest)
         tops.append(f"({body})" if "+" in body else body)
     for grp in groups:
         named = sum(abs(values[m]) for m in grp["members"])
         rest = grp["total"] - named
-        body = "+".join(grp["members"])
+        body = "+".join(_spell(m) for m in grp["members"])
         if abs(rest) > residual_tol * abs(grp["total"]):
-            body += f"+{rest:.3g}"
+            body += _residual(rest)
         parts.append(f"({body})" if len(grp["members"]) > 1 or
                      "+" in body else body)
         prod /= grp["total"] or 1.0

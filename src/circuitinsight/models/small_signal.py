@@ -39,6 +39,14 @@ _MOSFET_II = [
     ("gii_m", "vccs", ("d", "b", "b", "s")),  # i(d->b) = gii_m * v(b,s)
 ]
 
+# Bulk junction conductances, drain-bulk and source-bulk. The OP adapter
+# carries them only when a junction conducts (above gmin by far), so an
+# ordinary bias emits nothing here.
+_MOSFET_JUNCTION = [
+    ("gbd", "g", ("d", "b")),
+    ("gbs", "g", ("s", "b")),
+]
+
 _BJT = [
     ("gm", "vccs", ("c", "e", "b", "e")),
     ("gpi", "g", ("b", "e")),
@@ -200,7 +208,8 @@ def _expand_mosfet_matrix(dev: FlatDevice, op: dict | None) -> list[Primitive]:
     with the conductances of the lumped model."""
     t = dev.terminals
     prims = []
-    for param, kind, terms in _MOSFET[:3] + _MOSFET_II:   # gm, gmbs, gds, gii_*
+    for param, kind, terms in (_MOSFET[:3] + _MOSFET_II   # gm, gmbs, gds, gii_*
+                               + _MOSFET_JUNCTION):       # gbd, gbs
         v = _val(dev, param, op)
         if v not in (None, 0.0):
             nodes = tuple(dev.terminals[x] for x in terms)
@@ -232,7 +241,8 @@ def expand_device(dev: FlatDevice, op: dict | None = None,
     if dt == "mosfet":
         if cap_model == "matrix":
             return _expand_mosfet_matrix(dev, op)
-        return _expand_table(dev, _MOSFET + _MOSFET_II, op)
+        return _expand_table(dev, _MOSFET + _MOSFET_II + _MOSFET_JUNCTION,
+                             op)
     if dt == "bjt":
         return _expand_bjt(dev, op, bjt_model == "extrinsic", ground)
     if dt == "diode":

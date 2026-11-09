@@ -964,3 +964,110 @@ def test_impedance_forwards_progress_to_the_solver(monkeypatch):
         warnings.simplefilter("ignore")
         c.impedance_result({"node": "vout"}, keep=[], progress=cb)
     assert got["progress"] is cb
+
+
+def test_snap_unity_is_judged_against_the_achieved_score():
+    """Under an ORDER CAP the budget can be missed before the snap; the
+    snap is then judged against the score the form already carries, not
+    against 1, so a leading numeral still divides out when the snap does
+    not worsen the miss. A snap that would worsen it is still refused."""
+    import sympy as sp
+
+    from circuitinsight.analysis.criteria import PlainCriterion
+    from circuitinsight.analysis.simplify import (SimplifiedTF,
+                                                  leading_coefficient,
+                                                  snap_unity)
+
+    a, c, s = sp.symbols("a c s", positive=True)
+    freqs = np.logspace(1, 6, 40)
+    exact = SimplifiedTF(expr=a / (1 + s * c / a),
+                         values={"a": 1e-3, "c": 1e-9},
+                         symbols={"a": a, "c": c}, s=s)
+    # the "full" response is 3 dB above the form everywhere: the form is
+    # already outside a 1 dB contract whatever its leading numeral
+    h_full = exact.numeric(freqs) * 10 ** (3 / 20)
+    form = SimplifiedTF(expr=sp.Float(0.98, 17) * a / (1 + s * c / a),
+                        values={"a": 1e-3, "c": 1e-9},
+                        symbols={"a": a, "c": c}, s=s)
+    crit = PlainCriterion(gain_db=1.0)
+    assert crit.score(freqs, h_full, form.numeric(freqs)) > 1.0
+    # 0.98 -> 1 moves the form TOWARD the full response: accepted
+    snapped, k, err = snap_unity(form, crit, freqs, h_full)
+    assert abs(k - 0.98) < 1e-12
+    assert abs(leading_coefficient(snapped) - 1.0) < 1e-9
+    # a numeral whose removal worsens the miss by more than a few percent
+    # of itself stays: 1.6 -> 1 moves the form 4 dB AWAY from the full
+    far = SimplifiedTF(expr=sp.Float(1.6, 17) * a / (1 + s * c / a),
+                       values={"a": 1e-3, "c": 1e-9},
+                       symbols={"a": a, "c": c}, s=s)
+    kept, k, err = snap_unity(far, crit, freqs, h_full)
+    assert k == 1.0 and err is None
+
+
+def test_certificate_details_name_a_cap_below_the_bands_demand():
+    """The Summary's certificate line distinguishes a cap the band fits
+    under (order-optimal, or the named-components cost) from a cap BELOW
+    the order the band demands: the capped model is the designer's
+    approximation, and the line says so instead of calling it optimal.
+    Fixture-free: a synthetic certificate and a stand-in result."""
+    from types import SimpleNamespace
+
+    from circuitinsight.analysis.certificate import order_certificate
+    from circuitinsight.session import SessionController
+
+    f = np.logspace(1, 7, 400)
+    s = 2j * np.pi * f
+    H = 1e3 / ((1 + s / (2 * np.pi * 1e3)) * (1 + s / (2 * np.pi * 1e5)))
+    cert = order_certificate(f, H, 1e1, 1e7)
+    k = cert.order_at(0.01)
+    assert k >= 2
+    det = SessionController._certificate_details(
+        None, SimpleNamespace(), None, None, 1e1, 1e7, 0.01,
+        n_sel=1, cert=cert, cap=1)
+    assert det and det[0].startswith("capped at 1 below the order")
+    assert "designer's approximation" in det[0]
+    # the same selection without a cap reads as the named-components cost
+    det = SessionController._certificate_details(
+        None, SimpleNamespace(), None, None, 1e1, 1e7, 0.01,
+        n_sel=k, cert=cert, cap=None)
+    assert det and "order-optimal" in det[0]
+
+
+def test_story_keep_follows_the_capped_pursuit():
+    """The letters suggested for a lowest-order solve are the letters
+    THAT solve keeps: under the plain contract with the cap at 2 the
+    Miller story keep names Cc and CL and the three conductances of the
+    textbook form, where the uncapped pursuit at the same budget also
+    admits parasitic transcapacitances."""
+    import warnings
+
+    from circuitinsight.session import SessionController
+
+    d = FIX / "miller"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c = SessionController.open(d / "tb_ota2s.cin.json", d / "psf")
+        c.set_matches(*c.suggest_matches())
+        capped = c.suggest_story_keep(
+            "VIND", "vout", fmin=1e3, fmax=1e8, tol_db=3.0,
+            strategy="plain",
+            strategy_opts={"gain_db": 3.0, "phase_deg": 15.0, "cap": 2})
+        wide = c.suggest_story_keep(
+            "VIND", "vout", fmin=1e3, fmax=1e8, tol_db=3.0,
+            strategy="plain",
+            strategy_opts={"gain_db": 3.0, "phase_deg": 15.0, "cap": 6})
+    def parasitic(n):
+        return n not in ("I0_Cc", "CL") and n[0] in "ck"
+
+    assert capped[:2] == ["I0_Cc", "CL"]
+    assert not any(parasitic(n) for n in capped), capped
+    assert any(parasitic(n) for n in wide), wide
+    # the keep is the one the capped solve then holds: the two-pole form
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        r = c.reduce_solve("VIND", "vout", capped, strategy="plain",
+                           strategy_opts={"gain_db": 3.0, "phase_deg": 15.0,
+                                          "cap": 2}, fmin=1e3, fmax=1e8)
+    assert r.reduced_order
+    assert "reduced to 2 reactance(s)" in r.warnings[0]
+    assert "raise the cap" in r.warnings[0]

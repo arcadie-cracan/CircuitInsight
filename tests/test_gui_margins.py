@@ -568,3 +568,141 @@ def test_a_port_reading_rewrites_the_equation_pane(qapp):
         assert w.tabs.currentWidget() is w.logview
     finally:
         w.close()
+
+
+def test_the_equation_aggregate_is_a_right_click_target(qapp):
+    """G_eff is printed in the equation, so that is where a reader
+    wants to open it -- the row's context menu asks for the same thing
+    from a place they are not looking.
+
+    Right-click, not left: the aggregate carries ONE expensive action
+    and the left button in that view already selects symbols."""
+    from circuitinsight.analysis.reconstruct import Block, Reconstruction
+    from circuitinsight.gui.app import MainWindow
+
+    blk = Block(members=("CL",), exponent=-1.0, exponent_raw=-1.0,
+                exponent_from_rho=None)
+    rec = Reconstruction(
+        verdict="partial", text="G_eff/(2pi*CL)", blocks=(blk,),
+        aggregate={"symbol": "G_eff", "unit": "S", "value": 6.34e-7,
+                   "exponent": 1.0, "blocks": (blk,)})
+    # tagged only when asked, and only while there is something to ask
+    assert r"\htmlData" not in rec.tex()
+    assert r"\htmlData{agg=p1}" in rec.tex(None, "p1")
+    rec.expansion = {"text": "gds_A+gds_B", "tex": "g_A+g_B"}
+    assert r"\htmlData" not in rec.tex(None, "p1"), (
+        "an expanded aggregate has nothing left to open")
+
+    # the JS side carries the routing the tag relies on
+    from pathlib import Path
+    import circuitinsight.gui as _g
+    html = (Path(_g.__file__).parent / "assets" / "expr.html").read_text(
+        encoding="utf-8")
+    assert "[data-agg]" in html, "no affordance for the tag"
+    assert "on_agg_click" in html, "nothing routes the click"
+    assert "contextmenu" in html, "must be the RIGHT button"
+
+    # ...and the bridge that receives it
+    from circuitinsight.gui import exprweb
+    if exprweb.WEBENGINE:                        # pragma: no cover
+        assert hasattr(exprweb.ExprBridge, "aggClicked")
+        assert hasattr(exprweb.ExprBridge, "on_agg_click")
+
+    w = MainWindow()
+    type(w).settings_path = None
+    try:
+        assert hasattr(w, "_ml_agg_clicked")
+        # an unknown term name is a no-op rather than an error
+        w._ml_agg_clicked("nope")
+        assert w._ml_row_of("nope") == -1
+    finally:
+        w.close()
+
+
+def test_a_residual_is_typeset_as_an_engineering_value_with_its_unit():
+    """A branch's unnamed remainder is a conductance a designer reads,
+    so it arrives as "15.6 uS" (units.eng, thin space) rather than
+    1.56e-05 -- and the LaTeX pass must typeset that as a value with a
+    unit, not hand "uS" to the texer as a symbol name."""
+    from circuitinsight.gui.app import MainWindow
+
+    def tx(n):
+        return r"\mathrm{%s}" % n.replace("_", "")
+
+    out = {"matches": True, "branches": [
+        {"text": "gds_A*gds_B/(gm_A+gmbs_A+15.6 uS)",
+         "conductance": 2.6e-7},
+        {"text": "gds_C/(g_D-2.3 mS)", "conductance": 1e-7}]}
+    e = MainWindow._ml_expansion(out, tx)
+    assert r"15.6\,\mu\mathrm{S}" in e["tex"]
+    assert r"2.3\,\mathrm{m}\mathrm{S}" in e["tex"]
+    assert r"\mathrm{uS}" not in e["tex"], "the unit was read as a symbol"
+    assert r"\mathrm{mS}" not in e["tex"]
+    # the plain text keeps the readable form
+    assert "15.6 uS" in e["text"]
+
+
+def test_contribution_ranks_the_list_and_lights_the_map(qapp):
+    """One scalar, two views. A device row's df0 is its CONTRIBUTION,
+    the sum of |df0| over its parameters, and the list is ranked by
+    it; the schematic gradient lights each device by the same gross,
+    normalised to the strongest. The re-bias column is the LEVERAGE --
+    the same sensitivities weighted by d ln(param)/d ln(bias) -- and
+    may sit near zero on a device with a large contribution, which is
+    a cascode whose gm and gds oppose, not a device that does not
+    matter.
+
+    Before: displayed the net, sorted by the largest single parameter,
+    and lit the page by max |S| with tau-shares folded in. Three
+    rankings, none of them the one shown."""
+    from circuitinsight.gui.app import MainWindow
+
+    w = MainWindow()
+    type(w).settings_path = None
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            w.open_session(FIX / "miller" / "tb_ota2s_stb.cin.json",
+                           FIX / "miller" / "psf_stb", None)
+            w.margins_sync("IPRB0")
+        w.ml_tbl.selectRow(0)                     # p1's contributors
+        tree = w.ms_tree
+        assert tree.headerItem().text(3).startswith("df0")
+        assert tree.headerItem().text(5).startswith("re-bias")
+        gross = []
+        for i in range(tree.topLevelItemCount()):
+            top = tree.topLevelItem(i)
+            if top.text(1) != "device":
+                continue
+            g = float(top.text(3))
+            kids = [abs(float(top.child(k).text(3)))
+                    for k in range(top.childCount())]
+            # the device's contribution IS the sum of its parts
+            assert g == pytest.approx(sum(kids), abs=2e-3), top.text(0)
+            assert g >= 0
+            # the leverage column exists and is finite
+            float(top.text(5))
+            gross.append((top.text(0), g))
+        assert len(gross) >= 2
+        # ranked by contribution, descending
+        assert [g for _n, g in gross] == sorted(
+            (g for _n, g in gross), reverse=True)
+        # ...and the map agrees. Asked of the pure weight function, not
+        # of the lit page: this fixture has no schematic hints, so a
+        # check gated on "once lit" passed here while checking nothing
+        # -- verified by reverting the map to its old max-|S| rule and
+        # watching the gated version stay green.
+        lit = w._ml_contrib_weights(w._ml_rows[0], w._ms_map)
+        assert lit, "no device weighted"
+        top_name, top_g = gross[0]
+        assert lit[top_name] == pytest.approx(1.0, abs=1e-9), (
+            "the top-ranked device must be the brightest")
+        for name, g in gross:
+            if name in lit:
+                assert lit[name] == pytest.approx(g / top_g, abs=2e-3), name
+        # a device the list shows but the map drops sits under the floor
+        for name, g in gross:
+            if name not in lit:
+                assert g / top_g < 0.03, name
+    finally:
+        w.close()

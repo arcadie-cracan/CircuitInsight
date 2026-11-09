@@ -54,3 +54,18 @@ def test_certificate_classifies_the_shapes():
     assert order_certificate(f, hp, 1e1, 1e7).shape == "highpass"
     assert order_certificate(f, bp, 1e1, 1e7).shape == "bandpass"
     assert order_certificate(f, lp, 1e1, 1e3).shape == "flat"
+
+
+def test_certificate_label_compares_the_demand_with_the_cap():
+    """With an order cap the label says, before the solve, when the
+    band demands more order than the cap admits; a cap the band fits
+    under adds nothing."""
+    f = np.logspace(1, 7, 400)
+    H = _rational(f, poles_hz=[1e3, 1e5, 1e9], zeros_hz=[], k=1e3)
+    c = order_certificate(f, H, 1e1, 1e7)
+    k = c.order_at(0.01)
+    assert k >= 2
+    capped = c.describe(0.01, cap=1)
+    assert "capped at 1" in capped and "1-reactance model" in capped
+    assert "capped" not in c.describe(0.01, cap=k)
+    assert c.describe(0.01) == c.describe(0.01, cap=None)

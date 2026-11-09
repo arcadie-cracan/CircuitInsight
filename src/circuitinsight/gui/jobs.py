@@ -508,11 +508,9 @@ class JobRunnerMixin:
             from ..analysis import estimate as _est
         except Exception:                        # pragma: no cover
             return
+        # the first get_calibration() of a process loads the cached one
         if _est.get_calibration().platform != "builtin-default":
-            return
-        if _est.load_calibration() is not None:
-            _est.set_calibration(_est.load_calibration())
-            self.log("solve-time model: loaded this machine's calibration")
+            self.log("solve-time model: using this machine's calibration")
             return
         if getattr(self, "_calib_thread", None) is not None:
             return

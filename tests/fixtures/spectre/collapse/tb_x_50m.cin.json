@@ -1,0 +1,198 @@
+{
+ "cin_version": "0.1",
+ "design": {
+  "name": "tb_x_50m",
+  "source": {
+   "kind": "hand"
+  },
+  "note": "Hand-authored by make_decks.py to match its deck."
+ },
+ "top": "tb_x_50m",
+ "ground": [
+  "0"
+ ],
+ "definitions": {
+  "tb_x_50m": {
+   "ports": [],
+   "instances": [
+    {
+     "name": "VDD",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "vdd",
+      "n": "0"
+     }
+    },
+    {
+     "name": "VSET",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "vset",
+      "n": "0"
+     }
+    },
+    {
+     "name": "VB3",
+     "device_type": "vsource",
+     "terminals": {
+      "p": "vb3",
+      "n": "0"
+     }
+    },
+    {
+     "name": "IREF",
+     "device_type": "isource",
+     "terminals": {
+      "p": "vdd",
+      "n": "nb"
+     }
+    },
+    {
+     "name": "ILOAD",
+     "device_type": "isource",
+     "terminals": {
+      "p": "out",
+      "n": "0"
+     }
+    },
+    {
+     "name": "IPORT",
+     "device_type": "isource",
+     "terminals": {
+      "p": "0",
+      "n": "out"
+     },
+     "params": {
+      "acm": "1"
+     }
+    },
+    {
+     "name": "M0",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "out",
+      "g": "n3",
+      "s": "vdd",
+      "b": "vdd"
+     },
+     "params": {
+      "polarity": "p",
+      "m": "10"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "cell": "pfet_01v8_lvt",
+      "w": "20u",
+      "l": "0.35u",
+      "nf": "1"
+     }
+    },
+    {
+     "name": "M3",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "n3",
+      "g": "vb3",
+      "s": "vdd",
+      "b": "vdd"
+     },
+     "params": {
+      "polarity": "p",
+      "m": "1"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "cell": "pfet_01v8_lvt",
+      "w": "1.5u",
+      "l": "0.35u",
+      "nf": "1"
+     }
+    },
+    {
+     "name": "M2",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "n3",
+      "g": "vdd",
+      "s": "n2",
+      "b": "0"
+     },
+     "params": {
+      "polarity": "n",
+      "m": "1"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "cell": "nfet_01v8",
+      "w": "20u",
+      "l": "0.35u",
+      "nf": "1"
+     }
+    },
+    {
+     "name": "M4",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "n2",
+      "g": "vset",
+      "s": "out",
+      "b": "out"
+     },
+     "params": {
+      "polarity": "p",
+      "m": "1"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "cell": "pfet_01v8_lvt",
+      "w": "40u",
+      "l": "0.35u",
+      "nf": "1"
+     }
+    },
+    {
+     "name": "M1",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "n2",
+      "g": "nb",
+      "s": "0",
+      "b": "0"
+     },
+     "params": {
+      "polarity": "n",
+      "m": "1"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "cell": "nfet_01v8",
+      "w": "60u",
+      "l": "0.5u",
+      "nf": "1"
+     }
+    },
+    {
+     "name": "MB",
+     "device_type": "mosfet",
+     "terminals": {
+      "d": "nb",
+      "g": "nb",
+      "s": "0",
+      "b": "0"
+     },
+     "params": {
+      "polarity": "n",
+      "m": "1"
+     },
+     "meta": {
+      "lib": "sky130_fd_pr",
+      "cell": "nfet_01v8",
+      "w": "12u",
+      "l": "0.5u",
+      "nf": "1"
+     }
+    }
+   ]
+  }
+ }
+}

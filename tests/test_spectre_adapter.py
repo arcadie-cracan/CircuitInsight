@@ -59,6 +59,55 @@ def test_canonical_mosfet_caps():
     assert r.device_type == "resistor" and r.params["r"] == pytest.approx(1e4)
 
 
+def test_junction_conductance_kept_only_when_it_conducts():
+    """gbd/gbs read gmin at a sane bias and stay out of the model; past the
+    floor a junction conducts and they become params."""
+    from circuitinsight.adapters.spectre.backends import RawRecord
+    from circuitinsight.adapters.spectre.opdata import (JUNCTION_G_FLOOR,
+                                                        canonicalize)
+    for m in load_dcopinfo(FIXTURES / "psf" / "dcOpInfo.info").values():
+        assert "gbd" not in m.params and "gbs" not in m.params
+    rec = canonicalize(RawRecord("M4", "bsim4", {
+        "gm": 1e-3, "gds": 1e-5, "gbd": 0.0532, "gbs": 1e-12}))
+    assert rec.params["gbd"] == pytest.approx(0.0532)
+    assert "gbs" not in rec.params
+    assert 1e-12 < JUNCTION_G_FLOOR < 1e-6
+
+
+@pytest.mark.parametrize("cap_model", ["lumped", "matrix"])
+def test_junction_conductance_stamped_drain_bulk(cap_model):
+    from circuitinsight.adapters.cin import FlatDevice
+    from circuitinsight.models.small_signal import expand_device
+    dev = FlatDevice("M4", "M4", "mosfet",
+                     {"d": "n2", "g": "vset", "s": "out", "b": "nb4"})
+    op = {"gm": 1e-3, "gds": 1e-5, "gbd": 0.05, "gbs": 2e-3}
+    op.update({f"k{i}{j}": 0.0 for i in "dgb" for j in "dgb"})
+    prims = {p.param: p for p in expand_device(dev, op, cap_model=cap_model)}
+    assert prims["gbd"].kind == "g" and prims["gbd"].nodes == ("n2", "nb4")
+    assert prims["gbs"].nodes == ("out", "nb4")
+    assert prims["gbd"].value == pytest.approx(0.05)
+
+
+def test_forward_junction_warns_and_matches_xf():
+    """A P-stage overloaded to 50 mA pulls its output to -1.17 V and forward
+    biases M4's drain-bulk junction (gbd = 53 mS). Without that conductance
+    the tool was 16 dB off xf, silently; with it, under 3 dB, and the join
+    says the bias is broken."""
+    import numpy as np
+    from circuitinsight import Analyzer
+    d = Path(__file__).resolve().parent / "fixtures" / "spectre" / "collapse"
+    with pytest.warns(UserWarning, match="M4: drain-bulk junction conducts"):
+        run = SpectreRun(d / "tb_x_50m.cin.json", d / "psf_x_50m")
+    assert run.op_data["M4"]["gbd"] == pytest.approx(0.0532, rel=1e-2)
+    xf = run.xf()
+    f, zx = xf.freq, xf.tf("IPORT")
+    sel = f <= 10e9
+    an = Analyzer(run.flat, run.op_data, cap_model="matrix")
+    zt = an.impedance("out", keep=[]).numeric(f[sel])
+    err = np.abs(20 * np.log10(np.abs(zt) / np.abs(zx[sel])))
+    assert err.max() < 3.0
+
+
 # ------------------------------------------------------------------- join
 
 def test_join_full_testbench():

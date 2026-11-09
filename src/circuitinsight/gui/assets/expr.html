@@ -20,12 +20,14 @@
     --bg:#f2f2f2; --ink:#1a1a1a;
     --hov:#cfe3ff; --pin:#ffe08a; --pin-edge:#d8ae38;
     --num-hov:#f3e2bd;
+    --agg-ink:#6a3fb5;
     --sb-track:#e4e4e4; --sb-thumb:#b0b0b0; --sb-thumb-h:#989898;
   }
   [data-theme="dark"]{
     --bg:#26282c; --ink:#e2e2e2;
     --hov:#2c4a6e; --pin:#6e5a1e; --pin-edge:#a8893a;
     --num-hov:#4a3f28;
+    --agg-ink:#c9a8ff;
     --sb-track:#2f3136; --sb-thumb:#55585e; --sb-thumb-h:#6a6d73;
   }
   /* the webview's scrollbars wear the app's chrome, not Chromium's */
@@ -48,6 +50,18 @@
      f_p/f_z symbols light the root on the schematic and the plot */
   [data-term],[data-froot]{cursor:pointer;border-radius:3px}
   [data-term].hov,[data-froot].hov{background:var(--hov)}
+  /* An aggregate is the one thing in the line carrying an action, so
+     it is set in its OWN INK -- not a background box, which reads as a
+     selection (field preference), and not a dotted rule, which is a
+     hairline the reader has to hunt for. The box is still there for
+     HITTING: inline-block with padding gives the span a target over
+     the whole symbol, and pointer-events:auto on the descendants undoes
+     the vlist rule below -- without both, only the glyph edges answer.
+     Hover shows the same box every other target shows. */
+  [data-agg]{cursor:context-menu;border-radius:3px;
+             display:inline-block;padding:0 3px;color:var(--agg-ink)}
+  [data-agg] *{pointer-events:auto}
+  [data-agg].hov{background:var(--hov)}
   .line.flash{background:var(--hov);transition:background .15s}
   /* KaTeX stacks fraction/script rows with full-width ~3em strut boxes that
      cover the denominator, swallowing hits (only glyph edges responded). Let
@@ -134,6 +148,22 @@ function frootAt(x, y) {
   }
   return null;
 }
+function aggAt(x, y) {
+  for (const el of document.elementsFromPoint(x, y)) {
+    const hit = el.closest ? el.closest("[data-agg]") : null;
+    if (hit) return hit;
+  }
+  return null;
+}
+/* RIGHT-click an aggregate to ask the circuit what it is. The port
+   algebra costs seconds, so it is a deliberate act, not a hover. */
+document.addEventListener("contextmenu", e => {
+  const ag = aggAt(e.clientX, e.clientY);
+  if (!ag) return;                 /* elsewhere: leave the default menu */
+  e.preventDefault();
+  if (bridge && bridge.on_agg_click)
+    bridge.on_agg_click(ag.dataset.agg);
+});
 const tip = document.getElementById("tip");
 let hov = null;
 document.addEventListener("mousemove", e => {

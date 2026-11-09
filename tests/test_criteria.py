@@ -115,3 +115,25 @@ def test_legacy_window_enforces_above_the_relative_floor():
     c = LegacyCriterion(tol_db=1.0, floor_db=60.0)
     sig = c.window(freqs, np.abs(H), m, H)
     assert sig[:32].all() and not sig[32:].any()
+
+
+def test_a_cap_miss_names_the_cap_as_a_remedy():
+    """The order cap is a knob of the contract (the GUI shows it on the
+    lowest-order form), so a miss at the cap must name raising it beside
+    the two remedies it always named. Fixture-free: a stand-in
+    reduction that hit the cap with the tolerance still missed."""
+    from types import SimpleNamespace
+
+    red = SimpleNamespace(selected=["Cc", "CL"], met=False, metrics={})
+    for c in (make_criterion(strategy="plain", strategy_opts={"cap": 2}),
+              make_criterion(strategy="stability", strategy_opts={"cap": 2}),
+              make_criterion(strategy="rejection", strategy_opts={"cap": 2})):
+        head = c.headline(red, 2.5, 1e3, 1e8)
+        assert "NOT MET at the order cap" in head
+        assert "raise the cap" in head
+        det = c.details(red, 2.5, 1e3, 1e8)
+        assert any("order cap (2)" in d for d in det)
+    # within the cap nothing is said about it
+    red.met = True
+    assert "cap" not in make_criterion(strategy="plain").headline(
+        red, 0.4, 1e3, 1e8).split("—")[-1]

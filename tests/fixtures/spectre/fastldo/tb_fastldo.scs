@@ -1,0 +1,77 @@
+// tb_fastldo.scs -- SKY130 re-design of the fast LDO of Grajdeanu, Raducan,
+// Plesa, Neag, Varzaru, Topa, IEEE Access 10 (2022) 9124-9141, Fig. 5, to
+// the paper's specifications: Vout = 1 V, Vin 1.2..1.5 V, IL 1 uA..100 mA,
+// CL 0..1 uF, Iq about 7 uA, R = 10k and C = 80 pF (C1 = C2 = 40 pF).
+//
+// Complementary image of Fig. 5 (the inputs sit at 1 V under a 1.2 V supply,
+// which on SKY130 only an NMOS pair can take): NMOS input pair M1a/M1b,
+// PMOS degenerated mirrors M3x/M4y (1:k) with the LCMFB resistors Rcm between
+// the diode gates and the PMOS cascodes M12/M11 into nodes A and B; the
+// mirror outputs Io-/Io+ go down through the PMOS cascodes M5/M6 into the
+// degenerated NMOS cascoded mirror M9x/M10y + M7/M8 that drives GATE. The
+// Ft&Fc network: C1 from OUT into the source of M4yPa (node P2), C2 from OUT
+// into the source of M10yN (node N2); every mirror source carries R = 10k.
+// The class-AB cross-coupled input halves (M2a/M2b) and the level shifters
+// M13 of the paper are left out: they are slew-rate features outside the
+// small-signal model of its Fig. 6. Bias voltages are ideal sources.
+//
+//   spectre tb_fastldo.scs -format psfascii -raw ./psf +log run.log
+simulator lang=spectre
+global 0
+include "<pdk-models>" section=tt
+
+parameters vin=1.2 il=1m cl=1p vbn=0.47 vcp=0.58 vcn=0.75 \
+    r=10k rcm=300k c1=40p c2=40p wpass=5u mpass=14000
+
+VIN (vin 0) vsource dc=vin
+VREF (ref 0) vsource dc=1.0
+VBN (vbn 0) vsource dc=vbn
+VCP (vcp 0) vsource dc=vcp
+VCN (vcn 0) vsource dc=vcn
+
+// ---- input pair and tail (2 uA)
+M1b (a ref tail 0) nfet_01v8_lvt w=10u l=0.5u
+M1a (b fb_x tail 0) nfet_01v8_lvt w=10u l=0.5u
+MT (tail vbn 0 0) nfet_01v8_lvt w=5u l=1u
+// ---- PMOS degenerated mirrors, diode side (x), cascoded into A and B
+Rp1b (vin p1b) resistor r=r
+M3xPb (d3b c p1b vin) pfet_01v8_lvt w=10u l=1u
+M12 (a vcp d3b vin) pfet_01v8_lvt w=10u l=0.5u
+Rp1a (vin p1a) resistor r=r
+M3xPa (d3a c p1a vin) pfet_01v8_lvt w=10u l=1u
+M11 (b vcp d3a vin) pfet_01v8_lvt w=10u l=0.5u
+// LCMFB: the diode gates meet at c, each through Rcm from its own node. For
+// a differential signal c is a virtual ground, so A and B see Rcm, not a
+// diode: Gm_EA = 2 gm1 gm4 Rcm (the R0 = 300k of the TCAS-I 2020 sibling)
+Rcmb (a c) resistor r=rcm
+Rcma (b c) resistor r=rcm
+// ---- mirror outputs (y), k = 2, degenerated; C1 enters at P1 (node N of Fig. 5)
+Rp2b (vin p1) resistor r=r
+M4yPb (iom a p1 vin) pfet_01v8_lvt w=10u l=1u m=2
+Rp2a (vin p2) resistor r=r
+M4yPa (iop b p2 vin) pfet_01v8_lvt w=10u l=1u m=2
+C1 (out p2) capacitor c=c1
+// ---- PMOS cascodes carrying Io- and Io+ down
+M5 (min vcp iom vin) pfet_01v8_lvt w=10u l=0.5u
+M6 (gate vcp iop vin) pfet_01v8_lvt w=10u l=0.5u
+// ---- degenerated NMOS cascoded mirror into GATE; C2 enters at N2 (node P of Fig. 5)
+M7 (min vcn d9 0) nfet_01v8_lvt w=5u l=0.5u
+M9xN (d9 min n1 0) nfet_01v8_lvt w=5u l=1u
+Rn1 (n1 0) resistor r=r
+M8 (gate vcn d10 0) nfet_01v8_lvt w=5u l=0.5u
+M10yN (d10 min n2 0) nfet_01v8_lvt w=5u l=1u
+Rn2 (n2 0) resistor r=r
+C2 (out n2) capacitor c=c2
+// ---- pass device, load, and the main-loop probe between OUT and FB
+MPASS (out gate vin vin) pfet_01v8 w=wpass l=0.15u m=mpass
+CL (out 0) capacitor c=cl
+IL (out 0) isource dc=il
+IPRB0 (out fb_x) iprobe
+
+simulatorOptions options psfversion="1.4.0" temp=27 tnom=27 scalem=1.0 \
+    scale=1.0 gmin=1e-12 rforce=1 maxnotes=5 maxwarns=5 digits=8 cols=80 \
+    pivrel=1e-3
+dcOp dc write="spectre.dc" maxiters=150 maxsteps=10000 annotate=status
+dcOpInfo info what=oppoint where=rawfile
+stb stb start=1 stop=10G dec=20 probe=IPRB0 annotate=status
+saveOptions options save=allpub

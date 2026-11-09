@@ -39,6 +39,7 @@ if WEBENGINE:
         selectionChanged = Signal(list)
         termClicked = Signal(str)      # a theta link in the PM sum
         frootClicked = Signal(str)     # an f_p/f_z symbol
+        aggClicked = Signal(str)       # RIGHT-click on a G_eff/C_eff
 
         @Slot(str)
         def on_symbol_click(self, name: str) -> None:
@@ -51,6 +52,13 @@ if WEBENGINE:
         @Slot(str)
         def on_froot_click(self, name: str) -> None:
             self.frootClicked.emit(name)
+
+        @Slot(str)
+        def on_agg_click(self, name: str) -> None:
+            """A G_eff/C_eff asked to say what it is. Right-click, not
+            left: the aggregate carries ONE expensive action, and the
+            left button in this view already selects symbols."""
+            self.aggClicked.emit(name)
 
         @Slot(str)
         def on_selection_change(self, names: str) -> None:

@@ -54,7 +54,7 @@ def _tok(i: int) -> str:
 # small-signal quantity prefixes that split off the front of a symbol name;
 # anything else is a passive value symbol keyed by its instance name
 _QTY = frozenset((
-    "gm", "gds", "gmb", "go", "gpi", "gmu",                 # conductances
+    "gm", "gds", "gmb", "go", "gpi", "gmu", "gbd", "gbs",   # conductances
     "cgd", "cgs", "cgb", "cdb", "csb", "cds", "cdg", "csg",  # MOS caps
     "cbd", "cbs", "cbg", "cpi", "cmu", "cjs", "cjd", "ccs",  # + bipolar/junction
     "csub",                                                  # bjt substrate cap
@@ -206,8 +206,8 @@ def op_unit(name: str) -> str:
     n = name.lower()
     if n.startswith(("geq_", "ceq_", "req_")):
         return {"g": "S", "c": "F", "r": "Ω"}[n[0]]   # lumped equivalents
-    if n.startswith(("gm", "gds", "gmb", "go", "gpi", "gmu")):
-        return "S"                    # trans/output conductances
+    if n.startswith(("gm", "gds", "gmb", "go", "gpi", "gmu", "gbd", "gbs")):
+        return "S"                    # trans/output/junction conductances
     if n.startswith("c"):
         return "F"                    # intrinsic caps (cgd/cgs/...) and C-named caps
     # passive value keyed by instance name: type = first letter of the leaf

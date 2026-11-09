@@ -20,6 +20,15 @@ The estimate is order-of-magnitude (circuit coefficient complexity adds
 uncertainty; grid<=4 uses the cheaper direct path and is a lower bound),
 which is what budget-driven keep-set *selection* needs -- pair with
 band_sensitivities() to keep the most impactful symbols.
+
+The calibration is this machine's: the first estimate in a process loads
+the cached one (~/.cache/circuitinsight/calibration.json) unless a
+calibration was set explicitly, and every Analyzer.tf() that follows an
+estimate of the same solve folds the measured wall-clock back into it
+(learn_from_solve). The first parallel solve of a process also pays the
+worker-pool startup, priced separately as SolveEstimate.startup_s.
+Scripts on Windows need an ``if __name__ == "__main__":`` guard: the
+solver spawns worker processes.
 """
 from __future__ import annotations
 
@@ -46,9 +55,12 @@ _ALPHA_FLOOR = 0.1
 # ~4*sqrt(K) (measured: k=6 T~80 at K=324, k=12 T=723 at K=46656). Total
 # mod-p dets ~ (discovery 2T + ~32 primes x T) x L x 2 at ~1/10 the QQ
 # det cost, pool-shared. Order-of-magnitude by design, like the QQ model.
+# _BOT_ALPHA was 0.03, which read 4x low wherever auto selects this path
+# (actual/predicted: RGC TIA 4.4, the 45.6 s -> 184 s field case 4.0, RC
+# ladders at K=2^11 3.5-4.5); small forced-bot grids sit nearer 1-2x.
 _BOT_T_COEF = 4.0
 _BOT_PRIMES = 35
-_BOT_ALPHA = 0.03
+_BOT_ALPHA = 0.12
 
 
 
@@ -129,6 +141,10 @@ class Calibration:
     last_ratio_serial: float = 1.0
     last_ratio_parallel: float = 1.0
     last_ratio_bot: float = 1.0
+    # worker-pool startup (spawn + import), paid ONCE per process by its
+    # first parallel solve: measured, not fitted (0 = never measured)
+    pool_startup_s: float = 0.0
+    n_obs_startup: int = 0
 
     def predict(self, raw: float, spread: float, parallel: bool) -> float:
         if parallel:
@@ -149,14 +165,29 @@ _DEFAULT_CAL = Calibration(a_serial=3.0, b_serial=0.0, beta_serial=0.0,
                            a_parallel=3.0, b_parallel=0.0, beta_parallel=0.0,
                            platform="builtin-default", n_samples=0)
 _CAL = _DEFAULT_CAL
+#: whether this process has settled its calibration: loaded the machine's
+#: cached one (lazily, on first use) or been handed one explicitly. Until
+#: then a plain script that never called load_calibration() priced every
+#: estimate with the factory default while its solves' lessons sat unread
+#: in the cache.
+_CAL_SETTLED = False
 
 
 def set_calibration(cal: Calibration) -> None:
-    global _CAL
+    global _CAL, _CAL_SETTLED
     _CAL = cal
+    _CAL_SETTLED = True
 
 
 def get_calibration() -> Calibration:
+    """The active calibration. The first call in a process that has not
+    set one loads this machine's cached calibration (if any matches)."""
+    global _CAL_SETTLED
+    if not _CAL_SETTLED:
+        _CAL_SETTLED = True
+        cached = load_calibration()
+        if cached is not None:
+            set_calibration(cached)
     return _CAL
 
 
@@ -167,6 +198,9 @@ def _platform_id() -> str:
 def _cache_file(path: str | os.PathLike | None = None) -> Path:
     if path is not None:
         return Path(path)
+    own = os.environ.get("CIRCUITINSIGHT_CACHE_DIR")
+    if own:                                      # tests isolate the cache
+        return Path(own) / "calibration.json"
     base = os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")
     return Path(base) / "circuitinsight" / "calibration.json"
 
@@ -207,10 +241,12 @@ def observe(predicted_s: float, actual_s: float, parallel: bool,
     Estimates therefore improve across sessions on the circuits you
     actually run, not only on the synthetic ladders calibrate() times."""
     if not (predicted_s > 0 and actual_s > 0):
-        return _CAL                              # nothing learnable
+        return get_calibration()                 # nothing learnable
     ratio = actual_s / predicted_s
     ratio = min(max(ratio, 1.0 / _OBS_CLAMP), _OBS_CLAMP)
-    cal = replace(_CAL)
+    # get_calibration(), not _CAL: learning into the factory default
+    # before the cache was read would overwrite everything learned so far
+    cal = replace(get_calibration())
     key = key or ("parallel" if parallel else "serial")
     n = getattr(cal, "n_obs_" + key)
     k = getattr(cal, "k_" + key)
@@ -284,13 +320,29 @@ class SolveEstimate:
     path: str                    # 'interp' | 'numeric-s' | 'direct'
     seconds: float               # estimated wall-clock — see __str__
     backend: str = "qq"          # interp backend the auto selector will pick
+    #: one-time worker-pool startup this process has yet to pay: nonzero
+    #: only while the pool is not up and the solve would start it. NOT in
+    #: `seconds` -- it is a per-process cost, and a second solve skips it
+    startup_s: float = 0.0
 
     #: paths whose cost `seconds` actually models. 'direct' is NOT one of
     #: them: a symbolic determinant carries polynomial arithmetic through
     #: every elimination step, and no count of numeric determinants
     #: describes it. Printing a number there was worse than printing none —
     #: it read as a prediction and was wrong by an order of magnitude.
-    MODELLED = ("interp", "numeric-s")
+    #:
+    #: 'numeric-s' left this tuple for the SAME reason, measured
+    #: 2026-08-31: against real loop-gain solves it read 0.1 s for 1.5 s
+    #: (miller) and 0.9 s for 34.1 s (fc) — 15x and 38x low, the error
+    #: GROWING with size. `_numeric_s_over()` self-calibrates, but the
+    #: ratio those two need is 37.8 and 115.5, so no single scalar fits
+    #: them and the clamp at 10 could not reach either. The driver is
+    #: coefficient growth with matrix size, which t_det * n_dets does not
+    #: carry. `seconds` is still POPULATED, because the keep planner
+    #: budgets against the numeric baseline and needs a number — but it
+    #: is a planning heuristic here, not a prediction, and callers that
+    #: SHOW it must gate on this tuple.
+    MODELLED = ("interp",)
 
     def __str__(self) -> str:
         bk = f", {self.backend}" if self.backend not in ("qq", "qq-s") else ""
@@ -298,12 +350,30 @@ class SolveEstimate:
                  f"{self.n_dets} dets, "
                  f"{'parallel' if self.parallel else 'serial'}{bk}")
         if self.path not in self.MODELLED:
-            # no determinant count describes this path, so don't print one
+            # no determinant count describes these paths, so don't print
+            # one. The two are unmodelled for different reasons and say
+            # so differently rather than sharing a wrong sentence: the
+            # symbolic one carries polynomial arithmetic through every
+            # elimination, the all-numeric one exact rationals whose
+            # coefficients grow with the matrix.
+            if self.path == "numeric-s":
+                return (f"all-numeric determinant – not modelled "
+                        f"(s-deg {self.s_degree}, {self.n_dets} dets, "
+                        f"dim {self.matrix_dim} – exact-rational "
+                        f"coefficient growth is the cost, not the count)")
             return (f"symbolic determinant – not modelled "
                     f"(s-deg {self.s_degree}, {len(self.kept_names)} symbols, "
                     f"grid {float(self.grid_size):.3g} – the tractability "
                     f"signal)")
-        return f"~{self.seconds:.3g}s  ({shape})"
+        first = (f" + ~{self.startup_s:.2g}s worker-pool startup "
+                 f"(first parallel solve in this process)"
+                 if self.startup_s > 0 else "")
+        return f"~{self.seconds:.3g}s{first}  ({shape})"
+
+    @property
+    def total_s(self) -> float:
+        """`seconds` plus any pool startup this solve would pay."""
+        return self.seconds + self.startup_s
 
 
 @dataclass
@@ -455,6 +525,7 @@ def estimate_solve(analyzer, inp: str, out: str, keep,
             seconds=_NUMERIC_S_FLOOR_S + _numeric_s_over() * t_det * n_dets,
             backend="qq-s")
 
+    cal = get_calibration()
     raw, n_dets, parallel = _raw_work(grid, s_deg, t_det)
     # mirror the solver's own auto selector (engine.interp.resolve_backend):
     # above the crossover the sparse bot backend runs instead of the dense
@@ -462,11 +533,14 @@ def estimate_solve(analyzer, inp: str, out: str, keep,
     backend = resolve_backend(n_dets)
     if backend == "bot":
         seconds, n_dets = _bot_work(grid, s_deg, t_det)
-        seconds *= _CAL.k_bot            # the sparse path learns too
+        seconds *= cal.k_bot             # the sparse path learns too
+        # the sparse backend maps its prime rounds over the same pool
+        uses_pool = default_workers() > 1
     else:
         # QQ grid (explicit zp/ratfun estimates also fall back to this
         # model: both are opt-in expert modes and slower than it anyway)
-        seconds = _CAL.predict(raw, spread, parallel)
+        seconds = cal.predict(raw, spread, parallel)
+        uses_pool = parallel
     # Which path solve_tf will actually take. keep=ALL is solved by a DIRECT
     # symbolic determinant (mna.solve_tf only substitutes when keep is not None),
     # so the interp model above does not describe it: for ALL, `seconds` is an
@@ -479,11 +553,93 @@ def estimate_solve(analyzer, inp: str, out: str, keep,
     # keep=ALL is a sentinel, not a list: record what it actually keeps (every
     # symbol), so SolveEstimate.keep stays a plain, iterable list of names.
     requested = list(kept_names) if is_all(keep) else list(keep)
+    startup = (pool_startup_estimate(cal)
+               if path == "interp" and uses_pool else 0.0)
     return SolveEstimate(keep=requested, kept_names=kept_names,
                          grid_size=grid, s_degree=s_deg, n_dets=n_dets,
                          matrix_dim=dim, coeff_spread=spread,
                          parallel=parallel, path=path, seconds=seconds,
-                         backend=backend if path == "interp" else "qq")
+                         backend=backend if path == "interp" else "qq",
+                         startup_s=startup)
+
+
+#: per-worker startup (spawn + sympy/circuitinsight import) before this
+#: machine has measured its own: 3.6 s for 15 workers on a 16-core
+#: Windows box, where spawn re-imports everything per worker
+_POOL_STARTUP_PER_WORKER_S = 0.25
+
+
+def pool_startup_estimate(cal: Calibration | None = None) -> float:
+    """The worker-pool startup the next parallel solve in this process
+    would pay: 0 once the pool is up (or when the solver will not start
+    one), else the machine's measured startup, else a per-worker guess."""
+    from ..engine import interp
+
+    workers = default_workers()
+    if (interp.pool_running() or workers <= 1
+            or interp._spawn_would_deadlock()):
+        return 0.0
+    cal = cal or get_calibration()
+    if cal.pool_startup_s > 0:
+        return cal.pool_startup_s
+    return _POOL_STARTUP_PER_WORKER_S * workers
+
+
+def observe_pool_startup(seconds: float, path=None) -> Calibration:
+    """Fold a measured pool startup into this machine's calibration
+    (geometric average, same weights as observe())."""
+    cal = replace(get_calibration())
+    if not seconds > 0:
+        return cal
+    n = cal.n_obs_startup
+    w = max(_OBS_MIN_WEIGHT, 1.0 / (n + 1))
+    old = cal.pool_startup_s if cal.pool_startup_s > 0 else seconds
+    cal.pool_startup_s = math.exp((1 - w) * math.log(old)
+                                  + w * math.log(seconds))
+    cal.n_obs_startup = n + 1
+    set_calibration(cal)
+    save_calibration(cal, path)
+    return cal
+
+
+def solve_key(est: SolveEstimate) -> str:
+    """The calibration key that PRICED this estimate: the sparse path has
+    its own cost model, so its lessons must not land in the dense one."""
+    if est.backend == "bot":
+        return "bot"
+    return "parallel" if est.parallel else "serial"
+
+
+def learn_from_solve(est: SolveEstimate, actual_s: float,
+                     solve: dict | None = None, path=None) -> bool:
+    """Feed a finished solve back into this machine's calibration: the
+    estimate that priced it vs the measured wall clock, minus the
+    worker-pool startup the solve happened to pay (learned on its own).
+    `solve` is the solver's telemetry (engine.interp.LAST_SOLVE, the
+    default). Returns whether the per-path correction was updated; the
+    telemetry is marked so a second learner (the GUI's) skips it.
+
+    Skipped when the estimate does not model the path, or when the solve
+    did not run the backend the estimate priced (a mod-p fallback to the
+    QQ grid would teach the sparse model the dense path's cost)."""
+    from ..engine import interp
+
+    solve = interp.LAST_SOLVE if solve is None else solve
+    if not solve or solve.get("observed"):
+        return False
+    solve["observed"] = True
+    startup = float(solve.get("pool_startup_s") or 0.0)
+    if startup > 0:
+        observe_pool_startup(startup, path)
+    if est.path not in est.MODELLED or solve.get("fell_back"):
+        return False
+    priced = "bot" if est.backend == "bot" else "qq"
+    ran = "bot" if solve.get("backend") == "bot" else "qq"
+    if priced != ran:
+        return False
+    observe(est.seconds, actual_s - startup, parallel=est.parallel,
+            path=path, key=solve_key(est))
+    return True
 
 
 def _raw_work(grid: int, s_deg: int, t_det: float) -> tuple[float, int, bool]:
@@ -580,8 +736,12 @@ def calibrate(force: bool = False, max_seconds: float = 3.0,
     rc_configs = [("100", "10m"), ("1k", "1p"), ("1meg", "1f")]
     inp, out = "Vin", f"n{sections}"
 
+    from ..engine import interp
+
     serial: list[tuple[float, float, float]] = []
     parallel: list[tuple[float, float, float]] = []
+    bot: list[float] = []                       # actual / bot-model ratios
+    startups: list[float] = []
     warmed = False
     for r, c in rc_configs:
         an = Analyzer.from_cin(_ladder_cin(sections, r, c))
@@ -591,16 +751,28 @@ def calibrate(force: bool = False, max_seconds: float = 3.0,
             an.tf(inp, out, keep=["R1", "R2", "R3"], method="interp")
             warmed = True
         for k in range(3, sections + 1):        # grids 8, 16, 32, ...
-            raw, _, is_par = _raw_work(2 ** k, s_deg, t_det)
+            raw, n_dets, is_par = _raw_work(2 ** k, s_deg, t_det)
             keep = [f"R{i}" for i in range(1, k + 1)]
             t0 = time.perf_counter()
             an.tf(inp, out, keep=keep, method="interp")
             dt = time.perf_counter() - t0
-            (parallel if is_par else serial).append((raw, spread, dt))
+            ls = interp.LAST_SOLVE or {}
+            su = float(ls.get("pool_startup_s") or 0.0)
+            if su > 0:                          # per-process, not per-solve
+                startups.append(su)
+                dt -= su
+            tag = "par" if is_par else "ser"
+            if resolve_backend(n_dets) == "bot":
+                # the sparse backend ran: it has its own cost model, and
+                # its time says nothing about the dense grid's alpha
+                if ls.get("backend") == "bot":
+                    bot.append(dt / _bot_work(2 ** k, s_deg, t_det)[0])
+                tag = "bot"
+            else:
+                (parallel if is_par else serial).append((raw, spread, dt))
             if verbose:
                 print(f"  spread {spread:4.1f} grid {2**k:>7} "
-                      f"({'par' if is_par else 'ser'}): raw {raw:.3g}s "
-                      f"-> actual {dt:.3g}s")
+                      f"({tag}): raw {raw:.3g}s -> actual {dt:.3g}s")
             if dt > max_seconds:
                 break
 
@@ -610,7 +782,13 @@ def calibrate(force: bool = False, max_seconds: float = 3.0,
     cal = Calibration(a_serial=a_s, b_serial=b_s, beta_serial=beta_s,
                       a_parallel=a_p, b_parallel=b_p, beta_parallel=beta_p,
                       platform=_platform_id(),
-                      n_samples=len(serial) + len(parallel))
+                      n_samples=len(serial) + len(parallel) + len(bot))
+    if bot:                                     # geometric: ratios
+        k_bot = math.exp(sum(math.log(r) for r in bot) / len(bot))
+        cal.k_bot = min(max(k_bot, 1.0 / _K_CLAMP), _K_CLAMP)
+    if startups:
+        cal.pool_startup_s = startups[0]
+        cal.n_obs_startup = 1
     save_calibration(cal, cache_path)
     set_calibration(cal)
     return cal
@@ -650,9 +828,9 @@ def observe_phases(eval_s: float, recon_s: float, key: str = "parallel",
     geometric averaging and clamping as observe(): the ratio is a scale
     factor, and one odd solve must not run away with it."""
     if not (eval_s > 0 and recon_s >= 0):
-        return _CAL
+        return get_calibration()
     ratio = max(recon_s / eval_s, 1e-3)
-    cal = replace(_CAL)
+    cal = replace(get_calibration())
     n = getattr(cal, "n_rec_" + key, 0)
     r = getattr(cal, "r_" + key, 1.0)
     w = max(_OBS_MIN_WEIGHT, 1.0 / (n + 1))

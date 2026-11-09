@@ -134,8 +134,8 @@ class BandCriterion:
         if red.met:
             return " (details in Summary)", []
         return (f" — TOLERANCE NOT MET at the order cap: best score "
-                f"{band_err:.2g}× the budget; narrow the band or relax "
-                f"the tolerance (details in Summary)",
+                f"{band_err:.2g}× the budget; narrow the band, relax "
+                f"the tolerance or raise the cap (details in Summary)",
                 [f"the order cap ({self.cap}) keeps the model readable "
                  f"— the response genuinely carries more structure in "
                  f"this band than the cap admits"])

@@ -720,7 +720,8 @@ def dominant_reactances(analyzer, inp: str, out: str, tol_db: float = 1.0,
     if note is not None and strategy is not None and not met:
         note(f"order cap {max_elements} reached at score {final:.3g} "
              f"(> 1 = tolerance missed): the response needs more order "
-             f"in this band — narrow the band or relax the tolerance")
+             f"in this band — narrow the band, relax the tolerance or "
+             f"raise the cap")
     return ReactanceReduction(selected=selected, errors_db=errors,
                               baseline_db=baseline, tol_db=tol_db,
                               freqs=freqs, metric=metric,

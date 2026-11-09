@@ -185,6 +185,9 @@ class MarginLedger:
     entries: list                     # gain anchor first, then by |share|
     phase_residual_deg: float | None  # |sum - direct|, the certificate
     mag_residual_db: float | None
+    stability: dict | None = None     # L-J: the closed-loop verdict and
+    #                                   why the margins may mislead; see
+    #                                   stability_certificate
 
     def fold(self, budget_deg: float = 2.0, budget_db: float = 0.5,
              pair_tol: float = 0.3):
@@ -242,8 +245,11 @@ class MarginLedger:
         if self.gm_db is not None:
             head.append(f"GM {self.gm_db:.1f} dB at "
                         f"{self.f_180_hz / 1e6:.3g} MHz")
-        return ([" / ".join(head) if head else "no crossing in band"]
-                + [e.describe() for e in self.fold()])
+        lines = [" / ".join(head) if head else "no crossing in band"]
+        if self.stability:
+            lines.append(f"{self.stability['verdict']}: "
+                         f"{self.stability['reason']}")
+        return lines + [e.describe() for e in self.fold()]
 
 
 def merge_doublets(entries, *, tol: float = 1e-5):
@@ -708,13 +714,22 @@ def attach_root_sensitivities(led: MarginLedger, system, primitives, probe: str,
             hot = tuple(sorted(i2 for i2, v in parts.items()
                                if v >= 0.3 * pmax)) \
                 or tuple(sorted(per))
+            # how the symbol's sensitivity SPLITS over its hot members,
+            # by their partials. The list and the map used to disagree
+            # here: the list hung a shared symbol under its first hot
+            # instance in full, the map lit every hot one in full --
+            # so a matched pair was counted once in one view and twice
+            # in the other. One split, read by both.
+            htot = sum(parts[i2] for i2 in hot) or 1.0
+            shares = {i2: parts[i2] / htot for i2 in hot}
             dzeta = float((-np.real(x * S_rel)
                            + x.real * np.real(S_rel)) / abs(x)) * 0.01
             rsens.append({"symbol": name,
                            "df0": float(np.real(S_rel)),
                            "dzeta": dzeta,
                            "mag": float(abs(S_rel)),
-                           "insts": hot})
+                           "insts": hot,
+                           "shares": shares})
             kinds = {k for k, _, _, _ in ss}
             if kinds & {"c", "cx"}:
                 # L-H: scaling every capacitor by k scales every
@@ -763,21 +778,32 @@ def attach_root_sensitivities(led: MarginLedger, system, primitives, probe: str,
                 rz = reconstruct(gz, Hz, vals, stamps, abs(e.zeta),
                                  two_pi=False,
                                  floor={1: 0.02, 2: 0.012}.get(
-                                     complexity, 0.006))
+                                     complexity, 0.006),
+                                 lump=True)
                 if rz.verdict == "formula":
+                    # the formula may carry a bare number -- the 2 of
+                    # zeta = 1/(2Q) -- which the raw prefactor does
+                    # not include and the estimate must
                     e.zeta_estimate = {
                         "text": rz.text, "tex": rz.tex,
-                        "zeta_est": abs(e.zeta) / rz.prefactor
+                        "zeta_est": abs(e.zeta) * rz.constant / rz.prefactor
                         if rz.prefactor else abs(e.zeta),
-                        "err": (1.0 / rz.prefactor - 1.0)
+                        "err": (rz.constant / rz.prefactor - 1.0)
                         if rz.prefactor else 0.0}
             # the COMPLEXITY knob now sets how small a mover may still
             # enter the expression: there is no search to widen, only
             # a threshold below which an element is left to the
-            # coverage residual instead of being named
+            # coverage residual instead of being named. The reader
+            # LUMPS for itself: symbols the root sees only through
+            # their sum are folded before the reading, so a cascode
+            # divide prints as the two-branch sum it is instead of a
+            # bare G_eff waiting for the port to be asked. A plain sum
+            # comes back unfolded, so nothing that read before reads
+            # differently now.
             rec = reconstruct(gj, Hj, vals, stamps, abs(x),
                               floor={1: 0.02, 2: 0.012}.get(complexity,
-                                                            0.006))
+                                                            0.006),
+                              lump=True)
         except Exception:                          # noqa: BLE001
             rec = None                             # never fatal
         e.reconstruction = rec
@@ -785,7 +811,7 @@ def attach_root_sensitivities(led: MarginLedger, system, primitives, probe: str,
             e.estimate = {"text": rec.text, "tex": rec.tex,
                           "f_est_hz": rec.value,
                           "prefactor": rec.prefactor,
-                          "err": (1.0 / rec.prefactor - 1.0)
+                          "err": (rec.constant / rec.prefactor - 1.0)
                           if rec.prefactor else 0.0,
                           "blocks": rec.blocks}
         elif rec is not None:
@@ -809,6 +835,32 @@ def attach_root_sensitivities(led: MarginLedger, system, primitives, probe: str,
             e.shared = tuple((_respell_sym(s2, hot), v)
                              for s2, v in e.shared)
     return led
+
+
+def rebias_exponent(symbol: str, region=None, *,
+                    explicit: bool = False) -> float:
+    """d ln(parameter) / d ln(bias): how much of a 1% re-bias each
+    small-signal parameter actually sees.
+
+    "Every parameter up 1% together" is not a knob anyone has, and it
+    manufactures cancellations: a root going as gm/gds reads a net of
+    exactly zero under uniform scaling, while re-biasing the device --
+    gm as sqrt(I_D), gds as I_D in strong inversion -- moves it by
+    0.5*S_gm + 1.0*S_gds. In subthreshold gm is proportional to I_D
+    and the exponent is 1. Capacitances barely track bias. An explicit
+    component (a netlist C or R) IS its own knob: exponent 1.
+    Region codes follow Spectre: 3 is subthreshold."""
+    if explicit:
+        return 1.0
+    head = symbol.split("_", 1)[0].lower()
+    sub = region is not None and int(region) == 3
+    if head in ("gm", "gmbs"):
+        return 1.0 if sub else 0.5
+    if head in ("gds", "gii"):
+        return 1.0
+    if head.startswith("c"):
+        return 0.0
+    return 1.0
 
 
 def margin_equation(led: MarginLedger, *, budget_deg: float = 2.0,
@@ -1064,7 +1116,10 @@ def margin_equation_latex(eq, texer=None) -> list[str]:
                 # this root, and how much of the root it accounts for
                 short = (rf"\;\times{pa['prefactor']:.2f}"
                          if pa["prefactor"] else "")
-                th += (rf",\quad \text{{reads }} {pa['tex'](tx)}"
+                # the aggregate is tagged with the TERM name, so a
+                # click on G_eff lands on the same row an f_p click
+                # would -- one identity for the root, three ways in
+                th += (rf",\quad \text{{reads }} {pa['tex'](tx, nm)}"
                        rf"{short}")
         ze = t.get("zeta_estimate")
         if ze is not None:
@@ -1249,6 +1304,160 @@ def margin_sensitivities(system, primitives, probe: str, led, *,
     return out
 
 
+def _closed_loop_roots(tf, raw_n, raw_d) -> np.ndarray:
+    """Roots of D - N (rad/s), the closed-loop poles in the ledger's
+    convention, from the MINIMAL form of T.
+
+    The assembled Tian loop gain is not minimal: its numerator and
+    denominator share the closed-loop determinant (both are closed-loop
+    responses of the probed system), so D - N of the raw rational is that
+    determinant SQUARED up to artifact factors -- every closed-loop pole
+    counted twice (field case: a 26-node LDO read 4 right-half-plane
+    poles where its supply-to-output transfer, rooted exactly, has one
+    pair). Converting the raw coefficients to float64 first was worse
+    still: the ladder's far ends underflow and the truncated difference
+    grows spurious right-half-plane roots on a stable loop.
+
+    So: take the minimal zeros and poles (exact rooting, artifact pairs
+    cancelled), work in sigma = s/w0 with w0 the geometric mean of the
+    poles so no product overflows, fix the minimal numerator's gain by
+    matching T at sigma = j (an exact-coefficient read, independent of
+    the rooting), and root prod(sigma - p) - k prod(sigma - z). Falls
+    back to the raw D - N, formed in sympy and rooted with scaled_roots,
+    when the exact minimal route is not available."""
+    import sympy as sp
+
+    from ..engine.mna import scaled_roots
+
+    zeros, poles = tf._minimal_pz
+    if getattr(tf, "_minimal_exact", False) and len(poles):
+        poles = np.asarray(poles, complex)
+        zeros = np.asarray(zeros, complex)
+        w0 = float(np.exp(np.mean(np.log(np.abs(poles[np.abs(poles) > 0])))))
+        ps, zs = poles / w0, zeros / w0
+        t_j = complex(np.asarray(tf.numeric_hp([w0 / (2 * np.pi)]))[0])
+        k = t_j * np.prod(1j - ps) / np.prod(1j - zs)
+        if abs(k.imag) <= 1e-6 * abs(k):
+            k = k.real
+        pd = np.atleast_1d(np.poly(ps))
+        pn = k * np.atleast_1d(np.poly(zs) if len(zs) else np.ones(1))
+        pn = np.concatenate([np.zeros(len(pd) - len(pn)), pn])
+        return np.roots(pd - pn) * w0
+    cn = [sp.sympify(c) for c in raw_n]
+    cd = [sp.sympify(c) for c in raw_d]
+    width = max(len(cn), len(cd))
+    cn = [sp.Integer(0)] * (width - len(cn)) + cn
+    cd = [sp.Integer(0)] * (width - len(cd)) + cd
+    return np.asarray(scaled_roots([a - b for a, b in zip(cd, cn)]))
+
+
+def stability_certificate(tf, *, f=None, m=None, acc=None, fu=None,
+                          rel_tol: float = 1e-7) -> dict:
+    """L-J: is the loop stable, and do its margins say so?
+
+    The Bode margins answer a question only a loop with one unity
+    crossing, one critical-phase crossing and no right-half-plane pole
+    is asking. Beleca, Plesa, Onet and Neag (ROMJIST 2022) show the
+    rest: a conditionally stable loop reads a negative gain margin and
+    a healthy phase margin and is stable; a loop with a pole at the
+    origin or in the right half-plane reads a positive phase margin
+    and is unstable. Their criteria -- the phase crosses the critical
+    line an EVEN number of times below f_u, the gain margin is
+    undefined when the Nyquist curve cuts the critical axis more than
+    once, and otherwise the encirclement count against the open-loop
+    RHP poles -- are what this certificate reports. The verdict itself
+    does not need the Nyquist plot: the loop gain is a known rational,
+    so the closed-loop poles are the roots of D(s) - N(s) -- the
+    ledger's convention has arg T(0) = 180 and the critical point at
+    +1 -- and the loop is stable exactly when none sits in the right
+    half-plane. The Nyquist count then follows as Z - P, and the Bode
+    diagnostics say why the margins did or did not mislead.
+
+    `f`, `m`, `acc`, `fu` are the ledger's own grid, magnitude in dB,
+    continuous phase in degrees and refined unity crossing; without
+    them only the exact verdict and the encirclement count are given.
+    Returns {verdict, closed_loop_rhp, closed_loop_rhp_hz (the offending
+    closed-loop poles, Hz), rhp_poles, origin_poles, encirclements_cw,
+    unity_crossings, axis_cuts, cuts_before_fu, parity, gm_defined,
+    bode_applies, reason}."""
+    # N and D on ONE scale: the tf's own float path normalizes each
+    # polynomial by its largest coefficient, which is fine for roots
+    # of either and loses exactly the gain that D - N depends on
+    import sympy as sp
+
+    ex = tf._exact_coeffs
+    if ex is not None:
+        raw_n, raw_d = ex
+    else:
+        n, d = tf.num_den
+        subs = tf._subs_map()
+        raw_n = [c.xreplace(subs) for c in n.all_coeffs()]
+        raw_d = [c.xreplace(subs) for c in d.all_coeffs()]
+    closed = _closed_loop_roots(tf, raw_n, raw_d)
+    big = float(np.max(np.abs(closed))) if len(closed) else 1.0
+    z = int(np.sum(closed.real > rel_tol * np.maximum(np.abs(closed),
+                                                       1e-12 * big)))
+    poles = np.asarray(tf.poles(), complex)
+    big_p = float(np.max(np.abs(poles))) if len(poles) else 1.0
+    origin = int(np.sum(np.abs(poles) <= 1e-12 * big_p))
+    p = int(np.sum(poles.real > rel_tol * np.maximum(np.abs(poles),
+                                                     1e-12 * big_p)))
+    rhp_hz = [complex(r) / (2 * np.pi) for r in closed
+              if r.real > rel_tol * max(abs(r), 1e-12 * big)]
+    out = {"verdict": "stable" if z == 0 else "unstable",
+           "closed_loop_rhp": z, "closed_loop_rhp_hz": rhp_hz,
+           "rhp_poles": p, "origin_poles": origin,
+           "encirclements_cw": z - p,
+           "unity_crossings": None, "axis_cuts": None,
+           "cuts_before_fu": None, "parity": None,
+           "gm_defined": None, "bode_applies": None}
+    why = []
+    if z:
+        why.append(f"the closed loop has {z} right-half-plane "
+                   f"pole{'s' if z > 1 else ''}")
+    else:
+        why.append("the closed loop has no right-half-plane pole")
+    if p or origin:
+        turns = p - z
+        why.append(f"T has {p} right-half-plane and {origin} origin "
+                   f"pole{'s' if p + origin > 1 else ''}, so the Bode "
+                   f"margins do not decide; by Nyquist the critical point "
+                   f"is encircled {abs(turns)} time"
+                   f"{'s' if abs(turns) != 1 else ''} "
+                   f"{'counter-clockwise' if turns > 0 else 'clockwise'} "
+                   f"against {p} required")
+    if f is not None and m is not None and acc is not None:
+        m = np.asarray(m, float)
+        acc = np.asarray(acc, float)
+        n_u = int(np.sum(np.diff(np.sign(m)) != 0))
+        phf = ((acc + 180.0) % 360.0) - 180.0
+        cut = np.where((np.diff(np.sign(phf)) != 0)
+                       & (np.abs(np.diff(phf)) < 180.0))[0]
+        cuts = int(len(cut))
+        before = (int(np.sum(np.asarray(f)[cut] < fu))
+                  if fu is not None else None)
+        parity = (None if before is None
+                  else "even" if before % 2 == 0 else "odd")
+        applies = (p == 0 and origin == 0 and n_u == 1)
+        out.update({"unity_crossings": n_u, "axis_cuts": cuts,
+                    "cuts_before_fu": before, "parity": parity,
+                    "gm_defined": cuts <= 1, "bode_applies": applies})
+        if applies and before is not None:
+            why.append(f"the phase crosses the critical line {before} "
+                       f"time{'s' if before != 1 else ''} below f_u "
+                       f"({parity}), so the phase margin "
+                       f"{'holds' if before % 2 == 0 else 'misleads'}")
+        elif n_u != 1 and not (p or origin):
+            why.append(f"|T| crosses unity {n_u} times, so the phase "
+                       f"margin is the worst of {n_u} readings")
+        if cuts > 1:
+            why.append(f"the Nyquist curve cuts the critical axis {cuts} "
+                       f"times, so the gain margin is undefined and the "
+                       f"ledger's GM is the worst of them")
+    out["reason"] = "; ".join(why)
+    return out
+
+
 def margin_ledger(tf, *, system=None, f_lo: float | None = None,
                   f_hi: float | None = None,
                   n_grid: int = 2001) -> MarginLedger:
@@ -1377,4 +1586,8 @@ def margin_ledger(tf, *, system=None, f_lo: float | None = None,
     led = MarginLedger(pm_deg=pm, f_unity_hz=fu, gm_db=gm, f_180_hz=fgm,
                        entries=entries, phase_residual_deg=ph_res,
                        mag_residual_db=mg_res)
+    try:
+        led.stability = stability_certificate(tf, f=f, m=m, acc=acc, fu=fu)
+    except Exception:                                # noqa: BLE001
+        led.stability = None                         # never fatal
     return attribute_ledger(led, system) if system is not None else led

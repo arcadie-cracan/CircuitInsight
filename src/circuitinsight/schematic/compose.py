@@ -23,8 +23,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .hints import ORIENTS, FlatHints
-from .symmap import (CELL_SYMBOLS, UNLABELLED_CELLS, SymbolSpec, anchor_for,
-                     resolve, resolve_cell)
+from .symmap import (anchor_for, CELL_SYMBOLS, resolve, resolve_cell, resolve_device_cell, SymbolSpec, UNLABELLED_CELLS)
 
 CELL_GLYPHS = frozenset(CELL_SYMBOLS)
 
@@ -516,7 +515,11 @@ def _scaled(sym, k: float):
     return replace(sym, w=sym.w * k, h=sym.h * k, inner=inner,
                    anchors={n: (x * k, y * k) for n, (x, y) in
                             sym.anchors.items()},
-                   origin=(sym.origin[0] * k, sym.origin[1] * k))
+                   origin=(sym.origin[0] * k, sym.origin[1] * k),
+                   # the author's designator spot rides with the body
+                   label_spot=((sym.label_spot[0] * k, sym.label_spot[1] * k,
+                                sym.label_spot[2])
+                               if sym.label_spot else None))
 
 
 def _xml_id(name: str) -> str:
@@ -668,7 +671,8 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
             blocks.append(inst)
             continue
         dt = devtypes.get(inst.name)
-        spec = resolve(*dt) if dt else resolve_cell(inst.cell)
+        spec = ((resolve_device_cell(inst.cell) or resolve(*dt)) if dt
+                else resolve_cell(inst.cell))
         sym = lib.load(spec.file) if spec else None
         placed.append((inst, sym, spec))
         if sym:
@@ -747,7 +751,8 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
     # the balun) are fitted the same way, shrinking when the library
     # draws them larger than the PDK footprint
     todo += [(inst, (sym, spec)) for inst, sym, spec in placed
-             if sym and spec and spec.scalable and inst.terms]
+             if sym and spec and (spec.scalable or spec.inline)
+             and inst.terms]
     for inst, device in todo:
         if device is None:
             bs = block_symbols.get(inst.cell)
@@ -776,7 +781,7 @@ def compose(flat: FlatHints, devtypes: dict, lib: SymbolLibrary,
                                sym.anchors[pairs[j][1]])
                 if du > 1e-9 and dm > 1e-9:
                     ks.append(du / dm)
-        if ks:
+        if ks and not (device is not None and spec.inline):
             k = min(max(min(ks), kmin), BLOCK_MAX_SCALE)
             if abs(k - 1.0) > 1e-9:
                 sym = _scaled(sym, k)

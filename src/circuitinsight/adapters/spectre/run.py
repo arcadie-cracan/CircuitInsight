@@ -91,6 +91,15 @@ def _match_op(flat, records, rename):
                     f"{_REGION_NAMES.get(int(region), region)} — small-signal "
                     f"params are still valid at this bias but check the design"
                 )
+            for key, side in (("gbd", "drain"), ("gbs", "source")):
+                g = rec.params.get(key)
+                if g is not None:      # the adapter keeps it only past the floor
+                    warnings.warn(
+                        f"{dev.sim_name}: {side}-bulk junction conducts "
+                        f"({key} = {g:.3g} S) — it is forward biased, so the "
+                        f"bias is likely broken; the conductance is stamped "
+                        f"in the model"
+                    )
         op_data[dev.sim_name] = rec.params
 
     return op_data, used, missing, errors

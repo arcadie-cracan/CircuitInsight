@@ -1,0 +1,23 @@
+// tb_x_50m.scs (SKY130) -- collapse probe. Written by make_decks.py.
+simulator lang=spectre
+global 0
+include "<pdk-models>" section=tt
+parameters vdd=1.8
+VDD (vdd 0) vsource dc=vdd
+VSET (vset 0) vsource dc=0.7
+VB3 (vb3 0) vsource dc=0
+IREF (vdd nb) isource dc=50u
+ILOAD (out 0) isource dc=0.05
+IPORT (0 out) isource dc=0 mag=1
+M0 (out n3 vdd vdd) pfet_01v8_lvt w=20u l=0.35u m=10
+M3 (n3 vb3 vdd vdd) pfet_01v8_lvt w=1.5u l=0.35u m=1
+M2 (n3 vdd n2 0) nfet_01v8 w=20u l=0.35u m=1
+M4 (n2 vset out out) pfet_01v8_lvt w=40u l=0.35u m=1
+M1 (n2 nb 0 0) nfet_01v8 w=60u l=0.5u m=1
+MB (nb nb 0 0) nfet_01v8 w=12u l=0.5u m=1
+simulatorOptions options psfversion="1.4.0" temp=27 tnom=27 gmin=1e-12 rforce=1 maxnotes=5 \
+    maxwarns=5 digits=8 cols=80 pivrel=1e-3
+dcOp dc write="spectre.dc" maxiters=150 maxsteps=10000 annotate=status
+dcOpInfo info what=oppoint where=rawfile
+xf (out 0) xf start=1k stop=100G dec=40 annotate=status
+saveOptions options save=allpub

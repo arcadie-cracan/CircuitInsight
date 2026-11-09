@@ -1099,9 +1099,17 @@ class SessionController:
         used to learn into its own process's copy, which an engine
         child never read)."""
         from .analysis import estimate as _e
-        _e.observe(predicted_s, actual_s,
-                   parallel=(key != "serial"), key=key,
-                   preload=getattr(self, "_last_preload", 0.0))
+        from .engine import interp
+        ls = interp.LAST_SOLVE or {}
+        if not ls.get("observed"):        # Analyzer.tf may have learned it
+            ls["observed"] = True
+            # the pool startup is a per-process cost with its own term
+            startup = float(ls.get("pool_startup_s") or 0.0)
+            if startup > 0:
+                _e.observe_pool_startup(startup)
+            _e.observe(predicted_s, actual_s - startup,
+                       parallel=(key != "serial"), key=key,
+                       preload=getattr(self, "_last_preload", 0.0))
         if eval_s and recon_s:
             _e.observe_phases(eval_s, recon_s, key=key)
 
@@ -1657,7 +1665,7 @@ class SessionController:
                          poles_hz=full.poles_hz, zeros_hz=full.zeros_hz)
             det += self._certificate_details(
                 r, None, None, fmin, fmax, crit.eps_equivalent(),
-                len(red.selected), cert=cert)
+                len(red.selected), cert=cert, cap=crit.cap)
         except Exception:                             # noqa: BLE001
             pass                        # advisory, never a show-stopper
         if snap_err is not None:
@@ -1976,7 +1984,9 @@ class SessionController:
     def suggest_story_keep(self, inp: str, out: str, *,
                            fmin: float = 1e3, fmax: float = 1e7,
                            tol_db: float = 1.0,
-                           max_symbols: int = 5) -> list[str]:
+                           max_symbols: int = 5,
+                           strategy: str | None = None,
+                           strategy_opts: dict | None = None) -> list[str]:
         """The keep set for a LOWEST-ORDER solve: the letters of the story.
 
         A lowest-order model is A0 and a dominant pole; the useful keeps
@@ -1992,15 +2002,24 @@ class SessionController:
         the same band, restricted to non-reactive symbols, names the
         conductances that set A0 and the pole. Parasitic reactances are
         excluded on purpose -- keeping one would force the order up.
-        Cached."""
+
+        With a `strategy` the pursuit runs under the SAME contract the
+        lowest-order solve will run under -- its budgets and its order
+        cap -- so the letters suggested are the letters that solve
+        keeps; the legacy dB pursuit is the fallback for callers that
+        name no strategy. Cached."""
+        opts = dict(strategy_opts or {})
         key = self._key("storykeep", inp, out, float(fmin),
-                        float(fmax), float(tol_db), max_symbols)
+                        float(fmax), float(tol_db), max_symbols,
+                        strategy, tuple(sorted(opts.items())))
         if key in self._cache:
             return list(self._cache[key])
         from .analysis.sensitivity import _reactive_symbols
 
         an = self._analyzer_ready()
-        red = an.dominant_reactances(inp, out, tol_db, fmin, fmax)
+        red = an.dominant_reactances(inp, out, tol_db, fmin, fmax,
+                                     strategy=strategy,
+                                     strategy_opts=opts or None)
         reacts = list(red.selected)
         reactive = _reactive_symbols(an)
         bs = an.band_sensitivities(inp, out, fmin=fmin, fmax=fmax)
@@ -2796,17 +2815,24 @@ class SessionController:
         # gmbs_NM14, and not one of those survives a three-symbol cap.
         out["branches"], out["eet_total"] = [], None
         try:
-            from .analysis.portg import (branch_form, eet_symbols,
-                                         nested_eet)
+            from .analysis.portg import (branch_form, branch_instances,
+                                         eet_symbols, nested_eet)
             wide = eet_symbols(g, stamps)
             out["eet_symbols"] = wide
-            r = nested_eet(system, stamps[out["port"]][0][1],
+            u = stamps[out["port"]][0][1]
+            # which member of each matched group actually acts on THIS
+            # port -- the shared symbol is named after one member, and
+            # on the folded cascode's output branch that member is not
+            # the one there (PM12/PM13 for devices that are PM14/PM15)
+            insts = branch_instances(system, u, stamps, open_branch=probe)
+            out["instances"] = insts
+            r = nested_eet(system, u,
                            list(wide) or list(out["keep"]),
                            open_branch=probe)
             if r:
                 out["eet_total"] = float(r["total"])
                 for gate, info in (r["branches"] or {}).items():
-                    f = branch_form(info, gate, vals)
+                    f = branch_form(info, gate, vals, insts=insts)
                     out["branches"].append(
                         {"gate": gate,
                          "conductance": float(info["conductance"]),
@@ -3088,17 +3114,27 @@ class SessionController:
                      poles_hz=base.poles_hz, zeros_hz=base.zeros_hz)
 
     def _certificate_details(self, r, inp, out, fmin, fmax, eps_eq,
-                             n_sel, label="", cert=None) -> list[str]:
+                             n_sel, label="", cert=None,
+                             cap=None) -> list[str]:
         """The order-certificate verdict + doublet caveat, shared by the
         anchored and strategy reduce reports (and the impedance lowest
         order, which brings its own certificate). Advisory: a
-        certificate failure never breaks the solve that earned it."""
+        certificate failure never breaks the solve that earned it.
+        `cap` is the contract's order cap: when the band demands more
+        than it admits, the detail says the model is the designer's
+        approximation rather than calling the cap order-optimal."""
         try:
             if cert is None:
                 cert = self.order_certificate(inp, out, fmin, fmax)
             r.certificate = cert
             k = cert.order_at(eps_eq)
-            if n_sel <= k:
+            if cap is not None and k > cap and n_sel >= cap:
+                at = f" at {label}" if label else " at this tolerance"
+                det = [f"capped at {cap} below the order {k} this band "
+                       f"needs{at} — the {cap}-reactance model is the "
+                       f"designer's approximation, and its miss is "
+                       f"measured above"]
+            elif n_sel <= k:
                 det = [f"order-optimal for this band ({label})" if label
                        else "order-optimal for this band"]
             else:
@@ -3212,7 +3248,7 @@ class SessionController:
                     r, inp, out, fmin, fmax, crit.eps_equivalent(),
                     len(red.selected),
                     label=(f"{eps:.0%}" if crit.name == "anchored"
-                           else ""))
+                           else ""), cap=crit.cap)
                 r.details = det
             else:
                 if red.sig_hi:                 # the ENFORCED sub-band

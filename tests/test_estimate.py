@@ -288,3 +288,186 @@ def test_flush_calibration_forgets_file_and_process(tmp_path):
         est.flush_calibration(cache)          # idempotent: no file, no raise
     finally:
         est.set_calibration(est._DEFAULT_CAL)
+
+
+def test_the_all_numeric_path_does_not_claim_to_be_modelled():
+    """Measured 2026-08-31 against real loop-gain solves, the numeric-s
+    estimate read 0.1 s for 1.5 s and 0.9 s for 34.1 s -- 15x and 38x
+    low, the error GROWING with size. `_numeric_s_over()` self-
+    calibrates, but those two need ratios of 37.8 and 115.5, so no
+    single scalar fits both and the clamp at 10 reaches neither: the
+    cost is exact-rational coefficient growth, which t_det * n_dets
+    does not carry.
+
+    estimate.py already learned this for the symbolic path -- "printing
+    a number there was worse than printing none, it read as a
+    prediction and was wrong by an order of magnitude". The same rule,
+    applied to the same failure.
+
+    `seconds` stays POPULATED: the keep planner budgets against the
+    numeric baseline and would break on None. It is a planning
+    heuristic, and callers that SHOW it gate on MODELLED."""
+    from circuitinsight.analysis.estimate import SolveEstimate
+
+    assert "numeric-s" not in SolveEstimate.MODELLED
+    assert "direct" not in SolveEstimate.MODELLED
+    assert "interp" in SolveEstimate.MODELLED, "the fitted path must stay"
+
+
+def test_an_unmodelled_estimate_names_its_own_reason():
+    """The two unmodelled paths fail for different reasons and must not
+    share a sentence: one is a symbolic determinant, the other exact
+    rationals. A numeric solve described as 'symbolic determinant'
+    would send a reader after the wrong cost."""
+
+    from circuitinsight.analysis.estimate import SolveEstimate
+
+    base = dict(grid_size=1, s_degree=5, n_dets=72, matrix_dim=17,
+                kept_names=(), keep=(), coeff_spread=1.0,
+                parallel=False, seconds=0.139)
+    num = SolveEstimate(path="numeric-s", **base)
+    sym = SolveEstimate(path="direct", **base)
+    assert "all-numeric" in str(num) and "not modelled" in str(num)
+    assert "symbolic" not in str(num), "wrong cost named"
+    assert "coefficient growth" in str(num)
+    assert "symbolic determinant" in str(sym)
+    # and a modelled one still prints its number
+    fit = SolveEstimate(path="interp", **base)
+    assert "~0.139s" in str(fit)
+
+
+def test_a_plain_script_prices_with_the_cached_calibration(tmp_path,
+                                                           monkeypatch):
+    """Only the GUI and Session used to load the machine's calibration:
+    a script building an Analyzer priced with the factory default while
+    its solves' lessons sat unread in the cache. The first use now loads
+    it; an explicit set_calibration() still wins."""
+    from dataclasses import replace as _replace
+
+    from circuitinsight.analysis import estimate as est
+
+    monkeypatch.setenv("CIRCUITINSIGHT_CACHE_DIR", str(tmp_path))
+    cached = _replace(est._DEFAULT_CAL, platform=est._platform_id(),
+                      k_serial=7.0, k_parallel=7.0, n_obs_parallel=3,
+                      k_bot=4.4, n_obs_bot=1)
+    est.save_calibration(cached)
+
+    # a fresh process: nothing set yet
+    monkeypatch.setattr(est, "_CAL", est._DEFAULT_CAL)
+    monkeypatch.setattr(est, "_CAL_SETTLED", False)
+    assert est.get_calibration() == cached
+    # ...and that is what prices an estimate (fixed probe: no jitter)
+    monkeypatch.setattr(est, "_CAL", est._DEFAULT_CAL)
+    monkeypatch.setattr(est, "_CAL_SETTLED", False)
+    an = Analyzer.from_cin(RC)
+    e = est.estimate_solve(an, "Vin", "out", ["R", "C"],
+                           _probe_cache=(1, 1e-4, 3, 0.0))
+    assert e.seconds == pytest.approx(
+        cached.predict(1e-4 * e.n_dets, 0.0, e.parallel))
+
+    # observe() before any estimate learns ON TOP of the cache instead of
+    # overwriting it with the factory default plus one sample
+    monkeypatch.setattr(est, "_CAL", est._DEFAULT_CAL)
+    monkeypatch.setattr(est, "_CAL_SETTLED", False)
+    est.observe(1.0, 1.0, parallel=True)
+    after = est.load_calibration()
+    assert after.n_obs_parallel == 4 and after.k_bot == pytest.approx(4.4)
+
+    # an explicit calibration is never replaced by the cache
+    monkeypatch.setattr(est, "_CAL_SETTLED", False)
+    mine = _replace(est._DEFAULT_CAL, a_serial=0.5)
+    est.set_calibration(mine)
+    assert est.get_calibration() is mine
+
+
+def test_the_sparse_path_learns_from_script_solves(tmp_path):
+    """k_bot never moved outside the GUI (n_obs_bot stayed 0): nothing
+    but the GUI fed solves back. learn_from_solve() does, on the key that
+    PRICED the solve, with the pool startup learned apart -- and a mod-p
+    fallback to the QQ grid teaches nothing to the sparse model."""
+    from dataclasses import replace as _replace
+
+    from circuitinsight.analysis import estimate as est
+
+    cache = tmp_path / "cal.json"
+    est.set_calibration(_replace(est._DEFAULT_CAL,
+                                 platform=est._platform_id()))
+    e = est.SolveEstimate(keep=["R"], kept_names=["R"], grid_size=8192,
+                          s_degree=7, n_dets=228084, matrix_dim=12,
+                          coeff_spread=10.0, parallel=True, path="interp",
+                          seconds=2.4, backend="bot", startup_s=3.0)
+    solve = {"backend": "bot", "fell_back": False, "pool_startup_s": 3.6}
+    assert est.learn_from_solve(e, 3.6 + 10.6, solve=solve, path=cache)
+    cal = est.get_calibration()
+    assert cal.n_obs_bot == 1
+    assert cal.k_bot == pytest.approx(10.6 / 2.4)    # first sample: full
+    assert cal.n_obs_parallel == 0                   # dense untouched
+    assert cal.pool_startup_s == pytest.approx(3.6)  # learned apart
+    assert est.load_calibration(cache).k_bot == pytest.approx(cal.k_bot)
+    # the telemetry is marked: a second learner (the GUI's) skips it
+    assert solve["observed"]
+    assert not est.learn_from_solve(e, 99.0, solve=solve, path=cache)
+    assert est.get_calibration().n_obs_bot == 1
+
+    fell = {"backend": "qq", "fell_back": True, "pool_startup_s": 0.0}
+    assert not est.learn_from_solve(e, 50.0, solve=fell, path=cache)
+    assert est.get_calibration().n_obs_bot == 1
+
+
+def test_estimate_then_tf_teaches_the_calibration(tmp_path, monkeypatch):
+    """The Analyzer closes the loop for scripts: tf() of the solve just
+    estimated feeds its wall clock back; a tf() of a DIFFERENT solve does
+    not (its estimate priced something else)."""
+    from dataclasses import replace as _replace
+
+    from circuitinsight.analysis import estimate as est
+
+    monkeypatch.setenv("CIRCUITINSIGHT_CACHE_DIR", str(tmp_path))
+    est.set_calibration(_replace(est._DEFAULT_CAL,
+                                 platform=est._platform_id()))
+    an = Analyzer.from_cin(RC)
+    e = an.estimate_solve_time("Vin", "out", ["R", "C"])
+    assert e.path == "interp"
+    key = est.solve_key(e)
+    an.tf("Vin", "out", keep=["R"])                  # not what was priced
+    assert getattr(est.get_calibration(), "n_obs_" + key) == 0
+    an.estimate_solve_time("Vin", "out", ["R", "C"])
+    an.tf("Vin", "out", keep=["R", "C"])
+    assert getattr(est.get_calibration(), "n_obs_" + key) == 1
+    assert getattr(est.load_calibration(), "n_obs_" + key) == 1
+    an.tf("Vin", "out", keep=["R", "C"])             # the estimate is spent
+    assert getattr(est.get_calibration(), "n_obs_" + key) == 1
+
+
+def test_pool_startup_is_priced_once_per_process(monkeypatch):
+    """The first parallel solve of a process starts the worker pool
+    (measured 3.6 s on 16-core Windows): a per-process term, reported
+    beside `seconds`, never inside it, and gone once the pool is up."""
+    from dataclasses import replace as _replace
+
+    from circuitinsight.analysis import estimate as est
+    from circuitinsight.engine import interp
+
+    monkeypatch.setattr(est, "default_workers", lambda: 15)
+    monkeypatch.setattr(interp, "default_workers", lambda: 15)
+    monkeypatch.setattr(interp, "_spawn_would_deadlock", lambda: False)
+    monkeypatch.setattr(interp, "pool_running", lambda: False)
+    est.set_calibration(_replace(est._DEFAULT_CAL, pool_startup_s=0.0))
+    assert est.pool_startup_estimate() == pytest.approx(
+        15 * est._POOL_STARTUP_PER_WORKER_S)         # unmeasured: a guess
+    est.set_calibration(_replace(est._DEFAULT_CAL, pool_startup_s=3.6))
+    assert est.pool_startup_estimate() == pytest.approx(3.6)
+    e = est.SolveEstimate(keep=["R"], kept_names=["R"], grid_size=8,
+                          s_degree=7, n_dets=1000, matrix_dim=12,
+                          coeff_spread=1.0, parallel=True, path="interp",
+                          seconds=10.0, startup_s=3.6)
+    assert "pool startup" in str(e) and e.total_s == pytest.approx(13.6)
+    monkeypatch.setattr(interp, "pool_running", lambda: True)
+    assert est.pool_startup_estimate() == 0.0
+    # the measurement folds in geometrically, like every other lesson
+    est.set_calibration(_replace(est._DEFAULT_CAL, pool_startup_s=4.0,
+                                 n_obs_startup=1))
+    monkeypatch.setenv("CIRCUITINSIGHT_CACHE_DIR",
+                       tempfile.mkdtemp(prefix="ci-cal-"))
+    cal = est.observe_pool_startup(1.0)
+    assert cal.pool_startup_s == pytest.approx(2.0) and cal.n_obs_startup == 2

@@ -283,3 +283,40 @@ def test_the_eet_is_not_starved_by_the_determinant_cap():
     # ordered by weight, and the cap still bounds it
     assert syms[0] == "gds_NM14"
     assert len(eet_symbols(g, stamps, cap=2)) == 2
+
+
+def test_respell_puts_a_shared_symbol_on_the_device_it_acts_through():
+    from circuitinsight.analysis.portg import respell
+
+    assert respell("gds_I0_PM12", "I0.PM14") == "gds_I0_PM14"
+    assert respell("gmbs_I0_PM12", "I0.PM14") == "gmbs_I0_PM14"
+    assert respell("gds_I0_PM12", "I0.PM12") == "gds_I0_PM12"
+    assert respell("CL", "I0.PM14") == "CL"      # no device in the name
+    assert respell("gds_I0_PM12", None) == "gds_I0_PM12"
+
+
+def test_the_branch_names_the_instance_that_acts_on_the_port(bench):
+    """A matched group shares ONE symbol, named after one member. On
+    the folded cascode the output branch runs through PM14 and PM15
+    while the shared symbols are spelled PM12 and PM13 -- right values,
+    wrong devices, and a designer tracing the path finds nothing there
+    (field report).
+
+    The instance is decidable from the port's own sensitivity, but only
+    with the LOOP OPEN: closed, feedback makes every element influence
+    every other and matched twins in symmetric positions come out at
+    9.9e3 against 8.6e3 with the wrong one winning. Opened, the same
+    pair separates by three orders of magnitude."""
+    from circuitinsight.analysis.portg import branch_instances
+
+    system, stamps, _vals = bench
+    u = stamps["CL"][0][1]
+    got = branch_instances(system, u, stamps, open_branch="IPRB0")
+    assert got, "nothing was attributed"
+    # soundness: every answer is an instance the symbol actually stamps
+    for name, inst in got.items():
+        owned = {st[3] for st in stamps[name]}
+        assert inst in owned, (name, inst, owned)
+    # a symbol with several stamps must still resolve to exactly one
+    multi = [n for n in got if len({st[3] for st in stamps[n]}) > 1]
+    assert multi, "this fixture has no matched symbol to disambiguate"

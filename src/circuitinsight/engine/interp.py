@@ -114,12 +114,16 @@ def _record_solve(*, backend, backend_requested, fell_back, reduced,
     omitted fallback_reason and the backend info), so every consumer
     had to read it defensively; now absent values are present-but-None
     and backend extras ride along explicitly."""
-    global LAST_SOLVE
+    global LAST_SOLVE, _POOL_STARTUP_PENDING
+    startup, _POOL_STARTUP_PENDING = _POOL_STARTUP_PENDING, 0.0
     LAST_SOLVE = {
         "backend": backend, "backend_requested": backend_requested,
         "fell_back": fell_back, "fallback_reason": fallback_reason,
         "reduced": reduced, "batch": batch, "grid_K": grid_K, "L": L,
-        "n_dense_dets": n_dense_dets, "wall_s": wall_s, **binfo,
+        "n_dense_dets": n_dense_dets, "wall_s": wall_s,
+        # worker-pool startup this solve paid (0.0 unless it started the
+        # pool): a per-process cost, not part of the solve's own price
+        "pool_startup_s": startup, **binfo,
     }
     return LAST_SOLVE
 
@@ -489,18 +493,48 @@ def _num_sweep(payload, n: int, tick=None) -> list:
 
 
 _POOL = None
+#: wall-clock of the worker-pool startup not yet attributed to a solve:
+#: set when _get_pool() starts the pool, consumed by the next
+#: _record_solve() (LAST_SOLVE["pool_startup_s"]), so solve-time learning
+#: can tell the one-time per-process cost from the solve's own
+_POOL_STARTUP_PENDING = 0.0
+#: the startup this process measured (None until the pool first starts)
+POOL_STARTUP_S: float | None = None
+
+
+def _pool_warm(_):
+    return os.getpid()
+
+
+def pool_running() -> bool:
+    """Whether this process's worker pool is already up (its startup paid)."""
+    return _POOL is not None
 
 
 def _get_pool(workers: int):
     """Lazy persistent process pool: worker startup (spawn + sympy import)
-    is paid once per session, not once per solve."""
-    global _POOL
+    is paid once per session, not once per solve. The workers are started
+    EAGERLY here and the startup timed, so it can be priced (and learned)
+    as the per-process term it is rather than inflating one solve."""
+    global _POOL, _POOL_STARTUP_PENDING, POOL_STARTUP_S
     if _POOL is None:
         import atexit
         from concurrent.futures import ProcessPoolExecutor
 
-        _POOL = ProcessPoolExecutor(max_workers=workers)
+        t0 = time.perf_counter()
+        pool = ProcessPoolExecutor(max_workers=workers)
+        # one trivial task per worker: each submit spawns a worker while
+        # none is idle, and unpickling _pool_warm imports this module (and
+        # sympy) in it -- the cost the first real map would otherwise pay
+        try:
+            list(pool.map(_pool_warm, range(workers)))
+        except BaseException:
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
+        _POOL = pool
         atexit.register(_POOL.shutdown)
+        POOL_STARTUP_S = time.perf_counter() - t0
+        _POOL_STARTUP_PENDING += POOL_STARTUP_S
     return _POOL
 
 
@@ -523,19 +557,44 @@ def _solve_numeric_s(tasks, cols, A, progress=None) -> list:
     And it is what makes the solve REPORTABLE: the sweep is B+1 units of
     known size, so a caller sees real progress and can cancel between
     determinants, neither of which is possible inside sympy's det()."""
-    t0 = time.perf_counter()
     Aks = []
     for (system, _), col in zip(tasks, cols):
         Ak = A.copy()
         Ak[:, col] = system.z
         Aks.append(Ak)
 
+    den, nums = numeric_s_dets(A, Aks, progress)
+    if den == 0:
+        raise MnaError("singular MNA matrix: floating node or short loop?")
+    out = []
+    for (system, _), num in zip(tasks, nums):
+        expr = num / den
+        if sp.count_ops(num) + sp.count_ops(den) <= _CANCEL_OPS_LIMIT:
+            expr = sp.cancel(expr)
+        out.append(TransferFunction(
+            expr=expr, values=dict(system.values),
+            symbols=dict(system.symbols)))
+    return out
+
+
+def numeric_s_dets(A: sp.Matrix, Aks: list, progress=None):
+    """(det A, [det Ak, ...]) as exact polynomials in s, by the sweep
+    _solve_numeric_s describes: each matrix evaluated over QQ at s = 0..B
+    and reconstructed, B the structural degree bound of A. Every Ak is A
+    with columns swapped for constant excitation vectors (Cramer), so it
+    shares A's bound. A must be fully numeric but for s.
+
+    The engine under every all-numeric multi-determinant read: the
+    solve_tf batch above, and loop_gain's five Tian determinants (one A,
+    four column swaps)."""
+    t0 = time.perf_counter()
+
     # B+1 samples pin a degree-<=B polynomial; the numerators share the
     # bound (replacing a column by z cannot add an s row).
     L = _s_degree_bound(A) + 1
     s_pts = [sp.Rational(v) for v in range(L)]
 
-    total = L * (1 + len(tasks))
+    total = L * (1 + len(Aks))
     done = 0
 
     def tick():
@@ -584,30 +643,18 @@ def _solve_numeric_s(tasks, cols, A, progress=None) -> list:
                  for Ak in Aks]
 
     svinv = _vinv_rows(s_pts)
-    den_c = _matvec(svinv, dvals)
-    num_cs = [_matvec(svinv, nv) for nv in nvals]
-    den = _tensor_to_expr({(): den_c}, [S])
-    if den == 0:
-        raise MnaError("singular MNA matrix: floating node or short loop?")
+    den = _tensor_to_expr({(): _matvec(svinv, dvals)}, [S])
+    nums = [_tensor_to_expr({(): _matvec(svinv, nv)}, [S]) for nv in nvals]
 
     wall = time.perf_counter() - t0
     _record_solve(backend="qq-s", backend_requested="qq-s",
-                  fell_back=False, reduced=False, batch=len(tasks),
+                  fell_back=False, reduced=False, batch=len(Aks),
                   grid_K=1, L=L, n_dense_dets=total, wall_s=wall)
     t_det_now = _S_CACHE.get(key, (None, 0.0))[1]
     if t_det_now:
         NUMERIC_S_HISTORY.append({"wall_s": wall,
                                   "det_s": t_det_now * total})
-    out = []
-    for (system, _), num_c in zip(tasks, num_cs):
-        num = _tensor_to_expr({(): num_c}, [S])
-        expr = num / den
-        if sp.count_ops(num) + sp.count_ops(den) <= _CANCEL_OPS_LIMIT:
-            expr = sp.cancel(expr)
-        out.append(TransferFunction(
-            expr=expr, values=dict(system.values),
-            symbols=dict(system.symbols)))
-    return out
+    return den, nums
 
 
 # ---------------------------------------------------------------- solver

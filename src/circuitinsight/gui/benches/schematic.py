@@ -800,6 +800,8 @@ class SchematicMixin:
         None when the net has no name on this page."""
         defs = (self._sch_cin or {}).get("definitions", {})
         name, parent = full, self._sch_path[0][1]
+        if parent not in defs:                # renamed harvest top
+            parent = (self._sch_cin or {}).get("top")
         for inst_name, defname in self._sch_path[1:]:
             pre = inst_name + "."
             if name.startswith(pre):
@@ -822,8 +824,14 @@ class SchematicMixin:
         if not self._sch_hints or not self._sch_path:
             return
         defname = self._sch_path[-1][1]
-        cdef = (self._sch_cin.get("definitions", {}).get(defname)
-                or {"instances": []})
+        defs = self._sch_cin.get("definitions", {})
+        cdef = defs.get(defname)
+        if cdef is None and len(self._sch_path) == 1:
+            # the harvest's top cell may be a renamed copy of the
+            # netlist's (a tb_x_stb drawn from tb_x): the root page
+            # joins to the CIN's own top, blocks keep their names
+            cdef = defs.get(self._sch_cin.get("top"))
+        cdef = cdef or {"instances": []}
         devtypes = {i["name"]: (i["device_type"],
                                 _symbol_variant(i["device_type"],
                                                 i.get("params") or {}))
