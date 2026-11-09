@@ -14,7 +14,6 @@ import numpy as np
 import pytest
 import sympy as sp
 
-from circuitinsight import Analyzer
 from circuitinsight.engine.mna import MnaError
 
 BENCH = Path(__file__).resolve().parent / "ttc_reference.py"

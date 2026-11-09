@@ -1383,7 +1383,6 @@ def stability_certificate(tf, *, f=None, m=None, acc=None, fu=None,
     # N and D on ONE scale: the tf's own float path normalizes each
     # polynomial by its largest coefficient, which is fine for roots
     # of either and loses exactly the gain that D - N depends on
-    import sympy as sp
 
     ex = tf._exact_coeffs
     if ex is not None:

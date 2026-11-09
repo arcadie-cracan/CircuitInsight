@@ -525,8 +525,8 @@ def _quadratic_pair(c, r, kind, subs, budget) -> list[RootFormula] | None:
             hb = "b/2" if sgn < 0 else "-b/2"
             op = "+" if sgn * branch > 0 else "-"
             text = (f"{hb} {op} sqrt(b^2/4 - c)" if sgn < 0
-                    else (f"sqrt(b^2/4 - c) - b/2" if op == "+"
-                          else f"-b/2 - sqrt(b^2/4 - c)"))
+                    else ("sqrt(b^2/4 - c) - b/2" if op == "+"
+                          else "-b/2 - sqrt(b^2/4 - c)"))
             out.append(mk(f_hz=f_hz(x), expr=e, display=text, legend=legend,
                           displacement=float(abs(abs(y) / abs(x) - 1)),
                           reliable=d_all <= budget, rhp=rhp(x)))
